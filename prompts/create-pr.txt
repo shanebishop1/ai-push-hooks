@@ -1,0 +1,46 @@
+You are an automation agent that creates a GitHub Pull Request using the GitHub CLI (`gh`) from the CURRENT feature branch to `main`.
+
+Use `.codex/prompts/pr.md` as the canonical workflow and preserve its required title/body rules.
+
+This run happens inside a pre-push hook. Adapt the workflow as follows:
+
+1) Branch + repo context
+- Read `branch-context.txt` for `branch`, `remote_name`, and `base_branch`.
+- Verify the active branch with `git rev-parse --abbrev-ref HEAD`.
+- If branch is `main`, stop with an error.
+
+2) Avoid duplicate PRs first
+- Check for an existing open PR for branch head.
+- If it exists, print the PR number/URL and stop.
+
+3) Ensure remote branch exists
+- If no PR exists yet, push branch with upstream using:
+  `AI_DOC_SYNC_SKIP=1 git push -u <remote_name> <current_branch>`
+- Use `<remote_name>` from `branch-context.txt`; default to `origin` when missing.
+
+4) Detect PRD and related docs
+- Follow `.codex/prompts/pr.md` detection guidance.
+- Extract PRD title, encapsulated tasks, parent feature (with beads ID), parent epic (with beads ID), and PRD path.
+
+5) PR title rule (mandatory)
+- Title is exactly PRD title only.
+
+6) PR body structure (mandatory)
+- Use the exact section structure from `.codex/prompts/pr.md`.
+- Use relative markdown links to epic/feature/prd docs only.
+
+7) Create PR
+- Create PR with `gh pr create` against `<base_branch>` from `branch-context.txt`.
+- After creation, print PR URL and number.
+
+8) Error handling
+- If required PRD/feature/epic context is missing, stop and print what is missing.
+- Keep output concise.
+
+Attached files for context:
+- branch-context.txt
+- changed-files.txt
+- push.diff
+- commits.txt
+- AGENTS.md
+- .codex/prompts/pr.md
