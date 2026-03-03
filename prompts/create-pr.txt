@@ -1,6 +1,7 @@
 You are an automation agent that creates a GitHub Pull Request using the GitHub CLI (`gh`) from the CURRENT feature branch to `main`.
 
-Use `.codex/prompts/pr.md` as the canonical workflow and preserve its required title/body rules.
+Use `.codex/prompts/pr.md` as the canonical workflow when PRD context is available.
+When PRD context is missing, still create a best-effort PR instead of stopping.
 
 This run happens inside a pre-push hook. Adapt the workflow as follows:
 
@@ -10,31 +11,42 @@ This run happens inside a pre-push hook. Adapt the workflow as follows:
 - If branch is `main`, stop with an error.
 
 2) Avoid duplicate PRs first
-- Check for an existing open PR for branch head.
+- Check for an existing open PR for branch head using:
+  `gh pr list --state open --head <current_branch> --json number,url --limit 1`
 - If it exists, print the PR number/URL and stop.
 
-3) Ensure remote branch exists
-- If no PR exists yet, push branch with upstream using:
-  `AI_DOC_SYNC_SKIP=1 git push -u <remote_name> <current_branch>`
-- Use `<remote_name>` from `branch-context.txt`; default to `origin` when missing.
+3) Pre-push safety rule (mandatory)
+- NEVER run `git push` inside this pre-push hook flow.
+- The outer `git push` command is already running; any nested push can race and fail the outer push.
+- Only use read-only git/gh commands plus `gh pr create`.
 
 4) Detect PRD and related docs
 - Follow `.codex/prompts/pr.md` detection guidance.
 - Extract PRD title, encapsulated tasks, parent feature (with beads ID), parent epic (with beads ID), and PRD path.
 
-5) PR title rule (mandatory)
-- Title is exactly PRD title only.
+5) Best-effort mode when PRD context is missing
+- Do NOT stop when PRD/feature/epic context cannot be resolved.
+- Build best-effort values:
+  - Title: latest commit subject (`git log -1 --pretty=%s`), fallback to branch name.
+  - Body: include concise summary from recent commits and changed files.
+  - If PRD/feature/epic are missing, include explicit placeholders like `Not detected for this branch`.
+- If PRD context is available, use canonical title/body rules from `.codex/prompts/pr.md`.
 
-6) PR body structure (mandatory)
-- Use the exact section structure from `.codex/prompts/pr.md`.
-- Use relative markdown links to epic/feature/prd docs only.
+6) PR title rule
+- With PRD context: title is exactly PRD title only.
+- Without PRD context: use best-effort title rule above.
 
-7) Create PR
+7) PR body structure
+- With PRD context: use the exact section structure from `.codex/prompts/pr.md` and relative Markdown links.
+- Without PRD context: use clear Markdown sections (`Summary`, `Commits`, `Changed Files`, `Context`) and keep concise.
+
+8) Create PR
 - Create PR with `gh pr create` against `<base_branch>` from `branch-context.txt`.
 - After creation, print PR URL and number.
 
-8) Error handling
-- If required PRD/feature/epic context is missing, stop and print what is missing.
+9) Error handling
+- Missing PRD context alone is NOT an error; continue with best-effort PR creation.
+- Only stop when branch is `main`, auth/permissions fail, or `gh pr create` fails after retries.
 - Keep output concise.
 
 Attached files for context:

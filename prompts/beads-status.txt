@@ -14,8 +14,13 @@ Required workflow:
 1) Detect which PRD or feature this branch maps to from docs under docs/epics.
 2) Use `br` commands to find related tasks (via `Parent PRD Path` and `PRD Task ID` metadata).
 3) Validate each related task status against blockers and commit intent.
-4) If you can safely fix statuses with `br update` / `br close`, do it.
-5) If any required status changes remain unresolved, create a markdown report at the root path from `branch-context.txt` (`report_file=...`).
+4) Enforce parent status/closure safety:
+   - Parent tiers with partial child completion must be `in_progress`.
+   - Before closing a `feature` or `epic`, verify documented child roster in parent docs (`INDEX.md` tables/lists) is fully represented as `parent-child` issues in `br`.
+   - If documented children are missing in `br`, do not close parent; write unresolved report with exact `br create`/`br dep` commands.
+5) If you can safely fix statuses with `br update` / `br close`, do it.
+6) If any required status changes remain unresolved, create a markdown report at the root path from `branch-context.txt` (`report_file=...`).
+- If matched scope is `none` and all changed files are one-off (per `beads.one_off_file_patterns` and `beads.allow_unmapped_one_off`), treat the run as non-blocking and return no report.
 
 Report requirements (only when unresolved issues remain):
 - Title: `# Beads Status Alignment Required`
