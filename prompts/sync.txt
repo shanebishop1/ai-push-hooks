@@ -59,3 +59,6 @@ Return EXACTLY one JSON object and no other text:
   "pr_requested": boolean,
   "pr_url": "string-or-empty"
 }
+
+Do NOT include markdown sections, headings (for example `## Goal`), explanations, or code fences.
+Emit only the raw JSON object as the complete response body.
