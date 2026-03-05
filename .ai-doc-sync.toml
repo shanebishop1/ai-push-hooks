@@ -19,12 +19,12 @@ invalid_json_feedback_max_chars = 6000
 json_retry_new_session = true
 
 [prompts]
-sync_file = "tools/ai-doc-sync/prompts/sync.txt"
-query_file = "tools/ai-doc-sync/prompts/query.txt"
-analysis_file = "tools/ai-doc-sync/prompts/analysis.txt"
-apply_file = "tools/ai-doc-sync/prompts/apply.txt"
-beads_status_file = "tools/ai-doc-sync/prompts/beads-status.txt"
-pr_create_file = "tools/ai-doc-sync/prompts/create-pr.txt"
+sync_file = "prompts/sync.txt"
+query_file = "prompts/query.txt"
+analysis_file = "prompts/analysis.txt"
+apply_file = "prompts/apply.txt"
+beads_status_file = "prompts/beads-status.txt"
+pr_create_file = "prompts/create-pr.txt"
 
 [beads]
 enabled = true

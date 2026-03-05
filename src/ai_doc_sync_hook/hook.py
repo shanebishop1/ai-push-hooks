@@ -30,6 +30,10 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for older system pyth
 
 ZERO_OID = "0000000000000000000000000000000000000000"
 
+HOOK_DIR = pathlib.Path(__file__).resolve().parent
+PROMPTS_DIR = HOOK_DIR / "prompts"
+LEGACY_PROMPT_PREFIXES = ("tools/ai-doc-sync/", "scripts/ai-doc-sync/")
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "general": {
         "enabled": True,
@@ -52,12 +56,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "json_retry_new_session": True,
     },
     "prompts": {
-        "sync_file": "tools/ai-doc-sync/prompts/sync.txt",
-        "query_file": "tools/ai-doc-sync/prompts/query.txt",
-        "analysis_file": "tools/ai-doc-sync/prompts/analysis.txt",
-        "apply_file": "tools/ai-doc-sync/prompts/apply.txt",
-        "beads_status_file": "tools/ai-doc-sync/prompts/beads-status.txt",
-        "pr_create_file": "tools/ai-doc-sync/prompts/create-pr.txt",
+        "sync_file": "prompts/sync.txt",
+        "query_file": "prompts/query.txt",
+        "analysis_file": "prompts/analysis.txt",
+        "apply_file": "prompts/apply.txt",
+        "beads_status_file": "prompts/beads-status.txt",
+        "pr_create_file": "prompts/create-pr.txt",
     },
     "docs": {
         "paths": ["README.md", "docs/**/*.md"],
@@ -415,6 +419,29 @@ def resolve_repo_path(repo_root: pathlib.Path, raw: str) -> pathlib.Path:
     return (repo_root / path).resolve()
 
 
+def resolve_prompt_path(repo_root: pathlib.Path, raw: str) -> pathlib.Path:
+    path = pathlib.Path(raw)
+    if path.is_absolute():
+        return path
+
+    normalized = raw.replace("\\", "/")
+    candidates: list[pathlib.Path] = [(repo_root / path).resolve()]
+
+    for prefix in LEGACY_PROMPT_PREFIXES:
+        if normalized.startswith(prefix):
+            suffix = normalized[len(prefix) :]
+            candidates.append((HOOK_DIR / suffix).resolve())
+            break
+
+    candidates.append((HOOK_DIR / path).resolve())
+    candidates.append((PROMPTS_DIR / path.name).resolve())
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 def load_prompt_from_file(
     repo_root: pathlib.Path,
     raw_path: str,
@@ -424,7 +451,7 @@ def load_prompt_from_file(
 ) -> str:
     if not raw_path.strip():
         return fallback
-    path = resolve_repo_path(repo_root, raw_path)
+    path = resolve_prompt_path(repo_root, raw_path)
     try:
         text = path.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001
