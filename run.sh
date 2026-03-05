@@ -7,17 +7,23 @@ if [[ "${AI_DOC_SYNC_SKIP:-0}" == "1" ]]; then
   exit 0
 fi
 
-repo_root="$(git rev-parse --show-toplevel)"
-script_path="${repo_root}/tools/ai-doc-sync/hook.py"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ ! -f "${script_path}" ]]; then
-  printf '[ai-doc-sync] Missing hook script: %s\n' "${script_path}" >&2
+if command -v python3 >/dev/null 2>&1; then
+  py_cmd="python3"
+elif command -v python >/dev/null 2>&1; then
+  py_cmd="python"
+else
+  printf '[ai-doc-sync] python3/python is required but not installed.\n' >&2
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  printf '[ai-doc-sync] python3 is required but not installed.\n' >&2
-  exit 1
+if [[ -d "${script_dir}/src" ]]; then
+  if [[ -n "${PYTHONPATH:-}" ]]; then
+    export PYTHONPATH="${script_dir}/src:${PYTHONPATH}"
+  else
+    export PYTHONPATH="${script_dir}/src"
+  fi
 fi
 
-exec python3 "${script_path}" "$@"
+exec "${py_cmd}" -m ai_doc_sync_hook "$@"
