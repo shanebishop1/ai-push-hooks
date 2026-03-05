@@ -1,0 +1,55 @@
+[general]
+enabled = true
+allow_push_on_error = true
+mode = "apply-and-block" # options: apply-and-block | check-only
+execution_mode = "single" # options: multi | single
+require_clean_worktree = false
+skip_on_sync_branch = true
+
+[llm]
+runner = "opencode"
+model = "openai/gpt-5.3-codex-spark"
+variant = ""
+max_diff_bytes = 180000
+timeout_seconds = 800
+session_title_prefix = "ai-doc-sync"
+delete_session_after_run = true
+json_max_retries = 2
+invalid_json_feedback_max_chars = 6000
+json_retry_new_session = true
+
+[prompts]
+sync_file = "tools/ai-doc-sync/prompts/sync.txt"
+query_file = "tools/ai-doc-sync/prompts/query.txt"
+analysis_file = "tools/ai-doc-sync/prompts/analysis.txt"
+apply_file = "tools/ai-doc-sync/prompts/apply.txt"
+beads_status_file = "tools/ai-doc-sync/prompts/beads-status.txt"
+pr_create_file = "tools/ai-doc-sync/prompts/create-pr.txt"
+
+[beads]
+enabled = true
+report_file = "BEADS_STATUS_ACTION_REQUIRED.md"
+
+[pr]
+enabled = true
+flag_env = "AI_DOC_SYNC_CREATE_PR"
+base_branch = "main"
+
+[docs]
+paths = ["README.md", "docs/**/*.md"]
+ignore = ["docs/archive/**"]
+max_context_tokens = 8000
+
+[cache]
+enabled = true
+dir = ".git/ai-doc-sync-cache"
+ttl_seconds = 3600
+
+[logging]
+level = "status" # options: status | info | debug
+jsonl = true
+dir = ".git/ai-doc-sync/logs"
+capture_llm_transcript = true
+transcript_dir = ".git/ai-doc-sync/transcripts"
+summary_dir = ".git/ai-doc-sync/summaries"
+print_llm_output = false

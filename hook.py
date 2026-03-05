@@ -49,14 +49,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "delete_session_after_run": True,
         "json_max_retries": 2,
         "invalid_json_feedback_max_chars": 6000,
+        "json_retry_new_session": True,
     },
     "prompts": {
-        "sync_file": "scripts/ai-doc-sync/prompts/sync.txt",
-        "query_file": "scripts/ai-doc-sync/prompts/query.txt",
-        "analysis_file": "scripts/ai-doc-sync/prompts/analysis.txt",
-        "apply_file": "scripts/ai-doc-sync/prompts/apply.txt",
-        "beads_status_file": "scripts/ai-doc-sync/prompts/beads-status.txt",
-        "pr_create_file": "scripts/ai-doc-sync/prompts/create-pr.txt",
+        "sync_file": "tools/ai-doc-sync/prompts/sync.txt",
+        "query_file": "tools/ai-doc-sync/prompts/query.txt",
+        "analysis_file": "tools/ai-doc-sync/prompts/analysis.txt",
+        "apply_file": "tools/ai-doc-sync/prompts/apply.txt",
+        "beads_status_file": "tools/ai-doc-sync/prompts/beads-status.txt",
+        "pr_create_file": "tools/ai-doc-sync/prompts/create-pr.txt",
     },
     "docs": {
         "paths": ["README.md", "docs/**/*.md"],
@@ -280,6 +281,9 @@ Return EXACTLY one JSON object and no other text:
   "pr_requested": boolean,
   "pr_url": "string-or-empty"
 }
+
+Do NOT include markdown sections, headings (for example `## Goal`), explanations, or code fences.
+Emit only the raw JSON object as the complete response body.
 """
 
 
@@ -1174,6 +1178,7 @@ def run_unified_sync_stage(
                 invalid_json_feedback_max_chars=int(
                     config["llm"].get("invalid_json_feedback_max_chars", 6000)
                 ),
+                json_retry_new_session=bool(config["llm"].get("json_retry_new_session", True)),
                 transcript_dir=transcript_dir,
                 run_id=run_id,
                 session_title_prefix=str(config["llm"].get("session_title_prefix", "ai-doc-sync")),
@@ -1181,7 +1186,7 @@ def run_unified_sync_stage(
                 print_output=print_llm_output,
             )
         except HookError as exc:
-            logger.warn(
+            logger.info(
                 "sync.summary_parse_failed",
                 "Unified sync stage returned non-JSON summary",
                 error=str(exc),
@@ -2183,6 +2188,7 @@ def call_opencode_json_array_with_retries(
     stage_name: str,
     max_retries: int,
     invalid_json_feedback_max_chars: int,
+    json_retry_new_session: bool,
     transcript_dir: pathlib.Path | None,
     run_id: str,
     session_title_prefix: str,
@@ -2267,7 +2273,7 @@ def call_opencode_json_array_with_retries(
                 break
 
             feedback = output[:invalid_json_feedback_max_chars]
-            logger.warn(
+            logger.info(
                 "llm.invalid_json_retry",
                 f"Model returned invalid JSON for {stage_name}; retrying",
                 attempt=attempt,
@@ -2277,12 +2283,15 @@ def call_opencode_json_array_with_retries(
                 base_prompt
                 + "\n\nIMPORTANT: Your previous response was invalid JSON and could not be parsed.\n"
                 + f"Parse error: {last_parse_error}\n"
-                + "Return ONLY valid JSON array. No markdown. No prose.\n"
+                + "Return ONLY valid JSON array. No markdown. No prose. No headings.\n"
                 + "Previous invalid output follows:\n"
                 + "```text\n"
                 + feedback
                 + "\n```"
             )
+            if json_retry_new_session:
+                # Start a fresh run session but keep original prompt + invalid output feedback.
+                session_id = None
 
     finalize_opencode_session(
         repo_root=repo_root,
@@ -2314,6 +2323,7 @@ def call_opencode_json_object_with_retries(
     stage_name: str,
     max_retries: int,
     invalid_json_feedback_max_chars: int,
+    json_retry_new_session: bool,
     transcript_dir: pathlib.Path | None,
     run_id: str,
     session_title_prefix: str,
@@ -2406,7 +2416,7 @@ def call_opencode_json_object_with_retries(
                 break
 
             feedback = output[:invalid_json_feedback_max_chars]
-            logger.warn(
+            logger.info(
                 "llm.invalid_json_retry",
                 f"Model returned invalid JSON for {stage_name}; retrying",
                 attempt=attempt,
@@ -2416,12 +2426,15 @@ def call_opencode_json_object_with_retries(
                 base_prompt
                 + "\n\nIMPORTANT: Your previous response was invalid JSON and could not be parsed.\n"
                 + f"Parse error: {last_parse_error}\n"
-                + "Return ONLY valid JSON object. No markdown. No prose.\n"
+                + "Return ONLY valid JSON object. No markdown. No prose. No headings.\n"
                 + "Previous invalid output follows:\n"
                 + "```text\n"
                 + feedback
                 + "\n```"
             )
+            if json_retry_new_session:
+                # Start a fresh run session but keep original prompt + invalid output feedback.
+                session_id = None
 
     finalize_opencode_session(
         repo_root=repo_root,
@@ -3072,6 +3085,9 @@ def main() -> int:
                     invalid_json_feedback_max_chars=int(
                         config["llm"].get("invalid_json_feedback_max_chars", 6000)
                     ),
+                    json_retry_new_session=bool(
+                        config["llm"].get("json_retry_new_session", True)
+                    ),
                     transcript_dir=transcript_dir,
                     run_id=run_id,
                     session_title_prefix=str(
@@ -3146,6 +3162,7 @@ def main() -> int:
                 invalid_json_feedback_max_chars=int(
                     config["llm"].get("invalid_json_feedback_max_chars", 6000)
                 ),
+                json_retry_new_session=bool(config["llm"].get("json_retry_new_session", True)),
                 transcript_dir=transcript_dir,
                 run_id=run_id,
                 session_title_prefix=str(config["llm"].get("session_title_prefix", "ai-doc-sync")),
@@ -3283,7 +3300,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         message = str(exc) if str(exc) else exc.__class__.__name__
         if allow_push_on_error:
-            logger.warn("hook.fail_open", f"{message}. allow_push_on_error=true, allowing push.")
+            logger.status(
+                "hook.fail_open",
+                f"Non-blocking AI docs sync issue: {message}. allow_push_on_error=true, allowing push.",
+            )
             return exit_with(0)
         logger.error("hook.fail_closed", f"{message}. allow_push_on_error=false, blocking push.")
         return exit_with(1)

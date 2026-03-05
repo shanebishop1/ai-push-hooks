@@ -8,7 +8,7 @@ if [[ "${AI_DOC_SYNC_SKIP:-0}" == "1" ]]; then
 fi
 
 repo_root="$(git rev-parse --show-toplevel)"
-script_path="${repo_root}/scripts/ai-doc-sync/hook.py"
+script_path="${repo_root}/tools/ai-doc-sync/hook.py"
 
 if [[ ! -f "${script_path}" ]]; then
   printf '[ai-doc-sync] Missing hook script: %s\n' "${script_path}" >&2
