@@ -1,5 +1,6 @@
 """ai-doc-sync-hook package."""
 
-from .hook import main
+from .cli import main
+from .hook import run_hook
 
-__all__ = ["main"]
+__all__ = ["main", "run_hook"]

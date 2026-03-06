@@ -1,2 +1,4 @@
 **/__pycache__/
 **/*.py[cod]
+src/**/*.egg-info/
+src/*.egg-info/

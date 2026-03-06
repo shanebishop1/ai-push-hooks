@@ -1,10 +1,13 @@
 {
   "name": "ai-doc-sync-hook",
   "version": "0.1.0",
-  "description": "AI docs sync pre-push hook runtime",
+  "description": "Modular AI docs sync pre-push workflow runner",
   "license": "MIT",
   "bin": {
     "ai-doc-sync-hook": "bin/ai-doc-sync-hook.js"
+  },
+  "scripts": {
+    "test": "uv run --with pytest pytest tests -q"
   },
   "files": [
     "bin",
