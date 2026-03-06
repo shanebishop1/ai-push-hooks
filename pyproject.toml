@@ -24,7 +24,10 @@ classifiers = [
 ]
 
 [project.scripts]
-ai-doc-sync-hook = "ai_doc_sync_hook.hook:main"
+ai-doc-sync-hook = "ai_doc_sync_hook.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [tool.setuptools]
 include-package-data = true
@@ -32,5 +35,5 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-ai_doc_sync_hook = ["prompts/*.txt"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
