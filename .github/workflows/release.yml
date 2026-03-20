@@ -1,0 +1,130 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate tag and package versions
+        run: |
+          python - <<'PY'
+          import json
+          import tomllib
+          import os
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not tag.startswith("v"):
+            raise SystemExit(f"tag must start with v: {tag}")
+          tag_version = tag[1:]
+
+          with open("pyproject.toml", "rb") as f:
+            pyproject = tomllib.load(f)
+          py_version = pyproject["project"]["version"]
+
+          with open("package.json", "r", encoding="utf-8") as f:
+            package = json.load(f)
+          npm_version = package["version"]
+
+          if py_version != npm_version:
+            raise SystemExit(
+              f"version mismatch: pyproject.toml={py_version} package.json={npm_version}"
+            )
+          if tag_version != py_version:
+            raise SystemExit(
+              f"tag/version mismatch: tag={tag_version} package={py_version}"
+            )
+
+          print(f"release version verified: {py_version}")
+          PY
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest build twine
+
+      - name: Run tests
+        run: pytest tests -q
+
+      - name: Build Python distributions
+        run: python -m build
+
+      - name: Validate Python distributions
+        run: python -m twine check dist/*
+
+      - name: Smoke-test installed Python CLI
+        run: |
+          python -m venv .venv-smoke
+          . .venv-smoke/bin/activate
+          pip install dist/*.whl
+          tmp_dir=$(mktemp -d)
+          ai-push-hooks --help > /dev/null
+          (
+            cd "$tmp_dir"
+            ai-push-hooks init --template minimal-docs
+          )
+
+      - name: Smoke-test npm wrapper
+        run: |
+          node bin/ai-push-hooks.js --help > /dev/null
+          npm pack --dry-run
+
+      - name: Upload Python dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+  publish-pypi:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+    steps:
+      - name: Download Python dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
