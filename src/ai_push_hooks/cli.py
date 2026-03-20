@@ -10,7 +10,7 @@ from .types import HookError
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="AI docs sync hook workflow runner")
+    parser = argparse.ArgumentParser(description="AI push hooks workflow runner")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     hook_parser = subparsers.add_parser("hook", help="Run the hook workflow")
@@ -27,7 +27,7 @@ def init_config(template: str, force: bool, cwd: pathlib.Path | None = None) -> 
     if template != "minimal-docs":
         raise HookError("Only `minimal-docs` is supported")
     target_dir = cwd or pathlib.Path.cwd()
-    config_path = target_dir / ".ai-doc-sync.toml"
+    config_path = target_dir / ".ai-push-hooks.toml"
     if config_path.exists() and not force:
         raise HookError(f"Refusing to overwrite existing config without --force: {config_path}")
     config_path.write_text(MINIMAL_DOCS_TEMPLATE, encoding="utf-8")
@@ -45,5 +45,5 @@ def main(argv: list[str] | None = None) -> int:
             return init_config(args.template, args.force)
         raise HookError(f"Unknown command: {args.command}")
     except HookError as exc:
-        sys.stderr.write(f"[ai-doc-sync] {exc}\n")
+        sys.stderr.write(f"[ai-push-hooks] {exc}\n")
         return 1

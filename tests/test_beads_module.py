@@ -5,9 +5,9 @@ import pathlib
 
 import pytest
 
-from ai_doc_sync_hook.artifacts import ArtifactStore
-from ai_doc_sync_hook.engine import WorkflowEngine
-from ai_doc_sync_hook.types import HookError, ModuleConfig, StepConfig
+from ai_push_hooks.artifacts import ArtifactStore
+from ai_push_hooks.engine import WorkflowEngine
+from ai_push_hooks.types import HookError, ModuleConfig, StepConfig
 
 from .conftest import build_context, init_repo, make_config
 

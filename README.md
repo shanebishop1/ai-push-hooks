@@ -1,23 +1,23 @@
-# ai-doc-sync-hook
+# ai-push-hooks
 
-AI-assisted pre-push workflow runner for docs sync, Beads alignment, and PR creation.
+AI-assisted pre-push workflow runner for modular repo checks, docs sync, Beads alignment, and PR creation.
 
 ## Install
 
 ### Python / uv
 
 ```bash
-uv tool install ai-doc-sync-hook
+uv tool install ai-push-hooks
 # or
-pipx install ai-doc-sync-hook
+pipx install ai-push-hooks
 ```
 
 ### npm
 
 ```bash
-npm install --save-dev ai-doc-sync-hook
+npm install --save-dev ai-push-hooks
 # or
-pnpm add -D ai-doc-sync-hook
+pnpm add -D ai-push-hooks
 ```
 
 The npm binary wraps the bundled Python module, so `python3` (or `python`) must be available.
@@ -25,8 +25,8 @@ The npm binary wraps the bundled Python module, so `python3` (or `python`) must 
 ## Commands
 
 ```bash
-ai-doc-sync-hook hook <remote-name> <remote-url>
-ai-doc-sync-hook init --template minimal-docs
+ai-push-hooks hook <remote-name> <remote-url>
+ai-push-hooks init --template minimal-docs
 ```
 
 `init` supports exactly one template: `minimal-docs`. Use `--force` to overwrite an existing config.
@@ -36,15 +36,15 @@ ai-doc-sync-hook init --template minimal-docs
 ```yaml
 pre-push:
   commands:
-    ai-doc-sync:
-      run: ai-doc-sync-hook hook {1} {2}
+    ai-push-hooks:
+      run: ai-push-hooks hook {1} {2}
 ```
 
 For local source checkout usage, `./run.sh` works as a wrapper entrypoint.
 
 ## Configuration
 
-Put `.ai-doc-sync.toml` in the target repo root. If no file is present, built-in modular defaults are used.
+Put `.ai-push-hooks.toml` in the target repo root. If no file is present, built-in modular defaults are used.
 
 Prompt resolution precedence is:
 
@@ -98,6 +98,8 @@ inputs = ["apply/result.json"]
 
 Example config that recreates the current docs + beads + PR behavior through configuration only:
 
+The sample below is runnable as-is because each `prompt_file` step also declares a built-in `fallback_prompt_id`. If you add local prompt files, they override the built-ins.
+
 ```toml
 [workflow]
 modules = ["beads", "docs", "pr"]
@@ -113,7 +115,8 @@ collector = "beads_status_context"
 [[modules.beads.steps]]
 id = "plan"
 type = "llm"
-prompt_file = ".ai-doc-sync.prompts/beads-status.txt"
+prompt_file = ".ai-push-hooks.prompts/beads-status.txt"
+fallback_prompt_id = "beads-plan-basic"
 inputs = ["collect/branch-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"]
 output = "beads-plan.json"
 schema = "beads_alignment_result"
@@ -141,7 +144,8 @@ collector = "docs_context"
 [[modules.docs.steps]]
 id = "query"
 type = "llm"
-prompt_file = ".ai-doc-sync.prompts/query.txt"
+prompt_file = ".ai-push-hooks.prompts/query.txt"
+fallback_prompt_id = "docs-query-basic"
 inputs = ["collect/push.diff", "collect/changed-files.txt"]
 output = "queries.json"
 schema = "string_array"
@@ -149,7 +153,8 @@ schema = "string_array"
 [[modules.docs.steps]]
 id = "analyze"
 type = "llm"
-prompt_file = ".ai-doc-sync.prompts/analysis.txt"
+prompt_file = ".ai-push-hooks.prompts/analysis.txt"
+fallback_prompt_id = "docs-analysis-basic"
 inputs = ["collect/push.diff", "collect/docs-context.txt", "query/queries.json", "collect/recent-commits.txt"]
 output = "issues.json"
 schema = "docs_issue_array"
@@ -157,7 +162,8 @@ schema = "docs_issue_array"
 [[modules.docs.steps]]
 id = "apply"
 type = "apply"
-prompt_file = ".ai-doc-sync.prompts/apply.txt"
+prompt_file = ".ai-push-hooks.prompts/apply.txt"
+fallback_prompt_id = "docs-apply-basic"
 inputs = ["collect/push.diff", "collect/docs-context.txt", "analyze/issues.json"]
 allow_paths = ["README.md", "docs/**/*.md"]
 
@@ -178,7 +184,8 @@ collector = "pr_context"
 [[modules.pr.steps]]
 id = "compose"
 type = "llm"
-prompt_file = ".ai-doc-sync.prompts/create-pr.txt"
+prompt_file = ".ai-push-hooks.prompts/create-pr.txt"
+fallback_prompt_id = "pr-compose-basic"
 inputs = ["collect/pr-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"]
 output = "pr-draft.json"
 schema = "pr_create_payload"
@@ -187,19 +194,19 @@ schema = "pr_create_payload"
 id = "create"
 type = "exec"
 executor = "gh_pr_create"
-when_env = "AI_DOC_SYNC_CREATE_PR"
+when_env = "AI_PUSH_HOOKS_CREATE_PR"
 inputs = ["compose/pr-draft.json"]
 ```
 
 ## Layout
 
-- `src/ai_doc_sync_hook/cli.py` - CLI entrypoint
-- `src/ai_doc_sync_hook/config.py` - config loading and validation
-- `src/ai_doc_sync_hook/engine.py` - scheduler and workflow runtime
-- `src/ai_doc_sync_hook/artifacts.py` - run-directory artifact store
-- `src/ai_doc_sync_hook/prompts_builtin.py` - built-in fallback prompts
-- `src/ai_doc_sync_hook/modules/` - docs, beads, and PR collectors
-- `src/ai_doc_sync_hook/executors/` - LLM, apply, exec, and assertion handlers
+- `src/ai_push_hooks/cli.py` - CLI entrypoint
+- `src/ai_push_hooks/config.py` - config loading and validation
+- `src/ai_push_hooks/engine.py` - scheduler and workflow runtime
+- `src/ai_push_hooks/artifacts.py` - run-directory artifact store
+- `src/ai_push_hooks/prompts_builtin.py` - built-in fallback prompts
+- `src/ai_push_hooks/modules/` - docs, beads, and PR collectors
+- `src/ai_push_hooks/executors/` - LLM, apply, exec, and assertion handlers
 - `run.sh` - source checkout wrapper
-- `bin/ai-doc-sync-hook.js` - npm bin wrapper
-- `.ai-doc-sync.toml` - sample config
+- `bin/ai-push-hooks.js` - npm bin wrapper
+- `.ai-push-hooks.toml` - sample config

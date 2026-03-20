@@ -79,10 +79,10 @@ delete_session_after_run = true
 [logging]
 level = "status"
 jsonl = true
-dir = ".git/ai-doc-sync/logs"
+dir = ".git/ai-push-hooks/logs"
 capture_llm_transcript = true
-transcript_dir = ".git/ai-doc-sync/transcripts"
-summary_dir = ".git/ai-doc-sync/summaries"
+transcript_dir = ".git/ai-push-hooks/transcripts"
+summary_dir = ".git/ai-push-hooks/summaries"
 
 [workflow]
 modules = ["docs"]

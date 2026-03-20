@@ -4,9 +4,9 @@ import pathlib
 
 import pytest
 
-from ai_doc_sync_hook.config import resolve_prompt_text
-from ai_doc_sync_hook.prompts_builtin import BUILTIN_PROMPTS
-from ai_doc_sync_hook.types import HookError, StepConfig
+from ai_push_hooks.config import resolve_prompt_text
+from ai_push_hooks.prompts_builtin import BUILTIN_PROMPTS
+from ai_push_hooks.types import HookError, StepConfig
 
 
 def test_inline_prompt_wins_over_file_and_builtin(tmp_path: pathlib.Path) -> None:

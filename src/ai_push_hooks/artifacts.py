@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import pathlib
-import time
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from .types import HookError, ModuleRuntimeState
 
 
 def generate_run_id() -> str:
-    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{timestamp}-{uuid4().hex[:8]}"
 
 
 class ArtifactStore:

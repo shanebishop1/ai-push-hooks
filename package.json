@@ -1,21 +1,22 @@
 {
-  "name": "ai-doc-sync-hook",
+  "name": "ai-push-hooks",
   "version": "0.1.0",
-  "description": "Modular AI docs sync pre-push workflow runner",
+  "description": "Modular AI push-hook workflow runner",
   "license": "MIT",
   "bin": {
-    "ai-doc-sync-hook": "bin/ai-doc-sync-hook.js"
+    "ai-push-hooks": "bin/ai-push-hooks.js"
   },
   "scripts": {
     "test": "uv run --with pytest pytest tests -q"
   },
   "files": [
     "bin",
-    "src",
+    "src/**/*.py",
     "README.md",
     "run.sh",
     "pyproject.toml",
-    ".ai-doc-sync.toml"
+    "LICENSE",
+    ".ai-push-hooks.toml"
   ],
   "engines": {
     "node": ">=18"

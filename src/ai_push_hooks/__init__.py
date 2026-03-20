@@ -1,4 +1,4 @@
-"""ai-doc-sync-hook package."""
+"""ai-push-hooks package."""
 
 from .cli import main
 from .hook import run_hook

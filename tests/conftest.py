@@ -9,9 +9,9 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from ai_doc_sync_hook.artifacts import ArtifactStore
-from ai_doc_sync_hook.executors.exec import resolve_git_dir
-from ai_doc_sync_hook.types import GeneralConfig, HookConfig, HookLogger, LlmConfig, LoggingConfig, ModuleConfig, RuntimeContext, StepConfig, WorkflowConfig
+from ai_push_hooks.artifacts import ArtifactStore
+from ai_push_hooks.executors.exec import resolve_git_dir
+from ai_push_hooks.types import GeneralConfig, HookConfig, HookLogger, LlmConfig, LoggingConfig, ModuleConfig, RuntimeContext, StepConfig, WorkflowConfig
 
 
 def _run(args: list[str], cwd: pathlib.Path) -> None:
@@ -56,7 +56,7 @@ def build_context(
     diff_text: str = "",
 ) -> RuntimeContext:
     git_dir = resolve_git_dir(repo_root)
-    run_dir = git_dir / "ai-doc-sync-tests"
+    run_dir = git_dir / "ai-push-hooks-tests"
     ArtifactStore(run_dir).prepare()
     return RuntimeContext(
         repo_root=repo_root,

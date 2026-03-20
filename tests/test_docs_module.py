@@ -4,14 +4,14 @@ import pathlib
 
 import pytest
 
-from ai_doc_sync_hook.artifacts import ArtifactStore
-from ai_doc_sync_hook.engine import WorkflowEngine
-from ai_doc_sync_hook.executors.apply import run_apply_step
-from ai_doc_sync_hook.types import ModuleRuntimeState
-from ai_doc_sync_hook.types import HookError
+from ai_push_hooks.artifacts import ArtifactStore
+from ai_push_hooks.engine import WorkflowEngine
+from ai_push_hooks.executors.apply import run_apply_step
+from ai_push_hooks.types import ModuleRuntimeState
+from ai_push_hooks.types import HookError
 
 from .conftest import build_context, init_repo
-from ai_doc_sync_hook.config import load_config
+from ai_push_hooks.config import load_config
 
 
 def test_docs_drift_detection_produces_issue_artifact(tmp_path: pathlib.Path) -> None:
@@ -75,8 +75,8 @@ def test_docs_apply_allows_only_markdown_paths(tmp_path: pathlib.Path, monkeypat
         (repo / "notes.txt").write_text("bad\n", encoding="utf-8")
         return Result()
 
-    monkeypatch.setattr("ai_doc_sync_hook.executors.apply.call_opencode", fake_call_opencode)
-    monkeypatch.setattr("ai_doc_sync_hook.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call_opencode)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None)
 
     with pytest.raises(HookError, match="outside allowlist"):
         run_apply_step(
