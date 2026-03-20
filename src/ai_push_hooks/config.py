@@ -34,15 +34,15 @@ DEFAULT_CONFIG_RAW: dict[str, Any] = {
         "json_retry_new_session": True,
         "delete_session_after_run": True,
         "max_diff_bytes": 180000,
-        "session_title_prefix": "ai-doc-sync",
+        "session_title_prefix": "ai-push-hooks",
     },
     "logging": {
         "level": "status",
         "jsonl": True,
-        "dir": ".git/ai-doc-sync/logs",
+        "dir": ".git/ai-push-hooks/logs",
         "capture_llm_transcript": True,
-        "transcript_dir": ".git/ai-doc-sync/transcripts",
-        "summary_dir": ".git/ai-doc-sync/summaries",
+        "transcript_dir": ".git/ai-push-hooks/transcripts",
+        "summary_dir": ".git/ai-push-hooks/summaries",
         "print_llm_output": False,
     },
     "workflow": {"modules": ["docs"]},
@@ -284,32 +284,32 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
             "steps": [step.__dict__.copy() for step in module.steps],
         }
 
-    skip = env_bool("AI_DOC_SYNC_SKIP")
+    skip = env_bool("AI_PUSH_HOOKS_SKIP")
     if skip is True:
         raw["general"]["enabled"] = False
-    allow_on_error = env_bool("AI_DOC_SYNC_ALLOW_PUSH_ON_ERROR")
+    allow_on_error = env_bool("AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR")
     if allow_on_error is not None:
         raw["general"]["allow_push_on_error"] = allow_on_error
-    require_clean = env_bool("AI_DOC_SYNC_REQUIRE_CLEAN")
+    require_clean = env_bool("AI_PUSH_HOOKS_REQUIRE_CLEAN")
     if require_clean is not None:
         raw["general"]["require_clean_worktree"] = require_clean
-    allow_dirty = env_bool("AI_DOC_SYNC_ALLOW_DIRTY")
+    allow_dirty = env_bool("AI_PUSH_HOOKS_ALLOW_DIRTY")
     if allow_dirty is True:
         raw["general"]["require_clean_worktree"] = False
 
-    logging_level = os.getenv("AI_DOC_SYNC_LOG_LEVEL")
+    logging_level = os.getenv("AI_PUSH_HOOKS_LOG_LEVEL")
     if logging_level:
         raw["logging"]["level"] = logging_level.strip().lower()
-    print_output = env_bool("AI_DOC_SYNC_PRINT_LLM_OUTPUT")
+    print_output = env_bool("AI_PUSH_HOOKS_PRINT_LLM_OUTPUT")
     if print_output is not None:
         raw["logging"]["print_llm_output"] = print_output
-    model = os.getenv("AI_DOC_SYNC_MODEL")
+    model = os.getenv("AI_PUSH_HOOKS_MODEL")
     if model:
         raw["llm"]["model"] = model
-    variant = os.getenv("AI_DOC_SYNC_VARIANT")
+    variant = os.getenv("AI_PUSH_HOOKS_VARIANT")
     if variant is not None:
         raw["llm"]["variant"] = variant.strip()
-    timeout = os.getenv("AI_DOC_SYNC_TIMEOUT_SECONDS")
+    timeout = os.getenv("AI_PUSH_HOOKS_TIMEOUT_SECONDS")
     if timeout:
         raw["llm"]["timeout_seconds"] = int(timeout)
     return _build_config(raw)
@@ -318,7 +318,7 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
 def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path | None]:
     config_path: pathlib.Path | None = None
     raw = copy.deepcopy(DEFAULT_CONFIG_RAW)
-    for candidate in [repo_root / ".ai-doc-sync.toml", repo_root / "ai-doc-sync.toml"]:
+    for candidate in [repo_root / ".ai-push-hooks.toml", repo_root / "ai-push-hooks.toml"]:
         if candidate.exists():
             config_path = candidate
             text = candidate.read_text(encoding="utf-8")

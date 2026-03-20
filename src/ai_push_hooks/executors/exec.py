@@ -263,7 +263,7 @@ def build_fallback_pr_body(
 ) -> str:
     lines = [
         "## Summary",
-        f"- Auto-created by `ai-doc-sync-hook` for branch `{branch_name}`.",
+        f"- Auto-created by `ai-push-hooks` for branch `{branch_name}`.",
     ]
     if ranges:
         lines.append(f"- Push range: `{', '.join(ranges)}`.")

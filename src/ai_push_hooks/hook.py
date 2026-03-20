@@ -62,14 +62,14 @@ def run_hook(
     logger = _build_logger(repo_root, git_dir, config)
 
     if not config.general.enabled:
-        logger.status("hook.disabled", "AI doc sync hook disabled")
+        logger.status("hook.disabled", "AI push hooks disabled")
         return 0
     if config.general.require_clean_worktree:
         _assert_clean_worktree(repo_root)
     if config.general.skip_on_sync_branch:
         skip_sync, reason = should_skip_for_sync_branch(repo_root)
         if skip_sync:
-            logger.status("hook.skip_sync_branch", f"Skipping AI doc sync hook: {reason}")
+            logger.status("hook.skip_sync_branch", f"Skipping AI push hooks: {reason}")
             return 0
 
     actual_stdin = list(stdin_lines) if stdin_lines is not None else [line.rstrip("\n") for line in sys.stdin]
@@ -77,7 +77,7 @@ def run_hook(
     changed_files = collect_changed_files(repo_root, ranges) if ranges else []
     diff_text = collect_diff(repo_root, ranges, config.llm.max_diff_bytes) if ranges else ""
     run_id = generate_run_id()
-    run_dir = resolve_storage_path(repo_root, git_dir, f".git/ai-doc-sync/runs/{run_id}")
+    run_dir = resolve_storage_path(repo_root, git_dir, f".git/ai-push-hooks/runs/{run_id}")
 
     opencode_executable = None
     if any(
@@ -109,7 +109,7 @@ def run_hook(
     )
     logger.status(
         "hook.start",
-        "Starting AI docs sync workflow",
+        "Starting AI push hooks workflow",
         branch=context.cache["branch_name"],
         changed_files=len(changed_files),
         ranges=ranges,
@@ -119,11 +119,11 @@ def run_hook(
         workflow_result = engine.run()
         logger.llm_summary()
         _write_summary(context, {"run_dir": str(workflow_result.run_dir), "modules": workflow_result.modules})
-        logger.status("hook.complete", "AI docs sync workflow completed", run_dir=str(workflow_result.run_dir))
+        logger.status("hook.complete", "AI push hooks workflow completed", run_dir=str(workflow_result.run_dir))
         return 0
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip() or exc.__class__.__name__
-        logger.error("hook.failed", "AI docs sync workflow failed", error=message)
+        logger.error("hook.failed", "AI push hooks workflow failed", error=message)
         if config.general.allow_push_on_error:
             logger.warn("hook.fail_open", "Allowing push because allow_push_on_error=true", error=message)
             return 0

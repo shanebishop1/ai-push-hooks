@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-if [[ "${AI_DOC_SYNC_SKIP:-0}" == "1" ]]; then
-  printf '[ai-doc-sync] Skipped (AI_DOC_SYNC_SKIP=1).\n' >&2
+if [[ "${AI_PUSH_HOOKS_SKIP:-0}" == "1" ]]; then
+  printf '[ai-push-hooks] Skipped (AI_PUSH_HOOKS_SKIP=1).\n' >&2
   exit 0
 fi
 
@@ -14,7 +14,7 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
   py_cmd="python"
 else
-  printf '[ai-doc-sync] python3/python is required but not installed.\n' >&2
+  printf '[ai-push-hooks] python3/python is required but not installed.\n' >&2
   exit 1
 fi
 
@@ -26,4 +26,4 @@ if [[ -d "${script_dir}/src" ]]; then
   fi
 fi
 
-exec "${py_cmd}" -m ai_doc_sync_hook "$@"
+exec "${py_cmd}" -m ai_push_hooks "$@"

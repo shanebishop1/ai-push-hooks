@@ -37,17 +37,17 @@ class LlmConfig:
     json_retry_new_session: bool = True
     delete_session_after_run: bool = True
     max_diff_bytes: int = 180000
-    session_title_prefix: str = "ai-doc-sync"
+    session_title_prefix: str = "ai-push-hooks"
 
 
 @dataclass(frozen=True)
 class LoggingConfig:
     level: str = "status"
     jsonl: bool = True
-    dir: str = ".git/ai-doc-sync/logs"
+    dir: str = ".git/ai-push-hooks/logs"
     capture_llm_transcript: bool = True
-    transcript_dir: str = ".git/ai-doc-sync/transcripts"
-    summary_dir: str = ".git/ai-doc-sync/summaries"
+    transcript_dir: str = ".git/ai-push-hooks/transcripts"
+    summary_dir: str = ".git/ai-push-hooks/summaries"
     print_llm_output: bool = False
 
 
@@ -171,7 +171,7 @@ class HookLogger:
         if not self._level_is_enabled(level):
             return
         stamp = datetime.now(timezone.utc).isoformat()
-        sys.stderr.write(f"[ai-doc-sync] {message}\n")
+        sys.stderr.write(f"[ai-push-hooks] {message}\n")
         if self.jsonl_path is None or self.jsonl_write_failed:
             return
         record = {"ts": stamp, "level": level, "event": event, "message": message, **fields}
@@ -180,7 +180,7 @@ class HookLogger:
                 handle.write(json.dumps(record, ensure_ascii=True) + "\n")
         except Exception as exc:  # noqa: BLE001
             self.jsonl_write_failed = True
-            sys.stderr.write(f"[ai-doc-sync] JSONL logging disabled after write failure: {exc}\n")
+            sys.stderr.write(f"[ai-push-hooks] JSONL logging disabled after write failure: {exc}\n")
 
     def debug(self, event: str, message: str, **fields: Any) -> None:
         self._emit("debug", event, message, **fields)

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pathlib
 
-from ai_doc_sync_hook.artifacts import ArtifactStore
-from ai_doc_sync_hook.engine import WorkflowEngine
-from ai_doc_sync_hook.types import ModuleConfig, StepConfig
+from ai_push_hooks.artifacts import ArtifactStore
+from ai_push_hooks.engine import WorkflowEngine
+from ai_push_hooks.types import ModuleConfig, StepConfig
 
 from .conftest import build_context, init_repo, make_config
 
@@ -29,7 +29,7 @@ def pr_config():
                         id="create",
                         type="exec",
                         executor="gh_pr_create",
-                        when_env="AI_DOC_SYNC_CREATE_PR",
+                        when_env="AI_PUSH_HOOKS_CREATE_PR",
                         inputs=["compose/pr-draft.json"],
                     ),
                 ),
@@ -60,7 +60,7 @@ def test_pr_module_composes_then_invokes_exec_when_enabled(tmp_path: pathlib.Pat
     repo = init_repo(tmp_path, branch="feature/pr")
     config = pr_config()
     context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
-    monkeypatch.setenv("AI_DOC_SYNC_CREATE_PR", "1")
+    monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
     calls = {"llm": 0, "exec": 0}
 
     def fake_llm(context, step, prompt, input_paths, stage_name):

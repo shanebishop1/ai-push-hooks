@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const packageRoot = path.resolve(__dirname, '..');
 const srcDir = path.join(packageRoot, 'src');
-const args = ['-m', 'ai_doc_sync_hook', ...process.argv.slice(2)];
+const args = ['-m', 'ai_push_hooks', ...process.argv.slice(2)];
 
 function buildEnv() {
   const env = { ...process.env };
@@ -28,7 +28,7 @@ if (result.error && result.error.code === 'ENOENT') {
 }
 
 if (result.error && result.error.code === 'ENOENT') {
-  console.error('[ai-doc-sync-hook] python3/python is required but not installed.');
+  console.error('[ai-push-hooks] python3/python is required but not installed.');
   process.exit(1);
 }
 

@@ -4,13 +4,13 @@ import pathlib
 
 import pytest
 
-from ai_doc_sync_hook.cli import init_config
-from ai_doc_sync_hook.types import HookError
+from ai_push_hooks.cli import init_config
+from ai_push_hooks.types import HookError
 
 
 def test_init_creates_config(tmp_path: pathlib.Path) -> None:
     assert init_config("minimal-docs", False, cwd=tmp_path) == 0
-    assert (tmp_path / ".ai-doc-sync.toml").exists()
+    assert (tmp_path / ".ai-push-hooks.toml").exists()
 
 
 def test_init_rejects_unsupported_template(tmp_path: pathlib.Path) -> None:
