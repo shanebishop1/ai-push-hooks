@@ -22,6 +22,28 @@ pnpm add -D ai-push-hooks
 
 The npm binary wraps the bundled Python module, so `python3` (or `python`) must be available.
 
+## Maintainer Release
+
+This repo supports automated dual publishing to PyPI and npm from a git tag.
+
+1. Bump `version` in `pyproject.toml` and `package.json` to the same value.
+2. Commit and tag: `git tag vX.Y.Z`.
+3. Push commit + tag: `git push && git push --tags`.
+
+The GitHub Actions release workflow then:
+
+- verifies the tag matches both package versions
+- runs tests
+- builds and validates Python distributions
+- smoke-tests the installed Python CLI
+- publishes to PyPI (Trusted Publishing)
+- publishes to npm (`NPM_TOKEN` secret)
+
+Required one-time setup:
+
+- Configure PyPI Trusted Publisher for this repository.
+- Add repository secret `NPM_TOKEN` with publish access to `ai-push-hooks`.
+
 ## Commands
 
 ```bash
