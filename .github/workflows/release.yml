@@ -112,6 +112,8 @@ jobs:
   publish-npm:
     needs: verify
     runs-on: ubuntu-latest
+    environment:
+      name: npm
     permissions:
       contents: read
       id-token: write
