@@ -1,8 +1,12 @@
 {
   "name": "ai-push-hooks",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Modular AI push-hook workflow runner",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shanebishop1/ai-push-hooks"
+  },
   "bin": {
     "ai-push-hooks": "bin/ai-push-hooks.js"
   },
