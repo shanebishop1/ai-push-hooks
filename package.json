@@ -1,6 +1,6 @@
 {
   "name": "ai-push-hooks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Modular AI push-hook workflow runner",
   "license": "MIT",
   "bin": {
