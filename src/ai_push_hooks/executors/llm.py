@@ -249,6 +249,7 @@ def run_llm_step(
     last_error = ""
     last_output = ""
     wants_json = bool(step.schema)
+    expects_json_array = step.schema in {"string_array", "docs_issue_array"}
     for attempt in range(1, total_attempts + 1):
         result = call_opencode(
             context,
@@ -269,7 +270,7 @@ def run_llm_step(
             if not wants_json:
                 finalize_opencode_session(context, stage_name, session_id)
                 return result.output_text
-            if step.schema == "string_array":
+            if expects_json_array:
                 payload = extract_json_array(result.output_text)
             else:
                 payload = extract_json_object(result.output_text)
@@ -281,7 +282,7 @@ def run_llm_step(
             if attempt >= total_attempts:
                 break
             snippet = last_output[: context.config.llm.invalid_json_feedback_max_chars]
-            if step.schema == "string_array":
+            if expects_json_array:
                 suffix = "Return ONLY valid JSON array."
             else:
                 suffix = "Return ONLY valid JSON object."
