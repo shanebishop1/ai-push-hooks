@@ -1,10 +1,19 @@
 # ai-push-hooks
 
-AI-assisted pre-push workflow runner for modular repo checks, docs sync, Beads alignment, and PR creation.
+Ship cleaner pushes with less manual overhead.
+
+`ai-push-hooks` runs an AI-assisted workflow during `pre-push` so your repo stays aligned before code leaves your machine.
+
+## Why teams use it
+
+- Keep docs accurate by detecting factual drift and applying minimal Markdown fixes.
+- Keep branch hygiene tighter with optional Beads alignment and PR drafting.
+- Tune behavior by module, step, prompt source, and safety guardrails.
+- Work with your existing Git hook flow (including Lefthook).
 
 ## Install
 
-### Python / uv
+### Python
 
 ```bash
 uv tool install ai-push-hooks
@@ -12,7 +21,7 @@ uv tool install ai-push-hooks
 pipx install ai-push-hooks
 ```
 
-### npm
+### Node (wrapper around Python package)
 
 ```bash
 npm install --save-dev ai-push-hooks
@@ -20,65 +29,198 @@ npm install --save-dev ai-push-hooks
 pnpm add -D ai-push-hooks
 ```
 
-The npm binary wraps the bundled Python module, so `python3` (or `python`) must be available.
+Requirements:
 
-## Maintainer Release
+- Python 3.10+ (`python3` or `python`) is required, including npm installs.
+- `opencode-cli` (or `opencode`) is required for `llm` and `apply` steps.
+- `gh` is required only if you use PR creation via `gh_pr_create`.
 
-This repo supports automated dual publishing to PyPI and npm from a git tag.
+## Quick start
 
-1. Bump `version` in `pyproject.toml` and `package.json` to the same value.
-2. Commit and tag: `git tag vX.Y.Z`.
-3. Push commit + tag: `git push && git push --tags`.
+1. Install the CLI.
+2. Generate a starter config:
 
-The GitHub Actions release workflow then:
+   ```bash
+   ai-push-hooks init --template minimal-docs
+   ```
 
-- verifies the tag matches both package versions
-- runs tests
-- builds and validates Python distributions
-- smoke-tests the installed Python CLI
-- publishes to PyPI (Trusted Publishing)
-- publishes to npm (`NPM_TOKEN` secret)
+3. Wire it into Lefthook:
 
-Required one-time setup:
+   ```yaml
+   pre-push:
+     commands:
+       ai-push-hooks:
+         run: ai-push-hooks hook {1} {2}
+   ```
 
-- Configure PyPI Trusted Publisher for this repository.
-- Add repository secret `NPM_TOKEN` with publish access to `ai-push-hooks`.
+4. Push as usual. The workflow runs automatically before push completes.
 
 ## Commands
 
-```bash
-ai-push-hooks hook <remote-name> <remote-url>
-ai-push-hooks init --template minimal-docs
-```
+| Command | What it does |
+| --- | --- |
+| `ai-push-hooks hook <remote-name> <remote-url>` | Runs the configured pre-push workflow. |
+| `ai-push-hooks init --template minimal-docs` | Writes `.ai-push-hooks.toml` starter config. |
+| `ai-push-hooks init --template minimal-docs --force` | Overwrites an existing config file. |
 
-`init` supports exactly one template: `minimal-docs`. Use `--force` to overwrite an existing config.
+## Configuration overview
 
-## Lefthook Usage
+- Config file lookup order: `.ai-push-hooks.toml`, then `ai-push-hooks.toml`.
+- If no config file is present, built-in defaults are used.
+- File values are deep-merged over defaults.
+- Prompt resolution precedence for `llm` and `apply` steps:
+  1. `prompt`
+  2. `prompt_file`
+  3. `fallback_prompt_id`
 
-```yaml
-pre-push:
-  commands:
-    ai-push-hooks:
-      run: ai-push-hooks hook {1} {2}
-```
+## Configuration reference
 
-For local source checkout usage, `./run.sh` works as a wrapper entrypoint.
+### Top-level keys
 
-## Configuration
+| Key | Type | Required | Default |
+| --- | --- | --- | --- |
+| `general` | table | no | built-in values |
+| `llm` | table | no | built-in values |
+| `logging` | table | no | built-in values |
+| `workflow` | table | yes | `{ modules = ["docs"] }` |
+| `modules` | table | yes | `{ docs = ... }` |
 
-Put `.ai-push-hooks.toml` in the target repo root. If no file is present, built-in modular defaults are used.
+### `[general]`
 
-Prompt resolution precedence is:
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true` | Enables or disables the hook globally. |
+| `allow_push_on_error` | bool | `false` | If `true`, push continues even when workflow fails. |
+| `require_clean_worktree` | bool | `false` | If `true`, aborts when local changes exist. |
+| `skip_on_sync_branch` | bool | `true` | If `true`, skips on sync branch/worktree context. |
 
-1. inline `prompt`
-2. `prompt_file`
-3. built-in `fallback_prompt_id`
+### `[llm]`
 
-Minimal docs example:
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `runner` | string | `"opencode"` | LLM runner label (currently OpenCode flow). |
+| `model` | string | `"openai/gpt-5.3-codex-spark"` | Model passed to OpenCode. |
+| `variant` | string | `""` | Optional OpenCode variant. |
+| `timeout_seconds` | int | `800` | Timeout per LLM invocation and related OpenCode calls. |
+| `max_parallel` | int | `2` | Max concurrent read-only steps (`collect`, `llm`). |
+| `json_max_retries` | int | `2` | Retry count for invalid JSON responses. |
+| `invalid_json_feedback_max_chars` | int | `6000` | Max invalid output included in retry feedback. |
+| `json_retry_new_session` | bool | `true` | Starts a new OpenCode session on JSON retry. |
+| `delete_session_after_run` | bool | `true` | Deletes OpenCode sessions after completion. |
+| `max_diff_bytes` | int | `180000` | Max bytes of git diff sent into workflow artifacts. |
+| `session_title_prefix` | string | `"ai-push-hooks"` | Prefix for OpenCode session titles. |
+
+### `[logging]`
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `level` | string | `"status"` | Console verbosity (`status`, `info`, `debug`). |
+| `jsonl` | bool | `true` | Enables JSONL event logging. |
+| `dir` | string | `".git/ai-push-hooks/logs"` | Directory for `hook.jsonl`. |
+| `capture_llm_transcript` | bool | `true` | Exports OpenCode session transcripts. |
+| `transcript_dir` | string | `".git/ai-push-hooks/transcripts"` | Transcript export directory. |
+| `summary_dir` | string | `".git/ai-push-hooks/summaries"` | Per-run summary JSON directory. |
+| `print_llm_output` | bool | `false` | Mirrors raw OpenCode JSON stream to stdout. |
+
+### `[workflow]`
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `modules` | array of strings | yes | Ordered module IDs to run. Must contain at least one module and each ID must exist under `[modules]`. |
+
+### `[modules.<module_id>]`
+
+| Key | Type | Required | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | no | Enables or disables that module. Default `true`. |
+| `steps` | array of step tables | yes | Ordered workflow steps for the module. Must be non-empty. |
+
+### `[[modules.<module_id>.steps]]`
+
+| Key | Type | Required | Applies to | Description |
+| --- | --- | --- | --- | --- |
+| `id` | string | yes | all step types | Unique step identifier inside the module. |
+| `type` | string | yes | all step types | One of: `collect`, `llm`, `apply`, `exec`, `assert`. |
+| `inputs` | array of strings | no | non-`collect` steps | Artifact references from earlier steps. |
+| `output` | string | yes | `llm` | Output artifact filename (often `.json`). |
+| `schema` | string | no | `llm` | Validates parsed model output shape. |
+| `prompt` | string | conditional | `llm`, `apply` | Highest-priority prompt source. |
+| `prompt_file` | string | conditional | `llm`, `apply` | Repo-relative or absolute prompt file path. |
+| `fallback_prompt_id` | string | conditional | `llm`, `apply` | Built-in prompt ID used when no higher source resolves. |
+| `collector` | string | yes | `collect` | Collector handler ID. |
+| `allow_paths` | array of strings | yes | `apply` | File glob allowlist for edits. |
+| `executor` | string | yes | `exec` | Exec handler ID. |
+| `assertion` | string | yes | `assert` | Assertion handler ID. |
+| `when_env` | string | no | any step | Runs step only when env var parses as true. |
+
+`llm` and `apply` are promptable step types: at least one of `prompt`, `prompt_file`, or `fallback_prompt_id` must be set.
+
+### Supported handler and schema values
+
+#### Collectors
+
+| Value | Purpose |
+| --- | --- |
+| `docs_context` | Collects docs-related context and diff artifacts. |
+| `beads_status_context` | Collects branch/beads alignment context. |
+| `pr_context` | Collects PR composition context. |
+
+#### LLM schemas
+
+| Value | Expected payload |
+| --- | --- |
+| `string_array` | JSON array of strings. |
+| `docs_issue_array` | JSON array of issue objects with at least `file` and `description`. |
+| `beads_alignment_result` | JSON object, optionally with `commands` string array. |
+| `pr_create_payload` | JSON object for PR creation fields. |
+
+#### Exec handlers
+
+| Value | Purpose |
+| --- | --- |
+| `beads_alignment` | Runs non-interactive Beads commands and writes action report when needed. |
+| `gh_pr_create` | Creates (or reuses) a GitHub PR via `gh`. |
+
+#### Assertion handlers
+
+| Value | Purpose |
+| --- | --- |
+| `docs_apply_requires_manual_commit` | Fails when docs were auto-edited and still need user review/commit. |
+| `beads_alignment_clean` | Fails when Beads alignment reports unresolved work. |
+
+#### Built-in fallback prompt IDs
+
+| Value | Purpose |
+| --- | --- |
+| `docs-query-basic` | Generate doc search queries from diff. |
+| `docs-analysis-basic` | Identify factual documentation drift. |
+| `docs-apply-basic` | Apply minimal doc fixes within allowlist. |
+| `beads-plan-basic` | Build Beads alignment command/report payload. |
+| `pr-compose-basic` | Draft PR title/body/base/head payload. |
+
+## Environment variable overrides
+
+Boolean env parsing accepts: `1`, `true`, `yes`, `y`, `on` and `0`, `false`, `no`, `n`, `off`.
+
+| Env var | Effect |
+| --- | --- |
+| `AI_PUSH_HOOKS_SKIP` | If true, sets `general.enabled = false`. |
+| `AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR` | Overrides `general.allow_push_on_error`. |
+| `AI_PUSH_HOOKS_REQUIRE_CLEAN` | Overrides `general.require_clean_worktree`. |
+| `AI_PUSH_HOOKS_ALLOW_DIRTY` | If true, forces `general.require_clean_worktree = false`. |
+| `AI_PUSH_HOOKS_LOG_LEVEL` | Overrides `logging.level`. |
+| `AI_PUSH_HOOKS_PRINT_LLM_OUTPUT` | Overrides `logging.print_llm_output`. |
+| `AI_PUSH_HOOKS_MODEL` | Overrides `llm.model`. |
+| `AI_PUSH_HOOKS_VARIANT` | Overrides `llm.variant`. |
+| `AI_PUSH_HOOKS_TIMEOUT_SECONDS` | Overrides `llm.timeout_seconds` (integer). |
+
+`when_env` is step-level and can point to any env var. A common example is `AI_PUSH_HOOKS_CREATE_PR` to gate PR creation steps.
+
+## Example: docs + PR with opt-in creation
 
 ```toml
 [workflow]
-modules = ["docs"]
+modules = ["docs", "pr"]
 
 [modules.docs]
 enabled = true
@@ -91,82 +233,6 @@ collector = "docs_context"
 [[modules.docs.steps]]
 id = "query"
 type = "llm"
-prompt = "Return a JSON array of documentation search queries. JSON only."
-inputs = ["collect/push.diff", "collect/changed-files.txt"]
-output = "queries.json"
-schema = "string_array"
-
-[[modules.docs.steps]]
-id = "analyze"
-type = "llm"
-prompt = "Return JSON issues only for factual documentation drift."
-inputs = ["collect/push.diff", "collect/docs-context.txt", "query/queries.json", "collect/recent-commits.txt"]
-output = "issues.json"
-schema = "docs_issue_array"
-
-[[modules.docs.steps]]
-id = "apply"
-type = "apply"
-prompt = "Apply the minimum Markdown fixes required."
-inputs = ["collect/push.diff", "collect/docs-context.txt", "analyze/issues.json"]
-allow_paths = ["README.md", "docs/**/*.md"]
-
-[[modules.docs.steps]]
-id = "assert"
-type = "assert"
-assertion = "docs_apply_requires_manual_commit"
-inputs = ["apply/result.json"]
-```
-
-Example config that recreates the current docs + beads + PR behavior through configuration only:
-
-The sample below is runnable as-is because each `prompt_file` step also declares a built-in `fallback_prompt_id`. If you add local prompt files, they override the built-ins.
-
-```toml
-[workflow]
-modules = ["beads", "docs", "pr"]
-
-[modules.beads]
-enabled = true
-
-[[modules.beads.steps]]
-id = "collect"
-type = "collect"
-collector = "beads_status_context"
-
-[[modules.beads.steps]]
-id = "plan"
-type = "llm"
-prompt_file = ".ai-push-hooks.prompts/beads-status.txt"
-fallback_prompt_id = "beads-plan-basic"
-inputs = ["collect/branch-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"]
-output = "beads-plan.json"
-schema = "beads_alignment_result"
-
-[[modules.beads.steps]]
-id = "apply"
-type = "exec"
-executor = "beads_alignment"
-inputs = ["plan/beads-plan.json"]
-
-[[modules.beads.steps]]
-id = "assert"
-type = "assert"
-assertion = "beads_alignment_clean"
-inputs = ["plan/beads-plan.json"]
-
-[modules.docs]
-enabled = true
-
-[[modules.docs.steps]]
-id = "collect"
-type = "collect"
-collector = "docs_context"
-
-[[modules.docs.steps]]
-id = "query"
-type = "llm"
-prompt_file = ".ai-push-hooks.prompts/query.txt"
 fallback_prompt_id = "docs-query-basic"
 inputs = ["collect/push.diff", "collect/changed-files.txt"]
 output = "queries.json"
@@ -175,7 +241,6 @@ schema = "string_array"
 [[modules.docs.steps]]
 id = "analyze"
 type = "llm"
-prompt_file = ".ai-push-hooks.prompts/analysis.txt"
 fallback_prompt_id = "docs-analysis-basic"
 inputs = ["collect/push.diff", "collect/docs-context.txt", "query/queries.json", "collect/recent-commits.txt"]
 output = "issues.json"
@@ -184,7 +249,6 @@ schema = "docs_issue_array"
 [[modules.docs.steps]]
 id = "apply"
 type = "apply"
-prompt_file = ".ai-push-hooks.prompts/apply.txt"
 fallback_prompt_id = "docs-apply-basic"
 inputs = ["collect/push.diff", "collect/docs-context.txt", "analyze/issues.json"]
 allow_paths = ["README.md", "docs/**/*.md"]
@@ -206,7 +270,6 @@ collector = "pr_context"
 [[modules.pr.steps]]
 id = "compose"
 type = "llm"
-prompt_file = ".ai-push-hooks.prompts/create-pr.txt"
 fallback_prompt_id = "pr-compose-basic"
 inputs = ["collect/pr-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"]
 output = "pr-draft.json"
@@ -219,16 +282,3 @@ executor = "gh_pr_create"
 when_env = "AI_PUSH_HOOKS_CREATE_PR"
 inputs = ["compose/pr-draft.json"]
 ```
-
-## Layout
-
-- `src/ai_push_hooks/cli.py` - CLI entrypoint
-- `src/ai_push_hooks/config.py` - config loading and validation
-- `src/ai_push_hooks/engine.py` - scheduler and workflow runtime
-- `src/ai_push_hooks/artifacts.py` - run-directory artifact store
-- `src/ai_push_hooks/prompts_builtin.py` - built-in fallback prompts
-- `src/ai_push_hooks/modules/` - docs, beads, and PR collectors
-- `src/ai_push_hooks/executors/` - LLM, apply, exec, and assertion handlers
-- `run.sh` - source checkout wrapper
-- `bin/ai-push-hooks.js` - npm bin wrapper
-- `.ai-push-hooks.toml` - sample config
