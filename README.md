@@ -1,15 +1,8 @@
 # ai-push-hooks
 
-Ship cleaner pushes with less manual overhead.
+`ai-push-hooks` is a configurable pre-push workflow runner for local Git repositories.
 
-`ai-push-hooks` runs an AI-assisted workflow during `pre-push` so your repo stays aligned before code leaves your machine.
-
-## Why teams use it
-
-- Keep docs accurate by detecting factual drift and applying minimal Markdown fixes.
-- Keep branch hygiene tighter with optional Beads alignment and PR drafting.
-- Tune behavior by module, step, prompt source, and safety guardrails.
-- Work with your existing Git hook flow (including Lefthook).
+It runs module-based steps (collect, LLM, apply, exec, assert) before push so you can automate checks and optional repo maintenance tasks.
 
 ## Install
 
