@@ -116,6 +116,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      deployments: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -128,3 +129,58 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --access public --provenance
+
+      - name: Record npm deployment status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          ref = os.environ["GITHUB_REF_NAME"]
+          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          deployment_payload = {
+              "ref": ref,
+              "environment": "npm",
+              "description": "npm publish",
+              "auto_merge": False,
+              "transient_environment": False,
+              "production_environment": False,
+              "required_contexts": [],
+          }
+          deployment_request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/deployments",
+              data=json.dumps(deployment_payload).encode("utf-8"),
+              headers=headers,
+              method="POST",
+          )
+          with urllib.request.urlopen(deployment_request) as response:
+              deployment = json.load(response)
+
+          status_payload = {
+              "state": "success",
+              "log_url": run_url,
+              "description": "npm publish successful",
+          }
+          status_request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/deployments/{deployment['id']}/statuses",
+              data=json.dumps(status_payload).encode("utf-8"),
+              headers=headers,
+              method="POST",
+          )
+          with urllib.request.urlopen(status_request):
+              pass
+
+          print(f"Recorded npm deployment {deployment['id']} as success")
+          PY
