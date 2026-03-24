@@ -67,7 +67,7 @@ skip_on_sync_branch = true
 
 [llm]
 runner = "opencode"
-model = "openai/gpt-5.3-codex-spark"
+model = "openai/gpt-5.3-codex"
 variant = ""
 timeout_seconds = 800
 max_parallel = 2

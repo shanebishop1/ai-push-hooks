@@ -28,7 +28,7 @@ class GeneralConfig:
 @dataclass(frozen=True)
 class LlmConfig:
     runner: str = "opencode"
-    model: str = "openai/gpt-5.3-codex-spark"
+    model: str = "openai/gpt-5.3-codex"
     variant: str = ""
     timeout_seconds: int = 800
     max_parallel: int = 2
