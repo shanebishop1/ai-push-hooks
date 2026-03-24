@@ -1,6 +1,6 @@
 {
   "name": "ai-push-hooks",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Modular AI push-hook workflow runner",
   "license": "MIT",
   "repository": {
@@ -20,7 +20,7 @@
     "run.sh",
     "pyproject.toml",
     "LICENSE",
-    ".ai-push-hooks.toml"
+    "ai-push-hooks.toml"
   ],
   "engines": {
     "node": ">=18"

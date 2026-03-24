@@ -50,6 +50,46 @@ type = "mystery"
         load_config(tmp_path)
 
 
+def test_load_config_prefers_non_dot_filename_when_both_exist(tmp_path: pathlib.Path) -> None:
+    (tmp_path / ".ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = false
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, path = load_config(tmp_path)
+
+    assert path == tmp_path / "ai-push-hooks.toml"
+    assert config.modules["docs"].enabled is True
+
+
 def test_generate_run_id_is_unique_and_high_resolution() -> None:
     first = generate_run_id()
     second = generate_run_id()

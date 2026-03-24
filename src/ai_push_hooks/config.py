@@ -318,7 +318,7 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
 def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path | None]:
     config_path: pathlib.Path | None = None
     raw = copy.deepcopy(DEFAULT_CONFIG_RAW)
-    for candidate in [repo_root / ".ai-push-hooks.toml", repo_root / "ai-push-hooks.toml"]:
+    for candidate in [repo_root / "ai-push-hooks.toml", repo_root / ".ai-push-hooks.toml"]:
         if candidate.exists():
             config_path = candidate
             text = candidate.read_text(encoding="utf-8")

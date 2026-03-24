@@ -53,12 +53,12 @@ Requirements:
 | Command | What it does |
 | --- | --- |
 | `ai-push-hooks hook <remote-name> <remote-url>` | Runs the configured pre-push workflow. |
-| `ai-push-hooks init --template minimal-docs` | Writes `.ai-push-hooks.toml` starter config. |
+| `ai-push-hooks init --template minimal-docs` | Writes `ai-push-hooks.toml` starter config. |
 | `ai-push-hooks init --template minimal-docs --force` | Overwrites an existing config file. |
 
 ## Configuration overview
 
-- Config file lookup order: `.ai-push-hooks.toml`, then `ai-push-hooks.toml`.
+- Config file lookup order: `ai-push-hooks.toml`, then `.ai-push-hooks.toml` (legacy).
 - If no config file is present, built-in defaults are used.
 - File values are deep-merged over defaults.
 - Prompt resolution precedence for `llm` and `apply` steps:
