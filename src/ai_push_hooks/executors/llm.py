@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import re
 import shutil
@@ -26,24 +25,14 @@ def sanitize_filename_component(value: str) -> str:
     return cleaned.strip("-") or "value"
 
 
-def prefer_opencode_cli_candidate(candidate: str) -> str:
-    path = pathlib.Path(candidate)
-    if path.name != "opencode":
-        return candidate
-    sibling = path.with_name("opencode-cli")
-    if sibling.exists() and os.access(sibling, os.X_OK):
-        return str(sibling)
-    return candidate
-
-
 def resolve_opencode_executable() -> str:
+    opencode_path = shutil.which("opencode")
+    if opencode_path:
+        return opencode_path
     cli_path = shutil.which("opencode-cli")
     if cli_path:
         return cli_path
-    opencode_path = shutil.which("opencode")
-    if opencode_path:
-        return prefer_opencode_cli_candidate(opencode_path)
-    raise HookError("opencode is required but not installed")
+    raise HookError("opencode (or opencode-cli) is required but not installed")
 
 
 def parse_opencode_json_run_output(raw: str) -> tuple[str | None, str]:

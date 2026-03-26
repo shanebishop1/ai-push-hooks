@@ -24,9 +24,9 @@ pnpm add -D ai-push-hooks
 
 Requirements:
 
-- Python 3.10+ (`python3` or `python`) is required, including npm installs.
-- `opencode-cli` (or `opencode`) is required for `llm` and `apply` steps.
-- `gh` is required only if you use PR creation via `gh_pr_create`.
+- [Python 3.10+](https://www.python.org/downloads/) (`python3` or `python`) is required, including npm installs.
+- [OpenCode CLI](https://github.com/sst/opencode) is required for `llm` and `apply` steps. The expected executable is `opencode`; `opencode-cli` is also accepted for compatibility.
+- [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is required only if you use PR creation via `gh_pr_create`.
 
 ## Quick start
 
