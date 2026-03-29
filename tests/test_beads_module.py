@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import pathlib
+import subprocess
 
 import pytest
 
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.engine import WorkflowEngine
+from ai_push_hooks.executors.exec import collect_commit_messages_for_ranges
 from ai_push_hooks.types import HookError, ModuleConfig, StepConfig
 
 from .conftest import build_context, init_repo, make_config
@@ -23,13 +25,28 @@ def beads_config(enabled: bool = True):
                     StepConfig(
                         id="plan",
                         type="llm",
-                        inputs=["collect/branch-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"],
+                        inputs=[
+                            "collect/branch-context.txt",
+                            "collect/changed-files.txt",
+                            "collect/push.diff",
+                            "collect/commits.txt",
+                        ],
                         output="beads-plan.json",
                         schema="beads_alignment_result",
                         prompt="plan",
                     ),
-                    StepConfig(id="apply", type="exec", executor="beads_alignment", inputs=["plan/beads-plan.json"]),
-                    StepConfig(id="assert", type="assert", assertion="beads_alignment_clean", inputs=["plan/beads-plan.json"]),
+                    StepConfig(
+                        id="apply",
+                        type="exec",
+                        executor="beads_alignment",
+                        inputs=["plan/beads-plan.json"],
+                    ),
+                    StepConfig(
+                        id="assert",
+                        type="assert",
+                        assertion="beads_alignment_clean",
+                        inputs=["plan/beads-plan.json"],
+                    ),
                 ),
             )
         ]
@@ -47,7 +64,9 @@ def test_beads_disabled_skips_cleanly(tmp_path: pathlib.Path) -> None:
 def test_beads_unresolved_writes_actionable_report(tmp_path: pathlib.Path) -> None:
     repo = init_repo(tmp_path, branch="feature/beads")
     config = beads_config()
-    context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
+    context = build_context(
+        repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n"
+    )
 
     def fake_llm(context, step, prompt, input_paths, stage_name):
         return {
@@ -69,7 +88,9 @@ def test_beads_unresolved_writes_actionable_report(tmp_path: pathlib.Path) -> No
 def test_beads_non_feature_branch_skips(tmp_path: pathlib.Path) -> None:
     repo = init_repo(tmp_path, branch="main")
     config = beads_config()
-    context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
+    context = build_context(
+        repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n"
+    )
     calls = {"llm": 0}
 
     def fake_llm(context, step, prompt, input_paths, stage_name):
@@ -82,3 +103,41 @@ def test_beads_non_feature_branch_skips(tmp_path: pathlib.Path) -> None:
         llm_executor=fake_llm,
     ).run()
     assert calls["llm"] == 0
+
+
+def test_collect_commit_messages_handles_empty_commit_body(tmp_path: pathlib.Path) -> None:
+    repo = init_repo(tmp_path, branch="feature/beads")
+    target = repo / "docs" / "INDEX.md"
+    target.write_text("# Docs Index\n\n- updated\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", str(target)], cwd=repo, check=True, capture_output=True, text=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "single line subject"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    previous = subprocess.run(
+        ["git", "rev-parse", "HEAD~1"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    commits = collect_commit_messages_for_ranges(repo, [f"{previous}..{head}"])
+
+    assert len(commits) == 1
+    assert commits[0]["hash"] == head
+    assert commits[0]["subject"] == "single line subject"
+    assert commits[0]["body"] == ""

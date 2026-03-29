@@ -11,7 +11,13 @@ import subprocess
 from pathlib import PurePosixPath
 from typing import Any
 
-from ..types import FEATURE_BRANCH_PREFIXES, HookError, ModuleRuntimeState, RuntimeContext, StepConfig
+from ..types import (
+    FEATURE_BRANCH_PREFIXES,
+    HookError,
+    ModuleRuntimeState,
+    RuntimeContext,
+    StepConfig,
+)
 
 ZERO_OID = "0000000000000000000000000000000000000000"
 
@@ -145,10 +151,17 @@ def collect_ranges_from_stdin(
         if local_sha == ZERO_OID:
             continue
         if remote_sha and remote_sha != ZERO_OID:
-            if run_command(["git", "cat-file", "-e", f"{remote_sha}^{{commit}}"], cwd=repo_root).returncode == 0:
+            if (
+                run_command(
+                    ["git", "cat-file", "-e", f"{remote_sha}^{{commit}}"], cwd=repo_root
+                ).returncode
+                == 0
+            ):
                 ranges.add(f"{remote_sha}..{local_sha}")
         else:
-            merge_base = git(repo_root, ["merge-base", local_sha, f"{remote_name}/main"], check=False)
+            merge_base = git(
+                repo_root, ["merge-base", local_sha, f"{remote_name}/main"], check=False
+            )
             if merge_base:
                 ranges.add(f"{merge_base}..{local_sha}")
             else:
@@ -156,7 +169,9 @@ def collect_ranges_from_stdin(
     if ranges:
         return sorted(ranges)
 
-    upstream = git(repo_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], check=False)
+    upstream = git(
+        repo_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], check=False
+    )
     if upstream:
         merge_base = git(repo_root, ["merge-base", "HEAD", upstream], check=False)
         if merge_base:
@@ -170,7 +185,9 @@ def collect_ranges_from_stdin(
 def collect_changed_files(repo_root: pathlib.Path, ranges: list[str]) -> list[str]:
     files: set[str] = set()
     for range_expr in ranges:
-        output = git(repo_root, ["diff", "--name-only", "--diff-filter=ACMR", range_expr], check=True)
+        output = git(
+            repo_root, ["diff", "--name-only", "--diff-filter=ACMR", range_expr], check=True
+        )
         for line in output.splitlines():
             clean = line.strip()
             if clean:
@@ -186,18 +203,29 @@ def collect_diff(repo_root: pathlib.Path, ranges: list[str], max_bytes: int) -> 
     return "\n".join(chunks)[:max_bytes]
 
 
-def collect_commit_messages_for_ranges(repo_root: pathlib.Path, ranges: list[str]) -> list[dict[str, str]]:
+def collect_commit_messages_for_ranges(
+    repo_root: pathlib.Path, ranges: list[str]
+) -> list[dict[str, str]]:
     commits: list[dict[str, str]] = []
     for range_expr in ranges:
-        raw = git(repo_root, ["log", "--format=%H%x1f%s%x1f%b%x1e", range_expr], check=True)
+        completed = run_command(
+            ["git", "log", "--format=%H%x1f%s%x1f%b%x1e", range_expr],
+            cwd=repo_root,
+            check=True,
+        )
+        raw = completed.stdout or ""
         for record in raw.split("\x1e"):
-            payload = record.strip()
+            payload = record.rstrip("\r\n")
             if not payload:
                 continue
             parts = payload.split("\x1f", 2)
-            if len(parts) != 3:
+            if len(parts) == 2:
+                commit_hash, subject = parts
+                body = ""
+            elif len(parts) == 3:
+                commit_hash, subject, body = parts
+            else:
                 continue
-            commit_hash, subject, body = parts
             commits.append(
                 {
                     "hash": commit_hash.strip(),
@@ -229,7 +257,19 @@ def parse_key_value_text(text: str) -> dict[str, str]:
 
 def lookup_open_pr_url(repo_root: pathlib.Path, branch_name: str) -> str:
     completed = run_command(
-        ["gh", "pr", "list", "--head", branch_name, "--state", "open", "--limit", "1", "--json", "url"],
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            branch_name,
+            "--state",
+            "open",
+            "--limit",
+            "1",
+            "--json",
+            "url",
+        ],
         cwd=repo_root,
         check=False,
     )
@@ -292,10 +332,24 @@ def attempt_pr_creation_fallback(
     changed_files: list[str],
     commits: list[dict[str, str]],
 ) -> str:
-    title = sanitize_pr_title(git(repo_root, ["log", "-1", "--pretty=%s"], check=False), branch_name)
+    title = sanitize_pr_title(
+        git(repo_root, ["log", "-1", "--pretty=%s"], check=False), branch_name
+    )
     body = build_fallback_pr_body(branch_name, ranges, changed_files, commits)
     created = run_command(
-        ["gh", "pr", "create", "--head", branch_name, "--base", base_branch, "--title", title, "--body", body],
+        [
+            "gh",
+            "pr",
+            "create",
+            "--head",
+            branch_name,
+            "--base",
+            base_branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ],
         cwd=repo_root,
         check=False,
     )
@@ -307,11 +361,15 @@ def attempt_pr_creation_fallback(
     existing_pr = lookup_open_pr_url(repo_root, branch_name)
     if existing_pr:
         return existing_pr
-    raise HookError(combined_output.strip() or f"gh pr create failed with exit code {created.returncode}")
+    raise HookError(
+        combined_output.strip() or f"gh pr create failed with exit code {created.returncode}"
+    )
 
 
 def remote_branch_exists(repo_root: pathlib.Path, remote_name: str, branch_name: str) -> bool:
-    completed = run_command(["git", "ls-remote", "--heads", remote_name, branch_name], cwd=repo_root, check=False)
+    completed = run_command(
+        ["git", "ls-remote", "--heads", remote_name, branch_name], cwd=repo_root, check=False
+    )
     return completed.returncode == 0 and bool((completed.stdout or "").strip())
 
 
@@ -385,14 +443,28 @@ def gh_pr_create_executor(
     title = sanitize_pr_title(str(payload.get("title", "")).strip(), branch_name)
     body = str(payload.get("body", "")).strip()
     if not body:
-        commits = collect_commit_messages_for_ranges(context.repo_root, context.cache.get("ranges", []))
+        commits = collect_commit_messages_for_ranges(
+            context.repo_root, context.cache.get("ranges", [])
+        )
         body = build_fallback_pr_body(
             branch_name,
             context.cache.get("ranges", []),
             context.cache.get("changed_files", []),
             commits,
         )
-    args = ["gh", "pr", "create", "--head", head_branch, "--base", base_branch, "--title", title, "--body", body]
+    args = [
+        "gh",
+        "pr",
+        "create",
+        "--head",
+        head_branch,
+        "--base",
+        base_branch,
+        "--title",
+        title,
+        "--body",
+        body,
+    ]
     if bool(payload.get("draft", False)):
         args.append("--draft")
     created = run_command(args, cwd=context.repo_root, check=False)
@@ -402,7 +474,10 @@ def gh_pr_create_executor(
         pr_url = lookup_open_pr_url(context.repo_root, branch_name)
     if not pr_url:
         if remote_branch_exists(context.repo_root, context.remote_name or "origin", branch_name):
-            raise HookError(combined_output.strip() or f"gh pr create failed with exit code {created.returncode}")
+            raise HookError(
+                combined_output.strip()
+                or f"gh pr create failed with exit code {created.returncode}"
+            )
         return {"skipped": False, "pr_url": "", "deferred_until_remote": True}
     return {"skipped": False, "pr_url": pr_url, "already_exists": False}
 
