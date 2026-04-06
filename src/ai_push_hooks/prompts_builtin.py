@@ -32,7 +32,7 @@ Rules:
 BEADS_PLAN_PROMPT = """Check the attached branch context and output a JSON object describing Beads alignment work.
 
 Return keys:
-- commands: array of non-interactive br command strings to run
+- commands: array of non-interactive bd command strings to run
 - unresolved: boolean
 - report_markdown: markdown string or empty
 
