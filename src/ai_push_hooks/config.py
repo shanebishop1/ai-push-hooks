@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import os
 import pathlib
@@ -15,80 +14,6 @@ try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
     tomllib = None  # type: ignore[assignment]
-
-DEFAULT_CONFIG_RAW: dict[str, Any] = {
-    "general": {
-        "enabled": True,
-        "allow_push_on_error": False,
-        "require_clean_worktree": False,
-        "skip_on_sync_branch": True,
-    },
-    "llm": {
-        "runner": "opencode",
-        "model": "openai/gpt-5.3-codex",
-        "variant": "",
-        "timeout_seconds": 800,
-        "max_parallel": 2,
-        "json_max_retries": 2,
-        "invalid_json_feedback_max_chars": 6000,
-        "json_retry_new_session": True,
-        "delete_session_after_run": True,
-        "max_diff_bytes": 180000,
-        "session_title_prefix": "ai-push-hooks",
-    },
-    "logging": {
-        "level": "status",
-        "jsonl": True,
-        "dir": ".git/ai-push-hooks/logs",
-        "capture_llm_transcript": True,
-        "transcript_dir": ".git/ai-push-hooks/transcripts",
-        "summary_dir": ".git/ai-push-hooks/summaries",
-        "print_llm_output": False,
-    },
-    "workflow": {"modules": ["docs"]},
-    "modules": {
-        "docs": {
-            "enabled": True,
-            "steps": [
-                {"id": "collect", "type": "collect", "collector": "docs_context"},
-                {
-                    "id": "query",
-                    "type": "llm",
-                    "inputs": ["collect/push.diff", "collect/changed-files.txt"],
-                    "output": "queries.json",
-                    "schema": "string_array",
-                    "fallback_prompt_id": "docs-query-basic",
-                },
-                {
-                    "id": "analyze",
-                    "type": "llm",
-                    "inputs": [
-                        "collect/push.diff",
-                        "collect/docs-context.txt",
-                        "query/queries.json",
-                        "collect/recent-commits.txt",
-                    ],
-                    "output": "issues.json",
-                    "schema": "docs_issue_array",
-                    "fallback_prompt_id": "docs-analysis-basic",
-                },
-                {
-                    "id": "apply",
-                    "type": "apply",
-                    "inputs": ["collect/push.diff", "collect/docs-context.txt", "analyze/issues.json"],
-                    "allow_paths": ["README.md", "docs/**/*.md"],
-                    "fallback_prompt_id": "docs-apply-basic",
-                },
-                {
-                    "id": "assert",
-                    "type": "assert",
-                    "inputs": ["apply/result.json"],
-                    "assertion": "docs_apply_requires_manual_commit",
-                },
-            ]
-        }
-    },
-}
 
 ALLOWED_TOP_LEVEL_KEYS = {"general", "llm", "logging", "workflow", "modules"}
 
@@ -172,16 +97,6 @@ def parse_toml_fallback(raw: str) -> dict[str, Any]:
             parsed_value = _parse_scalar(value)
         current[key] = parsed_value
     return parsed
-
-
-def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    merged = copy.deepcopy(base)
-    for key, value in override.items():
-        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = deep_merge(merged[key], value)
-        else:
-            merged[key] = copy.deepcopy(value)
-    return merged
 
 
 def _normalize_step(raw: dict[str, Any]) -> StepConfig:
@@ -315,19 +230,18 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
     return _build_config(raw)
 
 
-def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path | None]:
-    config_path: pathlib.Path | None = None
-    raw = copy.deepcopy(DEFAULT_CONFIG_RAW)
-    for candidate in [repo_root / "ai-push-hooks.toml", repo_root / ".ai-push-hooks.toml"]:
-        if candidate.exists():
-            config_path = candidate
-            text = candidate.read_text(encoding="utf-8")
-            loaded = tomllib.loads(text) if tomllib is not None else parse_toml_fallback(text)
-            if not isinstance(loaded, dict):
-                raise HookError(f"Invalid config format in {candidate}")
-            raw = deep_merge(raw, loaded)
-            break
-    return _apply_env_overrides(_build_config(raw)), config_path
+def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
+    config_path = repo_root / "ai-push-hooks.toml"
+    if not config_path.exists():
+        raise HookError(
+            "Missing required config file `ai-push-hooks.toml` in repo root. "
+            "Run `ai-push-hooks init --template minimal-docs` first"
+        )
+    text = config_path.read_text(encoding="utf-8")
+    loaded = tomllib.loads(text) if tomllib is not None else parse_toml_fallback(text)
+    if not isinstance(loaded, dict):
+        raise HookError(f"Invalid config format in {config_path}")
+    return _apply_env_overrides(_build_config(loaded)), config_path
 
 
 def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:

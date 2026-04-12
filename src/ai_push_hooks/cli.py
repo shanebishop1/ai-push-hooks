@@ -28,10 +28,8 @@ def init_config(template: str, force: bool, cwd: pathlib.Path | None = None) -> 
         raise HookError("Only `minimal-docs` is supported")
     target_dir = cwd or pathlib.Path.cwd()
     config_path = target_dir / "ai-push-hooks.toml"
-    legacy_path = target_dir / ".ai-push-hooks.toml"
-    existing_path = config_path if config_path.exists() else legacy_path if legacy_path.exists() else None
-    if existing_path is not None and not force:
-        raise HookError(f"Refusing to overwrite existing config without --force: {existing_path}")
+    if config_path.exists() and not force:
+        raise HookError(f"Refusing to overwrite existing config without --force: {config_path}")
     config_path.write_text(MINIMAL_DOCS_TEMPLATE, encoding="utf-8")
     sys.stdout.write(str(config_path) + "\n")
     return 0

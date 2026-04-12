@@ -22,9 +22,3 @@ def test_init_refuses_overwrite_without_force(tmp_path: pathlib.Path) -> None:
     init_config("minimal-docs", False, cwd=tmp_path)
     with pytest.raises(HookError, match="Refusing to overwrite"):
         init_config("minimal-docs", False, cwd=tmp_path)
-
-
-def test_init_refuses_when_legacy_config_exists_without_force(tmp_path: pathlib.Path) -> None:
-    (tmp_path / ".ai-push-hooks.toml").write_text("[workflow]\nmodules=[\"docs\"]\n", encoding="utf-8")
-    with pytest.raises(HookError, match="Refusing to overwrite"):
-        init_config("minimal-docs", False, cwd=tmp_path)

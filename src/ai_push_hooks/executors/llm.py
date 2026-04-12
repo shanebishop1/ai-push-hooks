@@ -32,7 +32,7 @@ def resolve_opencode_executable() -> str:
     cli_path = shutil.which("opencode-cli")
     if cli_path:
         return cli_path
-    raise HookError("opencode (or opencode-cli) is required but not installed")
+    raise HookError("opencode is required but not installed")
 
 
 def parse_opencode_json_run_output(raw: str) -> tuple[str | None, str]:

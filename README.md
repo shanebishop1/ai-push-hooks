@@ -24,20 +24,31 @@ pnpm add -D ai-push-hooks
 
 Requirements:
 
-- [Python 3.10+](https://www.python.org/downloads/) (`python3` or `python`) is required, including npm installs.
-- [OpenCode CLI](https://github.com/sst/opencode) is required for `llm` and `apply` steps. The expected executable is `opencode`; `opencode-cli` is also accepted for compatibility.
+- [Python 3.10+](https://www.python.org/downloads/) (`python3` or `python`) is required. The npm package is a wrapper around the Python CLI, so Python is still required when installed through npm/pnpm.
+- [OpenCode](https://github.com/anomalyco/opencode) is required for `llm` and `apply` steps.
 - [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is required only if you use PR creation via `gh_pr_create`.
 
 ## Quick start
 
-1. Install the CLI.
+1. Install by following the steps above.
 2. Generate a starter config:
+
+   Python tool install (`uv tool` / `pipx`):
 
    ```bash
    ai-push-hooks init --template minimal-docs
    ```
 
-3. Wire it into Lefthook:
+   npm/pnpm local install:
+
+   ```bash
+   npx ai-push-hooks init --template minimal-docs
+   # or
+   pnpm exec ai-push-hooks init --template minimal-docs
+   ```
+
+3. Configure modules and steps in [Configuration reference](#configuration-reference).
+4. Wire it into your pre-push hook manager. Lefthook example:
 
    ```yaml
    pre-push:
@@ -46,9 +57,13 @@ Requirements:
          run: ai-push-hooks hook {1} {2}
    ```
 
-4. Push as usual. The workflow runs automatically before push completes.
+   In Lefthook, `{1}` is the remote name and `{2}` is the remote URL from Git's `pre-push` hook args.
+
+5. Push as usual. The workflow runs automatically before push completes.
 
 ## Commands
+
+If installed as a local npm/pnpm dependency, run commands with `npx` or `pnpm exec`.
 
 | Command | What it does |
 | --- | --- |
@@ -58,9 +73,7 @@ Requirements:
 
 ## Configuration overview
 
-- Config file lookup order: `ai-push-hooks.toml`, then `.ai-push-hooks.toml` (legacy).
-- If no config file is present, built-in defaults are used.
-- File values are deep-merged over defaults.
+- Config file: `ai-push-hooks.toml` in repo root (required).
 - Prompt resolution precedence for `llm` and `apply` steps:
   1. `prompt`
   2. `prompt_file`
@@ -72,11 +85,11 @@ Requirements:
 
 | Key | Type | Required | Default |
 | --- | --- | --- | --- |
-| `general` | table | no | built-in values |
-| `llm` | table | no | built-in values |
-| `logging` | table | no | built-in values |
-| `workflow` | table | yes | `{ modules = ["docs"] }` |
-| `modules` | table | yes | `{ docs = ... }` |
+| `general` | table | no | see section defaults |
+| `llm` | table | no | see section defaults |
+| `logging` | table | no | see section defaults |
+| `workflow` | table | yes | n/a |
+| `modules` | table | yes | n/a |
 
 ### `[general]`
 

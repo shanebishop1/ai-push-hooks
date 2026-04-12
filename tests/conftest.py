@@ -11,6 +11,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.executors.exec import resolve_git_dir
+from ai_push_hooks.prompts_builtin import MINIMAL_DOCS_TEMPLATE
 from ai_push_hooks.types import GeneralConfig, HookConfig, HookLogger, LlmConfig, LoggingConfig, ModuleConfig, RuntimeContext, StepConfig, WorkflowConfig
 
 
@@ -31,6 +32,7 @@ def init_repo(tmp_path: pathlib.Path, branch: str = "main") -> pathlib.Path:
     (repo / "docs" / "INDEX.md").write_text("# Docs Index\n", encoding="utf-8")
     (repo / "src").mkdir()
     (repo / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    (repo / "ai-push-hooks.toml").write_text(MINIMAL_DOCS_TEMPLATE, encoding="utf-8")
     _run(["git", "add", "."], repo)
     _run(["git", "commit", "-m", "init"], repo)
     return repo
