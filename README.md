@@ -31,7 +31,33 @@ Requirements:
 ## Quick start
 
 1. Install by following the steps above.
-2. Generate a starter config:
+2. Install the repository-local `pre-push` hook (standalone/default setup):
+
+   Python tool install (`uv tool` / `pipx`):
+
+   ```bash
+   ai-push-hooks install
+   ```
+
+   npm/pnpm local install:
+
+   ```bash
+   npx ai-push-hooks install
+   # or
+   pnpm exec ai-push-hooks install
+   ```
+
+   Notes:
+
+   - The generated hook is minimal and delegates directly to `ai-push-hooks hook "$@"`.
+   - Git forwards `pre-push` args (`<remote-name> <remote-url>`) through `"$@"`.
+   - If `.git/hooks/pre-push` already exists, install fails by default. Use `--force` to overwrite:
+
+   ```bash
+   ai-push-hooks install --force
+   ```
+
+3. Generate a starter config:
 
    Python tool install (`uv tool` / `pipx`):
 
@@ -47,8 +73,12 @@ Requirements:
    pnpm exec ai-push-hooks init --template minimal-docs
    ```
 
-3. Configure modules and steps in [Configuration reference](#configuration-reference).
-4. Wire it into your pre-push hook manager. Lefthook example:
+4. Configure modules and steps in [Configuration reference](#configuration-reference).
+5. Push as usual. The workflow runs automatically before push completes.
+
+### Alternative: Lefthook integration
+
+If you already use Lefthook, you can keep that integration instead of `ai-push-hooks install`:
 
    ```yaml
    pre-push:
@@ -59,14 +89,14 @@ Requirements:
 
    In Lefthook, `{1}` is the remote name and `{2}` is the remote URL from Git's `pre-push` hook args.
 
-5. Push as usual. The workflow runs automatically before push completes.
-
 ## Commands
 
 If installed as a local npm/pnpm dependency, run commands with `npx` or `pnpm exec`.
 
 | Command | What it does |
 | --- | --- |
+| `ai-push-hooks install` | Installs `.git/hooks/pre-push` that delegates to `ai-push-hooks hook "$@"`. |
+| `ai-push-hooks install --force` | Overwrites an existing `.git/hooks/pre-push` hook during install. |
 | `ai-push-hooks hook <remote-name> <remote-url>` | Runs the configured pre-push workflow. |
 | `ai-push-hooks init --template minimal-docs` | Writes `ai-push-hooks.toml` starter config. |
 | `ai-push-hooks init --template minimal-docs --force` | Overwrites an existing config file. |
