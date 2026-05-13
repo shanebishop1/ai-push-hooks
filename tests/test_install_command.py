@@ -49,7 +49,30 @@ def test_install_hook_is_executable(repo: pathlib.Path) -> None:
 
 
 def test_install_script_content_forwards_all_args() -> None:
-    assert pre_push_hook_script() == '#!/bin/sh\nai-push-hooks hook "$@"\n'
+    assert 'exec "./node_modules/.bin/ai-push-hooks" hook "$@"' in pre_push_hook_script()
+    assert 'exec ai-push-hooks hook "$@"' in pre_push_hook_script()
+
+
+def test_installed_hook_runs_repo_local_npm_binary(repo: pathlib.Path) -> None:
+    install_hook(False, cwd=repo)
+    local_bin = repo / "node_modules" / ".bin" / "ai-push-hooks"
+    local_bin.parent.mkdir(parents=True)
+    local_bin.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$PWD/hook-args.txt"\n',
+        encoding="utf-8",
+    )
+    local_bin.chmod(local_bin.stat().st_mode | stat.S_IXUSR)
+
+    subprocess.run(
+        [str(_hook_path(repo)), "origin", "git@example.com:repo.git"],
+        cwd=repo,
+        check=True,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+
+    assert (repo / "hook-args.txt").read_text(encoding="utf-8") == (
+        "hook\norigin\ngit@example.com:repo.git\n"
+    )
 
 
 def test_install_outside_git_repo_fails(tmp_path: pathlib.Path) -> None:
