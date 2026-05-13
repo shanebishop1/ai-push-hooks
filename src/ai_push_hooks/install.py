@@ -10,7 +10,13 @@ from .types import HookError
 
 
 def pre_push_hook_script() -> str:
-    return '#!/bin/sh\nai-push-hooks hook "$@"\n'
+    return (
+        "#!/bin/sh\n"
+        'if [ -x "./node_modules/.bin/ai-push-hooks" ]; then\n'
+        '  exec "./node_modules/.bin/ai-push-hooks" hook "$@"\n'
+        "fi\n"
+        'exec ai-push-hooks hook "$@"\n'
+    )
 
 
 def resolve_pre_push_hook_path(cwd: pathlib.Path) -> pathlib.Path:
