@@ -3,6 +3,7 @@ enabled = true
 allow_push_on_error = false
 require_clean_worktree = false
 skip_on_sync_branch = true
+base_branch = "main"
 
 [llm]
 runner = "opencode"

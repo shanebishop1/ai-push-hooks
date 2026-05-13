@@ -7,6 +7,7 @@ import pytest
 
 from ai_push_hooks.artifacts import generate_run_id
 from ai_push_hooks.config import load_config
+from ai_push_hooks.executors import exec as exec_module
 from ai_push_hooks.types import HookError
 
 
@@ -75,3 +76,52 @@ def test_generate_run_id_is_unique_and_high_resolution() -> None:
 
     assert first != second
     assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}", first)
+
+
+def test_base_branch_can_be_overridden_by_env(tmp_path: pathlib.Path, monkeypatch) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[general]
+base_branch = "develop"
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = false
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_PUSH_HOOKS_BASE_BRANCH", "release")
+
+    config, _ = load_config(tmp_path)
+
+    assert config.general.base_branch == "release"
+
+
+def test_collect_ranges_uses_configured_base_branch_for_new_remote_branch(monkeypatch) -> None:
+    calls = []
+
+    def fake_git(cwd, args, check=True):
+        calls.append(args)
+        if args == ["merge-base", "abc123", "origin/develop"]:
+            return "base123"
+        return ""
+
+    monkeypatch.setattr(exec_module, "git", fake_git)
+
+    ranges = exec_module.collect_ranges_from_stdin(
+        pathlib.Path("/repo"),
+        "origin",
+        ["refs/heads/feature/x abc123 refs/heads/feature/x 0000000000000000000000000000000000000000"],
+        "develop",
+    )
+
+    assert ranges == ["base123..abc123"]
+    assert ["merge-base", "abc123", "origin/develop"] in calls

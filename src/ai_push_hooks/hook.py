@@ -73,7 +73,9 @@ def run_hook(
             return 0
 
     actual_stdin = list(stdin_lines) if stdin_lines is not None else [line.rstrip("\n") for line in sys.stdin]
-    ranges = collect_ranges_from_stdin(repo_root, remote_name or "origin", actual_stdin)
+    ranges = collect_ranges_from_stdin(
+        repo_root, remote_name or "origin", actual_stdin, config.general.base_branch
+    )
     changed_files = collect_changed_files(repo_root, ranges) if ranges else []
     diff_text = collect_diff(repo_root, ranges, config.llm.max_diff_bytes) if ranges else ""
     run_id = generate_run_id()
@@ -104,6 +106,7 @@ def run_hook(
             "changed_files": changed_files,
             "diff_text": diff_text,
             "branch_name": current_branch(repo_root),
+            "base_branch": config.general.base_branch,
             "sync_branch": "beads-sync",
         },
     )

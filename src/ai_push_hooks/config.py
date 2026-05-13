@@ -187,6 +187,7 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
             "allow_push_on_error": config.general.allow_push_on_error,
             "require_clean_worktree": config.general.require_clean_worktree,
             "skip_on_sync_branch": config.general.skip_on_sync_branch,
+            "base_branch": config.general.base_branch,
         },
         "llm": config.llm.__dict__.copy(),
         "logging": config.logging.__dict__.copy(),
@@ -211,6 +212,9 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
     allow_dirty = env_bool("AI_PUSH_HOOKS_ALLOW_DIRTY")
     if allow_dirty is True:
         raw["general"]["require_clean_worktree"] = False
+    base_branch = os.getenv("AI_PUSH_HOOKS_BASE_BRANCH")
+    if base_branch:
+        raw["general"]["base_branch"] = base_branch.strip() or "main"
 
     logging_level = os.getenv("AI_PUSH_HOOKS_LOG_LEVEL")
     if logging_level:

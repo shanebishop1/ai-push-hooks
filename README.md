@@ -129,6 +129,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx` or `pnpm ex
 | `allow_push_on_error` | bool | `false` | If `true`, push continues even when workflow fails. |
 | `require_clean_worktree` | bool | `false` | If `true`, aborts when local changes exist. |
 | `skip_on_sync_branch` | bool | `true` | If `true`, skips on sync branch/worktree context. |
+| `base_branch` | string | `"main"` | Base branch used for new-branch range fallback and default PR base/context. |
 
 ### `[llm]`
 
@@ -244,6 +245,7 @@ Boolean env parsing accepts: `1`, `true`, `yes`, `y`, `on` and `0`, `false`, `no
 | `AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR` | Overrides `general.allow_push_on_error`. |
 | `AI_PUSH_HOOKS_REQUIRE_CLEAN` | Overrides `general.require_clean_worktree`. |
 | `AI_PUSH_HOOKS_ALLOW_DIRTY` | If true, forces `general.require_clean_worktree = false`. |
+| `AI_PUSH_HOOKS_BASE_BRANCH` | Overrides `general.base_branch`. |
 | `AI_PUSH_HOOKS_LOG_LEVEL` | Overrides `logging.level`. |
 | `AI_PUSH_HOOKS_PRINT_LLM_OUTPUT` | Overrides `logging.print_llm_output`. |
 | `AI_PUSH_HOOKS_MODEL` | Overrides `llm.model`. |
