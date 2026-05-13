@@ -48,6 +48,25 @@ type = "mystery"
         load_config(tmp_path)
 
 
+def test_load_config_supports_standard_toml_inline_tables(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules]
+docs = { enabled = true, steps = [{ id = "collect", type = "collect", collector = "docs_context" }] }
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, _ = load_config(tmp_path)
+
+    assert config.workflow.modules == ("docs",)
+    assert config.modules["docs"].steps[0].id == "collect"
+
+
 def test_load_config_ignores_legacy_dot_filename(tmp_path: pathlib.Path) -> None:
     (tmp_path / ".ai-push-hooks.toml").write_text(
         """

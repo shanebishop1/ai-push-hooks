@@ -21,6 +21,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Software Development :: Version Control :: Git",
 ]
+dependencies = ["tomli>=2.0.0; python_version < '3.11'"]
 
 [project.scripts]
 ai-push-hooks = "ai_push_hooks.cli:main"
