@@ -11,7 +11,8 @@
     "ai-push-hooks": "bin/ai-push-hooks.js"
   },
   "scripts": {
-    "test": "uv run --with pytest pytest tests -q"
+    "test": "uv run --with pytest pytest tests -q",
+    "test:npm-pack": "node tests/npm-pack-smoke.mjs"
   },
   "files": [
     "bin",
