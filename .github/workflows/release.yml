@@ -86,9 +86,7 @@ jobs:
           )
 
       - name: Smoke-test npm wrapper
-        run: |
-          node bin/ai-push-hooks.js --help > /dev/null
-          npm pack --dry-run
+        run: npm run test:npm-pack
 
       - name: Upload Python dist artifacts
         uses: actions/upload-artifact@v5
