@@ -129,7 +129,7 @@ def path_matches(path: str, pattern: str) -> bool:
 
 def list_repo_changes(repo_root: pathlib.Path) -> set[str]:
     changes: set[str] = set()
-    output = git(repo_root, ["status", "--short"], check=False)
+    output = run_command(["git", "status", "--short"], cwd=repo_root).stdout
     for line in output.splitlines():
         payload = line[3:].strip()
         if payload:

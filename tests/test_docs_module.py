@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 
 import pytest
 
@@ -79,6 +80,81 @@ def test_docs_apply_allows_only_markdown_paths(tmp_path: pathlib.Path, monkeypat
     monkeypatch.setattr("ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None)
 
     with pytest.raises(HookError, match="outside allowlist"):
+        run_apply_step(
+            context,
+            ModuleRuntimeState(module=config.modules["docs"]),
+            step,
+            "prompt",
+            [input_path],
+            "docs.apply",
+        )
+
+
+def test_docs_apply_reports_allowed_file_already_dirty_before_step(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    step = config.modules["docs"].steps[3]
+    input_path = repo / "issues.json"
+    input_path.write_text('[{"file":"README.md","description":"stale"}]\n', encoding="utf-8")
+    (repo / "README.md").write_text("# Dirty\n", encoding="utf-8")
+
+    class Result:
+        return_code = 0
+        stderr = ""
+        stdout = ""
+        session_id = None
+
+    def fake_call_opencode(context, stage_name, purpose, prompt, files, attempt=None, total_attempts=None, existing_session_id=None):
+        (repo / "README.md").write_text("# Updated\n", encoding="utf-8")
+        return Result()
+
+    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call_opencode)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None)
+
+    result = run_apply_step(
+        context,
+        ModuleRuntimeState(module=config.modules["docs"]),
+        step,
+        "prompt",
+        [input_path],
+        "docs.apply",
+    )
+
+    assert result["changed"] is True
+    assert result["changed_files"] == ["README.md"]
+
+
+def test_docs_apply_rejects_disallowed_file_already_dirty_before_step(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    (repo / "notes.txt").write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "add notes"], cwd=repo, check=True, capture_output=True, text=True)
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    step = config.modules["docs"].steps[3]
+    input_path = repo / "issues.json"
+    input_path.write_text('[{"file":"README.md","description":"stale"}]\n', encoding="utf-8")
+    (repo / "notes.txt").write_text("dirty before apply\n", encoding="utf-8")
+
+    class Result:
+        return_code = 0
+        stderr = ""
+        stdout = ""
+        session_id = None
+
+    def fake_call_opencode(context, stage_name, purpose, prompt, files, attempt=None, total_attempts=None, existing_session_id=None):
+        (repo / "notes.txt").write_text("dirty after apply\n", encoding="utf-8")
+        return Result()
+
+    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call_opencode)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None)
+
+    with pytest.raises(HookError, match="outside allowlist: notes.txt"):
         run_apply_step(
             context,
             ModuleRuntimeState(module=config.modules["docs"]),

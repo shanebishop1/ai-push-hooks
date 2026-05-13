@@ -8,6 +8,17 @@ from .exec import list_repo_changes, path_matches
 from .llm import call_opencode, finalize_opencode_session
 
 
+def _snapshot_file_contents(repo_root: pathlib.Path, paths: set[str]) -> dict[str, bytes | None]:
+    snapshot: dict[str, bytes | None] = {}
+    for path in paths:
+        full_path = repo_root / path
+        if full_path.is_file():
+            snapshot[path] = full_path.read_bytes()
+        else:
+            snapshot[path] = None
+    return snapshot
+
+
 def run_apply_step(
     context: RuntimeContext,
     state: ModuleRuntimeState,
@@ -23,6 +34,7 @@ def run_apply_step(
                 return {"changed": False, "changed_files": [], "skipped": True}
 
     baseline = list_repo_changes(context.repo_root)
+    baseline_contents = _snapshot_file_contents(context.repo_root, baseline)
     files = list(input_paths)
     agents = context.repo_root / "AGENTS.md"
     if agents.exists():
@@ -41,7 +53,14 @@ def run_apply_step(
         raise HookError(f"Apply step failed: {details}")
 
     after = list_repo_changes(context.repo_root)
-    changed_files = sorted(after - baseline)
+    newly_dirty = after - baseline
+    after_baseline_contents = _snapshot_file_contents(context.repo_root, baseline)
+    changed_while_dirty = {
+        path
+        for path, before_content in baseline_contents.items()
+        if before_content != after_baseline_contents[path]
+    }
+    changed_files = sorted(newly_dirty | changed_while_dirty)
     unexpected = [
         path for path in changed_files if not any(path_matches(path, pattern) for pattern in step.allow_paths)
     ]
