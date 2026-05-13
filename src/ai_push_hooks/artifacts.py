@@ -63,8 +63,11 @@ class ArtifactStore:
 
     def resolve_input(self, state: ModuleRuntimeState, reference: str) -> pathlib.Path:
         if ":" in reference:
-            module_and_step, artifact_name = reference.split("/", 1)
-            module_id, step_id = module_and_step.split(":", 1)
+            try:
+                module_and_step, artifact_name = reference.split("/", 1)
+                module_id, step_id = module_and_step.split(":", 1)
+            except ValueError as exc:
+                raise HookError(f"Invalid artifact reference: {reference}") from exc
             key = f"{module_id}:{step_id}/{artifact_name}"
         else:
             key = reference
@@ -72,6 +75,11 @@ class ArtifactStore:
         if path is None:
             path = state.artifacts.get(reference)
         if path is None:
+            if ":" in reference:
+                raise HookError(
+                    f"Unknown artifact reference: {reference}. Artifact references are module-local; "
+                    "use '<step>/<artifact>' from an earlier step in the same module."
+                )
             raise HookError(f"Unknown artifact reference: {reference}")
         return path
 
