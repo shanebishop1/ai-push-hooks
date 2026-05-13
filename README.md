@@ -192,6 +192,8 @@ If installed as a local npm/pnpm dependency, run commands with `npx` or `pnpm ex
 
 `llm` and `apply` are promptable step types: at least one of `prompt`, `prompt_file`, or `fallback_prompt_id` must be set.
 
+Artifact references in `inputs` are module-local. Use `<step>/<artifact>` to reference an artifact produced by an earlier step in the same module (for example, `collect/push.diff` or `analyze/issues.json`). Cross-module references such as `docs:collect/push.diff` are not currently supported.
+
 ### Supported handler and schema values
 
 #### Collectors
