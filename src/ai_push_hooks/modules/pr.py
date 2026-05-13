@@ -14,6 +14,7 @@ from ..types import CollectorResult, RuntimeContext
 
 def collect_pr_context(context: RuntimeContext, state: Any) -> CollectorResult:
     branch_name = current_branch(context.repo_root)
+    base_branch = context.config.general.base_branch.strip() or "main"
     flag_env = ""
     for step in state.module.steps:
         if step.when_env:
@@ -25,7 +26,7 @@ def collect_pr_context(context: RuntimeContext, state: Any) -> CollectorResult:
             skip_module=True,
             skip_reason="PR create env flag is not enabled",
         )
-    if not branch_name or branch_name in {"HEAD", "main"} or not is_feature_branch(branch_name):
+    if not branch_name or branch_name in {"HEAD", base_branch} or not is_feature_branch(branch_name):
         return CollectorResult(
             artifacts={"pr-context.txt": f"branch={branch_name}\n"},
             skip_module=True,
@@ -61,7 +62,7 @@ def collect_pr_context(context: RuntimeContext, state: Any) -> CollectorResult:
             "pr-context.txt": "\n".join(
                 [
                     f"branch={branch_name}",
-                    f"base_branch=main",
+                    f"base_branch={base_branch}",
                     f"remote_name={context.remote_name or 'origin'}",
                 ]
             )

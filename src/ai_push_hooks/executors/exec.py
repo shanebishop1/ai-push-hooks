@@ -141,7 +141,9 @@ def collect_ranges_from_stdin(
     repo_root: pathlib.Path,
     remote_name: str,
     stdin_lines: list[str],
+    base_branch: str = "main",
 ) -> list[str]:
+    base_branch = base_branch.strip() or "main"
     ranges: set[str] = set()
     for line in stdin_lines:
         parts = line.strip().split()
@@ -160,7 +162,7 @@ def collect_ranges_from_stdin(
                 ranges.add(f"{remote_sha}..{local_sha}")
         else:
             merge_base = git(
-                repo_root, ["merge-base", local_sha, f"{remote_name}/main"], check=False
+                repo_root, ["merge-base", local_sha, f"{remote_name}/{base_branch}"], check=False
             )
             if merge_base:
                 ranges.add(f"{merge_base}..{local_sha}")
@@ -438,7 +440,8 @@ def gh_pr_create_executor(
     if existing_pr:
         return {"skipped": False, "pr_url": existing_pr, "already_exists": True}
 
-    base_branch = str(payload.get("base_branch", "main")).strip() or "main"
+    default_base_branch = context.config.general.base_branch.strip() or "main"
+    base_branch = str(payload.get("base_branch", default_base_branch)).strip() or default_base_branch
     head_branch = str(payload.get("head_branch", branch_name)).strip() or branch_name
     title = sanitize_pr_title(str(payload.get("title", "")).strip(), branch_name)
     body = str(payload.get("body", "")).strip()

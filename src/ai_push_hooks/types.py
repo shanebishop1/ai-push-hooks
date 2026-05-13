@@ -23,6 +23,7 @@ class GeneralConfig:
     allow_push_on_error: bool = False
     require_clean_worktree: bool = False
     skip_on_sync_branch: bool = True
+    base_branch: str = "main"
 
 
 @dataclass(frozen=True)
