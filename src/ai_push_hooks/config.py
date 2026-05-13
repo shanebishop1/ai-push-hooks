@@ -1,102 +1,19 @@
 from __future__ import annotations
 
-import json
 import os
 import pathlib
-import re
 from typing import Any
 
+from .executors.exec import env_bool
 from .prompts_builtin import BUILTIN_PROMPTS
 from .types import GeneralConfig, HookConfig, HookError, LlmConfig, LoggingConfig, ModuleConfig, StepConfig, SUPPORTED_STEP_TYPES, WorkflowConfig
-from .executors.exec import env_bool
 
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
-    tomllib = None  # type: ignore[assignment]
+    import tomli as tomllib
 
 ALLOWED_TOP_LEVEL_KEYS = {"general", "llm", "logging", "workflow", "modules"}
-
-
-def _parse_multiline_string(lines: list[str], index: int, initial: str) -> tuple[str, int]:
-    chunks: list[str] = []
-    value = initial[3:]
-    while True:
-        end_index = value.find('"""')
-        if end_index >= 0:
-            chunks.append(value[:end_index])
-            return "\n".join(chunks), index
-        chunks.append(value)
-        index += 1
-        if index >= len(lines):
-            raise HookError("Unterminated multiline string in TOML fallback parser")
-        value = lines[index]
-
-
-def _assign_path(root: dict[str, Any], path: list[str], value: Any, array_mode: bool = False) -> dict[str, Any]:
-    current: Any = root
-    for part in path[:-1]:
-        if isinstance(current, list):
-            if not current:
-                current.append({})
-            current = current[-1]
-        current = current.setdefault(part, {})
-    key = path[-1]
-    if array_mode:
-        items = current.setdefault(key, [])
-        if not isinstance(items, list):
-            raise HookError(f"Invalid array-of-table path: {'.'.join(path)}")
-        item: dict[str, Any] = {}
-        items.append(item)
-        return item
-    current[key] = value
-    return current
-
-
-def _parse_scalar(raw: str) -> Any:
-    raw = raw.strip()
-    if raw.startswith('"') and raw.endswith('"'):
-        return raw[1:-1]
-    if raw in {"true", "false"}:
-        return raw == "true"
-    if re.fullmatch(r"-?\d+", raw):
-        return int(raw)
-    if raw.startswith("[") and raw.endswith("]"):
-        return json.loads(raw)
-    return raw
-
-
-def parse_toml_fallback(raw: str) -> dict[str, Any]:
-    parsed: dict[str, Any] = {}
-    lines = raw.splitlines()
-    current: Any = parsed
-    index = 0
-    while index < len(lines):
-        line = lines[index].strip()
-        index += 1
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("[[") and line.endswith("]]"):
-            path = [part.strip() for part in line[2:-2].split(".") if part.strip()]
-            current = _assign_path(parsed, path, None, array_mode=True)
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            path = [part.strip() for part in line[1:-1].split(".") if part.strip()]
-            current = parsed
-            for part in path:
-                current = current.setdefault(part, {})
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if value.startswith('"""'):
-            parsed_value, index = _parse_multiline_string(lines, index - 1, value)
-        else:
-            parsed_value = _parse_scalar(value)
-        current[key] = parsed_value
-    return parsed
 
 
 def _normalize_step(raw: dict[str, Any]) -> StepConfig:
@@ -238,7 +155,7 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
             "Run `ai-push-hooks init --template minimal-docs` first"
         )
     text = config_path.read_text(encoding="utf-8")
-    loaded = tomllib.loads(text) if tomllib is not None else parse_toml_fallback(text)
+    loaded = tomllib.loads(text)
     if not isinstance(loaded, dict):
         raise HookError(f"Invalid config format in {config_path}")
     return _apply_env_overrides(_build_config(loaded)), config_path
