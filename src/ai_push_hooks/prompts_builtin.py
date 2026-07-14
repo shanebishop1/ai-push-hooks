@@ -68,7 +68,7 @@ base_branch = "main"
 
 [llm]
 runner = "opencode"
-model = "openai/gpt-5.6-sol"
+model = "openai/gpt-5.6-terra"
 variant = ""
 timeout_seconds = 800
 max_parallel = 2
