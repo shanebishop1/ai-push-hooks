@@ -29,7 +29,7 @@ class GeneralConfig:
 @dataclass(frozen=True)
 class LlmConfig:
     runner: str = "opencode"
-    model: str = "openai/gpt-5.5"
+    model: str = "openai/gpt-5.6-sol"
     variant: str = ""
     timeout_seconds: int = 800
     max_parallel: int = 2
