@@ -11,14 +11,14 @@ It runs module-based steps (collect, LLM, apply, exec, assert) before push so yo
 Pin the currently published release in the consuming repository:
 
 ```bash
-mise use npm:ai-push-hooks@0.1.18
+mise use npm:ai-push-hooks@0.1.19
 ```
 
 This adds the following project-level tool entry to `mise.toml` and installs it:
 
 ```toml
 [tools]
-"npm:ai-push-hooks" = "0.1.18"
+"npm:ai-push-hooks" = "0.1.19"
 ```
 
 After checking in `mise.toml`, other contributors can install the pinned tool with `mise install`.
