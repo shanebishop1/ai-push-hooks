@@ -139,7 +139,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx` or `pnpm ex
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `runner` | string | `"opencode"` | LLM runner label (currently OpenCode flow). |
-| `model` | string | `"openai/gpt-5.3-codex"` | Model passed to OpenCode. |
+| `model` | string | `"openai/gpt-5.5"` | Model passed to OpenCode. |
 | `variant` | string | `""` | Optional OpenCode variant. |
 | `timeout_seconds` | int | `800` | Timeout per LLM invocation and related OpenCode calls. |
 | `max_parallel` | int | `2` | Max concurrent read-only steps (`collect`, `llm`). |

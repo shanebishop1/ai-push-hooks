@@ -7,7 +7,7 @@ base_branch = "main"
 
 [llm]
 runner = "opencode"
-model = "openai/gpt-5.3-codex"
+model = "openai/gpt-5.5"
 variant = ""
 timeout_seconds = 800
 max_parallel = 2
