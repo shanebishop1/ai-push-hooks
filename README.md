@@ -41,7 +41,7 @@ pnpm add -D ai-push-hooks
 
 Requirements:
 
-- [Python 3.10+](https://www.python.org/downloads/) (`python3` or `python`) is required. The npm package is a wrapper around the Python CLI, so Python is still required when installed through npm/pnpm.
+- [Python 3.10+](https://www.python.org/downloads/) is required. The npm package is a wrapper around the Python CLI, so Python is still required when installed through npm/pnpm; npm-only installs need Python 3.11+ unless `tomli` is already installed for Python 3.10.
 - [OpenCode](https://github.com/anomalyco/opencode) is required for `llm` and `apply` steps.
 - [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is required only if you use PR creation via `gh_pr_create`.
 
