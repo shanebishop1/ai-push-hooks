@@ -12,7 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.executors.exec import resolve_git_dir
 from ai_push_hooks.prompts_builtin import MINIMAL_DOCS_TEMPLATE
-from ai_push_hooks.types import GeneralConfig, HookConfig, HookLogger, LlmConfig, LoggingConfig, ModuleConfig, RuntimeContext, StepConfig, WorkflowConfig
+from ai_push_hooks.types import GeneralConfig, HookConfig, HookLogger, LlmConfig, LoggingConfig, ModuleConfig, PushRefUpdate, RuntimeContext, WorkflowConfig
 
 
 def _run(args: list[str], cwd: pathlib.Path) -> None:
@@ -60,21 +60,43 @@ def build_context(
     git_dir = resolve_git_dir(repo_root)
     run_dir = git_dir / "ai-push-hooks-tests"
     ArtifactStore(run_dir).prepare()
+    checked_out_branch = branch_name(repo_root)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    pushed_update = PushRefUpdate(
+        local_ref=f"refs/heads/{checked_out_branch}",
+        local_sha=head_sha,
+        remote_ref=f"refs/heads/{checked_out_branch}",
+        remote_sha="0" * len(head_sha),
+    )
     return RuntimeContext(
         repo_root=repo_root,
         git_dir=git_dir,
         config=config,
         logger=HookLogger(jsonl_path=None),
         remote_name="origin",
-        remote_url="git@example.com:test/repo.git",
+        remote_url="git@github.com:test/repo.git",
         stdin_lines=[],
         run_id="test-run",
         run_dir=run_dir,
         cache={
             "ranges": ranges or [],
+            "branch_ranges": ranges or [],
             "changed_files": changed_files or [],
+            "branch_changed_files": changed_files or [],
             "diff_text": diff_text,
-            "branch_name": branch_name(repo_root),
+            "branch_diff_text": diff_text,
+            "branch_name": checked_out_branch,
+            "branch_selection_reason": "single pushed branch",
+            "branch_is_new": False,
+            "push_updates": [pushed_update],
+            "pushed_branch_updates": [pushed_update],
+            "checked_out_branch": checked_out_branch,
             "sync_branch": "beads-sync",
         },
     )

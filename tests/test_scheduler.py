@@ -61,7 +61,6 @@ def test_side_effect_steps_run_serially(tmp_path: pathlib.Path) -> None:
         exec_handlers={"stub": exec_handler},
     )
     engine.run()
-    a_start = next(stamp for module, label, stamp in events if module == "a" and label == "start")
     a_end = next(stamp for module, label, stamp in events if module == "a" and label == "end")
     b_start = next(stamp for module, label, stamp in events if module == "b" and label == "start")
     assert b_start >= a_end

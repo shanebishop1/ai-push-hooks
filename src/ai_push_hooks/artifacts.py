@@ -6,6 +6,15 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from .paths import (
+    ensure_private_directory,
+    is_path_within,
+    path_has_symlink,
+    path_is_link_or_reparse,
+    resolve_contained_path,
+    validate_path_component,
+    write_text_no_follow,
+)
 from .types import HookError, ModuleRuntimeState
 
 
@@ -19,13 +28,42 @@ class ArtifactStore:
         self.run_dir = run_dir
 
     def prepare(self) -> pathlib.Path:
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        return self.run_dir
+        if path_is_link_or_reparse(self.run_dir):
+            raise HookError(
+                f"Artifact run directory must not be a symlink or reparse point: {self.run_dir}"
+            )
+        return ensure_private_directory(self.run_dir)
 
     def step_dir(self, module_id: str, step_index: int, step_id: str) -> pathlib.Path:
-        path = self.run_dir / module_id / f"{step_index:02d}-{step_id}"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        module_name = validate_path_component(module_id, "Artifact module id")
+        step_name = validate_path_component(step_id, "Artifact step id")
+        lexical_module_path = self.run_dir / module_name
+        if path_has_symlink(self.run_dir, lexical_module_path):
+            raise HookError(f"Artifact module path must not traverse a symlink: {module_id}")
+        module_path = resolve_contained_path(self.run_dir, module_name, "Artifact module path")
+        lexical_step_path = module_path / f"{step_index:02d}-{step_name}"
+        if path_has_symlink(self.run_dir, lexical_step_path):
+            raise HookError(f"Artifact step path must not traverse a symlink: {step_id}")
+        path = resolve_contained_path(
+            module_path,
+            f"{step_index:02d}-{step_name}",
+            "Artifact step path",
+        )
+        return ensure_private_directory(path)
+
+    def _artifact_path(
+        self,
+        module_id: str,
+        step_index: int,
+        step_id: str,
+        artifact_name: str,
+    ) -> pathlib.Path:
+        name = validate_path_component(artifact_name, "Artifact name")
+        return resolve_contained_path(
+            self.step_dir(module_id, step_index, step_id),
+            name,
+            "Artifact output path",
+        )
 
     def register(
         self,
@@ -34,6 +72,13 @@ class ArtifactStore:
         artifact_name: str,
         path: pathlib.Path,
     ) -> pathlib.Path:
+        validate_path_component(step_id, "Artifact step id")
+        validate_path_component(artifact_name, "Artifact name")
+        resolved_run_dir = self.run_dir.resolve(strict=False)
+        if path_has_symlink(self.run_dir, path):
+            raise HookError(f"Artifact path must not traverse a symlink: {path}")
+        if not is_path_within(path.resolve(strict=False), resolved_run_dir):
+            raise HookError(f"Artifact path escapes run directory: {path}")
         state.artifacts[f"{step_id}/{artifact_name}"] = path
         return path
 
@@ -45,8 +90,8 @@ class ArtifactStore:
         artifact_name: str,
         content: str,
     ) -> pathlib.Path:
-        path = self.step_dir(state.module.id, step_index, step_id) / artifact_name
-        path.write_text(content, encoding="utf-8")
+        path = self._artifact_path(state.module.id, step_index, step_id, artifact_name)
+        write_text_no_follow(path, content)
         return self.register(state, step_id, artifact_name, path)
 
     def write_json(
@@ -57,8 +102,8 @@ class ArtifactStore:
         artifact_name: str,
         payload: Any,
     ) -> pathlib.Path:
-        path = self.step_dir(state.module.id, step_index, step_id) / artifact_name
-        path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        path = self._artifact_path(state.module.id, step_index, step_id, artifact_name)
+        write_text_no_follow(path, json.dumps(payload, ensure_ascii=True, indent=2) + "\n")
         return self.register(state, step_id, artifact_name, path)
 
     def resolve_input(self, state: ModuleRuntimeState, reference: str) -> pathlib.Path:
@@ -91,4 +136,7 @@ class ArtifactStore:
         artifact_name: str,
         path: pathlib.Path,
     ) -> None:
+        validate_path_component(module_id, "Artifact module id")
+        validate_path_component(step_id, "Artifact step id")
+        validate_path_component(artifact_name, "Artifact name")
         state.artifacts[f"{module_id}:{step_id}/{artifact_name}"] = path

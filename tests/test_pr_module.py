@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import pathlib
 from dataclasses import replace
+
+import pytest
 
 from ai_push_hooks.modules.pr import collect_pr_context
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.engine import WorkflowEngine
 from ai_push_hooks.executors import exec as exec_module
 from ai_push_hooks.executors.exec import gh_pr_create_executor
-from ai_push_hooks.types import ModuleConfig, StepConfig
+from ai_push_hooks.types import HookError, ModuleConfig, StepConfig
 
 from .conftest import build_context, init_repo, make_config
 
@@ -107,7 +110,11 @@ def test_gh_pr_create_defaults_to_configured_base_branch(tmp_path: pathlib.Path,
     captured = {}
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(exec_module, "lookup_open_pr_url", lambda repo_root, branch_name: "")
+    monkeypatch.setattr(
+        exec_module,
+        "lookup_open_pr_url",
+        lambda repo_root, branch_name, base_branch="", repository="": "",
+    )
     monkeypatch.setattr(exec_module, "remote_branch_exists", lambda repo_root, remote_name, branch_name: True)
 
     def fake_run_command(args, cwd, **kwargs):
@@ -120,3 +127,181 @@ def test_gh_pr_create_defaults_to_configured_base_branch(tmp_path: pathlib.Path,
 
     assert result["pr_url"] == "https://github.com/o/r/pull/1"
     assert captured["args"][captured["args"].index("--base") + 1] == "develop"
+    assert captured["args"][captured["args"].index("--repo") + 1] == "test/repo"
+
+
+def test_gh_pr_create_cannot_override_pushed_head_or_configured_base(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pushed")
+    config = pr_config()
+    config = replace(config, general=replace(config.general, base_branch="develop"))
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text(
+        '{"title":"Title","body":"Body","head_branch":"feature/wrong","base_branch":"wrong"}\n',
+        encoding="utf-8",
+    )
+    captured = {}
+
+    monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        exec_module,
+        "lookup_open_pr_url",
+        lambda repo_root, branch_name, base_branch="", repository="": "",
+    )
+
+    def fake_run_command(args, cwd, **kwargs):
+        captured["args"] = args
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(exec_module, "run_command", fake_run_command)
+
+    result = gh_pr_create_executor(
+        context,
+        type("State", (), {"metadata": {}})(),
+        config.modules["pr"].steps[-1],
+        [payload],
+    )
+
+    assert result["pr_url"] == "https://github.com/o/r/pull/1"
+    assert captured["args"][captured["args"].index("--head") + 1] == "feature/pushed"
+    assert captured["args"][captured["args"].index("--base") + 1] == "develop"
+
+
+def test_initial_push_returns_actionable_deferred_result_without_calling_gh(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/initial")
+    config = pr_config()
+    context = build_context(repo, config)
+    context.cache["branch_is_new"] = True
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text('{"title":"Title","body":"Body"}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        exec_module,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gh must not run")),
+    )
+
+    result = gh_pr_create_executor(
+        context,
+        type("State", (), {"metadata": {}})(),
+        config.modules["pr"].steps[-1],
+        [payload],
+    )
+
+    assert result["skipped"] is True
+    assert result["deferred_until_remote"] is True
+    assert "does not exist on the remote before this initial push" in result["reason"]
+    assert "gh pr create --head feature/initial --base main" in result["reason"]
+
+
+def test_initial_push_workflow_defers_before_llm_or_gh(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/initial")
+    config = pr_config()
+    context = build_context(repo, config)
+    context.cache["branch_is_new"] = True
+    monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
+    calls = {"llm": 0, "exec": 0}
+
+    def fake_llm(*args, **kwargs):
+        calls["llm"] += 1
+        raise AssertionError("initial PR push must defer before LLM composition")
+
+    def fake_exec(*args, **kwargs):
+        calls["exec"] += 1
+        raise AssertionError("initial PR push must defer before gh execution")
+
+    result = WorkflowEngine(
+        context=context,
+        artifacts=ArtifactStore(context.run_dir),
+        llm_executor=fake_llm,
+        exec_handlers={"gh_pr_create": fake_exec},
+    ).run()
+
+    assert result.modules == {"pr": "completed"}
+    assert calls == {"llm": 0, "exec": 0}
+    deferred_path = next(context.run_dir.glob("**/deferred-result.json"))
+    deferred = json.loads(deferred_path.read_text(encoding="utf-8"))
+    assert deferred["deferred_until_remote"] is True
+    assert "gh pr create --head feature/initial --base main" in deferred["reason"]
+
+
+def test_open_pr_lookup_is_scoped_to_configured_base(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path)
+    captured = {}
+
+    def fake_run_command(args, cwd, **kwargs):
+        captured["args"] = args
+        return type("Completed", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    monkeypatch.setattr(exec_module, "run_command", fake_run_command)
+
+    assert (
+        exec_module.lookup_open_pr_url(
+            repo, "feature/pushed", "develop", "owner/repository"
+        )
+        == ""
+    )
+    assert captured["args"][captured["args"].index("--head") + 1] == "feature/pushed"
+    assert captured["args"][captured["args"].index("--base") + 1] == "develop"
+    assert captured["args"][captured["args"].index("--repo") + 1] == "owner/repository"
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://github.com/owner/repository.git",
+        "ssh://git@github.com/owner/repository.git",
+        "git@github.com:owner/repository.git",
+    ],
+)
+def test_github_repository_is_derived_from_supported_push_urls(
+    tmp_path: pathlib.Path, remote_url: str
+) -> None:
+    repo = init_repo(tmp_path)
+
+    assert exec_module.resolve_github_repository(repo, "origin", remote_url) == (
+        "owner/repository"
+    )
+
+
+def test_github_repository_can_be_derived_from_validated_remote_name(tmp_path) -> None:
+    repo = init_repo(tmp_path)
+    exec_module.git(
+        repo,
+        ["remote", "add", "origin", "git@github.com:owner/repository.git"],
+    )
+
+    assert exec_module.resolve_github_repository(repo, "origin", "") == "owner/repository"
+
+
+def test_pr_context_fails_closed_when_push_repository_cannot_be_determined(
+    tmp_path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    context.remote_url = "file:///tmp/not-github.git"
+    monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
+    monkeypatch.setattr(
+        exec_module,
+        "lookup_open_pr_url",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("lookup must not run without a safe repository scope")
+        ),
+    )
+
+    with pytest.raises(HookError, match="Cannot safely determine GitHub repository"):
+        collect_pr_context(
+            context, type("State", (), {"module": config.modules["pr"]})()
+        )

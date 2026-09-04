@@ -1,23 +1,44 @@
 {
   "name": "ai-push-hooks",
   "version": "0.1.19",
-  "description": "Modular AI push-hook workflow runner",
+  "description": "Run structured AI-assisted checks and allowlisted maintenance before git push",
   "license": "MIT",
+  "author": {
+    "name": "Shane Bishop"
+  },
+  "homepage": "https://github.com/shanebishop1/ai-push-hooks#readme",
+  "bugs": {
+    "url": "https://github.com/shanebishop1/ai-push-hooks/issues"
+  },
+  "keywords": [
+    "git",
+    "git-hooks",
+    "pre-push",
+    "ai",
+    "llm",
+    "opencode",
+    "lefthook",
+    "documentation",
+    "developer-tools",
+    "automation"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/shanebishop1/ai-push-hooks"
+    "url": "git+https://github.com/shanebishop1/ai-push-hooks.git"
   },
   "bin": {
     "ai-push-hooks": "bin/ai-push-hooks.js"
   },
   "scripts": {
-    "test": "uv run --with pytest pytest tests -q",
+    "test": "uv run --no-project --with pytest pytest tests -q",
     "test:npm-pack": "node tests/npm-pack-smoke.mjs"
   },
   "files": [
     "bin",
     "src/**/*.py",
     "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
     "run.sh",
     "pyproject.toml",
     "LICENSE",

@@ -32,9 +32,13 @@ Rules:
 BEADS_PLAN_PROMPT = """Check the attached branch context and output a JSON object describing Beads alignment work.
 
 Return keys:
-- commands: array of non-interactive bd command strings to run
+- commands: array containing only these exact non-interactive command forms:
+  - bd update <issue-id> [<issue-id> ...] --status <open|in_progress|blocked>
+  - bd close <issue-id> [<issue-id> ...] [--reason <text>]
 - unresolved: boolean
 - report_markdown: markdown string or empty
+
+Do not return global flags or any other bd subcommands.
 
 Return JSON only.
 """

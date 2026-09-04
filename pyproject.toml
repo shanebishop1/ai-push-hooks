@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-push-hooks"
 version = "0.1.19"
-description = "Modular AI push-hook workflow runner"
+description = "Run structured AI-assisted checks and allowlisted maintenance before git push"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "ai-push-hooks contributors" }]
+authors = [{ name = "Shane Bishop" }]
 keywords = ["git", "lefthook", "docs", "ai", "pre-push"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -19,9 +19,16 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Version Control :: Git",
 ]
 dependencies = ["tomli>=2.0.0; python_version < '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/shanebishop1/ai-push-hooks"
+Repository = "https://github.com/shanebishop1/ai-push-hooks.git"
+Issues = "https://github.com/shanebishop1/ai-push-hooks/issues"
+Changelog = "https://github.com/shanebishop1/ai-push-hooks/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ai-push-hooks = "ai_push_hooks.cli:main"

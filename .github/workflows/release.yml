@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -17,15 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
 
@@ -89,7 +88,7 @@ jobs:
         run: npm run test:npm-pack
 
       - name: Upload Python dist artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: python-dist
           path: dist/
@@ -103,16 +102,40 @@ jobs:
       name: pypi
     steps:
       - name: Download Python dist artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: python-dist
           path: dist/
 
+      - name: Check whether PyPI version already exists
+        id: pypi-version
+        env:
+          PACKAGE_VERSION: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["PACKAGE_VERSION"].removeprefix("v")
+          url = f"https://pypi.org/pypi/ai-push-hooks/{version}/json"
+          try:
+              with urllib.request.urlopen(url) as response:
+                  exists = response.status == 200
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              exists = False
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"exists={'true' if exists else 'false'}\n")
+          PY
+
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.pypi-version.outputs.exists != 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
   publish-npm:
-    needs: verify
+    needs: [verify, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -120,20 +143,34 @@ jobs:
       deployments: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Check whether npm version already exists
+        id: npm-version
+        env:
+          PACKAGE_VERSION: ${{ github.ref_name }}
+        run: |
+          version="${PACKAGE_VERSION#v}"
+          if npm view "ai-push-hooks@$version" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.npm-version.outputs.exists != 'true'
         run: npm publish --access public --provenance
 
       - name: Record npm deployment status
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          NPM_VERSION_EXISTED: ${{ steps.npm-version.outputs.exists }}
         run: |
           python - <<'PY'
           import json
@@ -169,10 +206,15 @@ jobs:
           with urllib.request.urlopen(deployment_request) as response:
               deployment = json.load(response)
 
+          description = (
+              "npm version already available"
+              if os.environ["NPM_VERSION_EXISTED"] == "true"
+              else "npm publish successful"
+          )
           status_payload = {
               "state": "success",
               "log_url": run_url,
-              "description": "npm publish successful",
+              "description": description,
           }
           status_request = urllib.request.Request(
               f"https://api.github.com/repos/{repo}/deployments/{deployment['id']}/statuses",
@@ -185,3 +227,14 @@ jobs:
 
           print(f"Recorded npm deployment {deployment['id']} as success")
           PY
+
+  create-github-release:
+    needs: [publish-pypi, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

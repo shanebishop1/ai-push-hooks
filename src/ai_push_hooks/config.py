@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import os
 import pathlib
+import stat
 from typing import Any
 
-from .executors.exec import env_bool
+from .executors.exec import env_bool, resolve_git_common_dir, resolve_git_dir
+from .paths import (
+    is_path_within,
+    normalized_component,
+    path_has_symlink,
+    relative_path_parts,
+    resolve_contained_path,
+    validate_path_component,
+)
 from .prompts_builtin import BUILTIN_PROMPTS
 from .types import GeneralConfig, HookConfig, HookError, LlmConfig, LoggingConfig, ModuleConfig, StepConfig, SUPPORTED_STEP_TYPES, WorkflowConfig
 
@@ -14,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
 ALLOWED_TOP_LEVEL_KEYS = {"general", "llm", "logging", "workflow", "modules"}
+STORAGE_NAMESPACE_PARTS = (".git", "ai-push-hooks")
 
 
 def _normalize_step(raw: dict[str, Any]) -> StepConfig:
@@ -41,6 +51,15 @@ def _normalize_step(raw: dict[str, Any]) -> StepConfig:
     )
     if not step.id:
         raise HookError("Every workflow step requires a non-empty id")
+    validate_path_component(step.id, "Workflow step id")
+    if step.output:
+        validate_path_component(step.output, f"Output for step `{step.id}`")
+    for pattern in step.allow_paths:
+        parts = relative_path_parts(pattern, f"allow_paths entry for step `{step.id}`")
+        if any(normalized_component(part) == ".git" for part in parts):
+            raise HookError(f"Apply step `{step.id}` may not allow Git metadata paths")
+        if normalized_component(parts[-1]) == "agents.md":
+            raise HookError(f"Apply step `{step.id}` may not allow AGENTS.md")
     if step.is_promptable and not any([step.prompt, step.prompt_file, step.fallback_prompt_id]):
         raise HookError(f"Promptable step `{step.id}` requires prompt, prompt_file, or fallback_prompt_id")
     if step.type == "collect" and not step.collector:
@@ -73,6 +92,7 @@ def _build_config(raw: dict[str, Any]) -> HookConfig:
 
     modules: dict[str, ModuleConfig] = {}
     for module_id in workflow_modules:
+        validate_path_component(module_id, "Workflow module id")
         if module_id not in module_payload:
             raise HookError(f"workflow.modules references unknown module `{module_id}`")
         module_raw = module_payload[module_id]
@@ -88,6 +108,14 @@ def _build_config(raw: dict[str, Any]) -> HookConfig:
     general = GeneralConfig(**raw.get("general", {}))
     llm = LlmConfig(**raw.get("llm", {}))
     logging = LoggingConfig(**raw.get("logging", {}))
+    for label, storage_path in (
+        ("logging.dir", logging.dir),
+        ("logging.transcript_dir", logging.transcript_dir),
+        ("logging.summary_dir", logging.summary_dir),
+    ):
+        parts = relative_path_parts(storage_path, label)
+        if parts[:2] != STORAGE_NAMESPACE_PARTS or len(parts) < 3:
+            raise HookError(f"{label} must be inside .git/ai-push-hooks/")
     return HookConfig(
         general=general,
         llm=llm,
@@ -169,11 +197,46 @@ def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:
     if step.prompt and step.prompt.strip():
         return step.prompt.strip()
     if step.prompt_file:
-        prompt_path = pathlib.Path(step.prompt_file)
-        if not prompt_path.is_absolute():
-            prompt_path = (repo_root / prompt_path).resolve()
+        parts = relative_path_parts(step.prompt_file, f"Prompt file for step `{step.id}`")
+        if any(normalized_component(part) == ".git" for part in parts):
+            raise HookError(f"Prompt file for step `{step.id}` must not reference Git metadata")
+        lexical_prompt_path = repo_root.joinpath(*parts)
+        if path_has_symlink(repo_root, lexical_prompt_path):
+            raise HookError(f"Prompt file for step `{step.id}` must not traverse a symlink")
+        prompt_path = resolve_contained_path(
+            repo_root,
+            step.prompt_file,
+            f"Prompt file for step `{step.id}`",
+        )
+        resolved_prompt_path = prompt_path.resolve(strict=False)
+        try:
+            git_roots = (
+                resolve_git_dir(repo_root).resolve(strict=True),
+                resolve_git_common_dir(repo_root).resolve(strict=True),
+            )
+        except HookError:
+            git_roots = ()
+        if any(is_path_within(resolved_prompt_path, git_root) for git_root in git_roots):
+            raise HookError(f"Prompt file for step `{step.id}` must not resolve inside Git metadata")
         if prompt_path.exists():
-            text = prompt_path.read_text(encoding="utf-8").strip()
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(prompt_path, flags)
+            except OSError as exc:
+                raise HookError(
+                    f"Prompt file could not be opened safely for step `{step.id}`: {prompt_path}"
+                ) from exc
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise HookError(
+                        f"Prompt file is not a regular file for step `{step.id}`: {prompt_path}"
+                    )
+                with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+                    descriptor = -1
+                    text = handle.read().strip()
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
             if text:
                 return text
         if step.fallback_prompt_id:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import stat
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -11,10 +13,52 @@ READ_ONLY_STEP_TYPES = frozenset({"collect", "llm"})
 PROMPTABLE_STEP_TYPES = frozenset({"llm", "apply"})
 SUPPORTED_STEP_TYPES = frozenset({"collect", "llm", "apply", "exec", "assert"})
 FEATURE_BRANCH_PREFIXES = ("feat/", "feature/")
+ZERO_OID_LENGTHS = frozenset({40, 64})
 
 
 class HookError(RuntimeError):
     pass
+
+
+def is_zero_oid(value: str) -> bool:
+    return len(value) in ZERO_OID_LENGTHS and not value.strip("0")
+
+
+@dataclass(frozen=True)
+class PushRefUpdate:
+    local_ref: str
+    local_sha: str
+    remote_ref: str
+    remote_sha: str
+
+    @property
+    def ref_kind(self) -> str:
+        if self.remote_ref.startswith("refs/heads/"):
+            return "branch"
+        if self.remote_ref.startswith("refs/tags/"):
+            return "tag"
+        return "other"
+
+    @property
+    def operation(self) -> str:
+        if is_zero_oid(self.local_sha):
+            return "delete"
+        if is_zero_oid(self.remote_sha):
+            return "create"
+        return "update"
+
+    @property
+    def branch_name(self) -> str | None:
+        if self.ref_kind != "branch" or self.operation == "delete":
+            return None
+        return self.remote_ref.removeprefix("refs/heads/")
+
+
+@dataclass(frozen=True)
+class PushRevisionRange:
+    update: PushRefUpdate
+    expression: str
+    strategy: str
 
 
 @dataclass(frozen=True)
@@ -177,8 +221,43 @@ class HookLogger:
             return
         record = {"ts": stamp, "level": level, "event": event, "message": message, **fields}
         try:
-            with self.jsonl_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+            try:
+                initial_metadata = self.jsonl_path.lstat()
+            except FileNotFoundError:
+                initial_metadata = None
+            if initial_metadata is not None:
+                reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if stat.S_ISLNK(initial_metadata.st_mode) or bool(
+                    getattr(initial_metadata, "st_file_attributes", 0) & reparse_flag
+                ):
+                    raise HookError(
+                        "JSONL log target must not be a symlink or reparse point: "
+                        f"{self.jsonl_path}"
+                    )
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(self.jsonl_path, flags, 0o600)
+            try:
+                descriptor_metadata = os.fstat(descriptor)
+                path_metadata = self.jsonl_path.lstat()
+                reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if (
+                    not stat.S_ISREG(descriptor_metadata.st_mode)
+                    or stat.S_ISLNK(path_metadata.st_mode)
+                    or bool(
+                        getattr(path_metadata, "st_file_attributes", 0) & reparse_flag
+                    )
+                    or (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+                    != (path_metadata.st_dev, path_metadata.st_ino)
+                ):
+                    raise HookError(f"JSONL log target is not a regular file: {self.jsonl_path}")
+                os.fchmod(descriptor, 0o600)
+                os.write(
+                    descriptor,
+                    (json.dumps(record, ensure_ascii=True) + "\n").encode("utf-8"),
+                )
+            finally:
+                os.close(descriptor)
         except Exception as exc:  # noqa: BLE001
             self.jsonl_write_failed = True
             sys.stderr.write(f"[ai-push-hooks] JSONL logging disabled after write failure: {exc}\n")

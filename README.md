@@ -1,10 +1,18 @@
 # ai-push-hooks
 
-`ai-push-hooks` is a configurable pre-push workflow runner for local Git repositories.
+`ai-push-hooks` catches repository drift before it reaches a remote. It turns `git push` into a configurable workflow that can inspect the exact outgoing diff, ask an LLM for structured findings, apply narrowly allowlisted documentation fixes, run deterministic actions, and block the push until changes are reviewed and committed.
 
-It runs module-based steps (collect, LLM, apply, exec, assert) before push so you can automate checks and optional repo maintenance tasks.
+Use it to keep docs aligned with code, check branch/task consistency, or prepare pull requests without replacing your project's ordinary lint, test, and build checks. Workflows are assembled from `collect`, `llm`, `apply`, `exec`, and `assert` steps and default to failing closed.
 
-## Install
+## Prerequisites
+
+- [Python 3.10–3.13](https://www.python.org/downloads/). The npm package wraps the Python CLI, so Python is required for npm/pnpm installations too. On Python 3.10, npm-only installs also require `tomli` to be installed.
+- [OpenCode](https://opencode.ai/docs/#install) plus an authenticated model provider for `llm` and `apply` steps. Follow OpenCode's [provider authentication guide](https://opencode.ai/docs/providers/) and confirm credentials with `opencode auth list`.
+- [Lefthook](https://lefthook.dev/installation/) for the repository-owned pre-push integration shown below.
+- [Mise](https://mise.jdx.dev/getting-started.html) for the recommended pinned installation below.
+- [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) only when using PR creation via `gh_pr_create`.
+
+## Install ai-push-hooks
 
 ### Mise (recommended for repository hooks)
 
@@ -39,15 +47,26 @@ npm install --save-dev ai-push-hooks
 pnpm add -D ai-push-hooks
 ```
 
-Requirements:
+### OpenCode isolation limits
 
-- [Python 3.10+](https://www.python.org/downloads/) is required. The npm package is a wrapper around the Python CLI, so Python is still required when installed through npm/pnpm; npm-only installs need Python 3.11+ unless `tomli` is already installed for Python 3.10.
-- [OpenCode](https://github.com/anomalyco/opencode) is required for `llm` and `apply` steps.
-- [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is required only if you use PR creation via `gh_pr_create`.
+OpenCode runs in `--pure` mode with project configuration disabled, isolated home/config/cache/state directories, sharing disabled, and an ai-push-hooks-owned custom agent configuration. Read-only steps run in an empty scratch directory, receive only hook-owned artifacts through `--file`, and have every tool denied. Apply steps run against a private temporary workspace containing only unignored regular files matching `allow_paths`; their agent permits only reads and allowlisted edits in that workspace. Casefolded, Unicode-normalized `.git` and `AGENTS.md` paths are always protected.
+
+Global and repository OpenCode instructions, custom agents, MCP servers, formatters, LSP configuration, sharing, and plugins are not inherited. The existing XDG data directory is retained for OpenCode authentication/session state, and recognized provider environment variables are forwarded. Custom providers defined only in global OpenCode configuration are therefore unsupported; use a built-in provider with OpenCode auth state or environment credentials.
+
+After OpenCode session finalization, apply verifies that the Git-visible checkout, index, current-worktree control state, and critical shared `HEAD`/config/packed-refs/refs/hooks state still match their baselines. Pre-existing symlinks in monitored Git metadata fail closed before OpenCode runs, and symlinks introduced during execution fail before propagation. Apply then preflights every destination against its exact baseline type, content digest, and mode before propagating anything, performs atomic file replacement, and verifies the resulting checkout and protected Git state again. Safe existing ordinary `rwx` modes are preserved, existing special bits are stripped, new or group/world-writable modes become owner-only, and staged files carrying setuid/setgid/sticky bits are rejected before any propagation. Hook-owned runtime files default to `0600` and runtime directories to `0700`.
+
+These controls are OpenCode permission and workspace isolation, not an operating-system sandbox. Compare-and-swap preflight minimizes lost updates but cannot make the interval between preflight and filesystem replacement atomic against an independent local process. Ignored worktree trees, Git object/LFS stores, shared reflogs, and metadata belonging only to other linked worktrees are intentionally excluded from bounded snapshots; direct changes there may not be detected. Critical shared refs/config/hooks remain monitored. Automatic rollback is avoided so pre-existing user changes are not overwritten.
 
 ## Quick start
 
-1. Add the pinned Mise tool by following [Mise installation](#mise-recommended-for-repository-hooks) above.
+1. Install and authenticate the prerequisites, then add the pinned Mise tool by following [Mise installation](#mise-recommended-for-repository-hooks) above. Verify the CLIs:
+
+   ```bash
+   mise exec -- ai-push-hooks --help
+   opencode auth list
+   lefthook version
+   ```
+
 2. Generate a starter config:
 
    ```bash
@@ -66,9 +85,9 @@ Requirements:
    trap 'rm -f "$push_stdin"' EXIT
    cat >"$push_stdin"
 
-   # Run deterministic quality checks first. Replace these with the repository's checks.
-   npm run lint
-   npm test
+   # Run deterministic quality checks first. This Git-native check works in any repo;
+   # add the repository's lint, test, and build commands here too.
+   git diff --check
 
    # Keep ai-push-hooks as the single final phase and replay Git's pre-push input.
    mise exec -- ai-push-hooks hook "$remote_name" "$remote_url" <"$push_stdin"
@@ -91,8 +110,28 @@ Requirements:
    ```
 
    `use_stdin: true` forwards Git's ref-update stream to the runner. The runner captures it before quality checks consume or close standard input, then replays it to `ai-push-hooks hook`. Lefthook's `{1}` and `{2}` are the remote name and remote URL. Keep all repository checks in this runner and keep the one `ai-push-hooks hook` call last so failures propagate and block the push.
-5. Configure modules and steps in [Configuration reference](#configuration-reference).
-6. Push as usual. The workflow runs automatically before push completes.
+5. Install and verify the hook:
+
+   ```bash
+   lefthook install
+   test -x "$(git rev-parse --git-path hooks/pre-push)" && echo "pre-push hook installed"
+   ```
+
+6. Configure modules and steps in the [configuration reference](#configuration-reference).
+7. Push as usual. The hook derives context from Git's outgoing ref updates and runs modules in configured order; workflow failures and failed assertions block the push by default. If an `apply` step edits an allowlisted file, the starter workflow's assertion blocks that push so you can inspect `git diff`, run your checks, commit the approved edit, and push again. The second push evaluates the new commit rather than silently pushing unreviewed model output.
+
+## Troubleshooting
+
+- **`opencode is required but not installed`:** install OpenCode and ensure `opencode` (or `opencode-cli`) is on `PATH` for the Git hook process.
+- **Provider/model authentication fails:** run `opencode auth list`, authenticate a built-in provider, and verify `[llm].model`. Project/global custom-provider configuration is intentionally not loaded; see [OpenCode isolation limits](#opencode-isolation-limits).
+- **The hook does not run:** rerun `lefthook install`, check `git config --get core.hooksPath`, and verify the pre-push path with the command above.
+- **The push is blocked after docs changed:** this is the expected edit-review-commit flow. Review `git diff`, validate and commit the changes, then push again.
+- **Find logs or transcripts:** inspect `.git/ai-push-hooks/logs`, `.git/ai-push-hooks/summaries`, and (when enabled) `.git/ai-push-hooks/transcripts`.
+- **Temporarily skip intentionally:** set `AI_PUSH_HOOKS_SKIP=1` for one invocation. Treat bypasses as an explicit project-policy decision.
+
+## Security and privacy
+
+Repository diffs, selected context, and prompts may be sent by OpenCode to the configured model provider. Review that provider's data-handling terms and do not include secrets in commits or prompts. Transcripts are stored locally by default under `.git/ai-push-hooks/transcripts`; sharing is disabled and OpenCode sessions are deleted after each run by default. See [SECURITY.md](SECURITY.md) for reporting, the threat model, data handling, and sandbox limitations.
 
 ## Commands
 
@@ -185,7 +224,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx` or `pnpm ex
 | `output` | string | yes | `llm` | Output artifact filename (often `.json`). |
 | `schema` | string | no | `llm` | Validates parsed model output shape. |
 | `prompt` | string | conditional | `llm`, `apply` | Highest-priority prompt source. |
-| `prompt_file` | string | conditional | `llm`, `apply` | Repo-relative or absolute prompt file path. |
+| `prompt_file` | string | conditional | `llm`, `apply` | Repo-relative prompt file path; absolute, traversing, and symlinked paths are rejected. |
 | `fallback_prompt_id` | string | conditional | `llm`, `apply` | Built-in prompt ID used when no higher source resolves. |
 | `collector` | string | yes | `collect` | Collector handler ID. |
 | `allow_paths` | array of strings | yes | `apply` | File glob allowlist for edits. |

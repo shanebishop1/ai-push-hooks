@@ -7,15 +7,14 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ..types import CollectorResult, RuntimeContext
-from ..executors.exec import collect_commit_messages_for_ranges, git, run_command
+from ..executors.exec import collect_commit_messages_for_ranges, git, path_matches, run_command
 
 DOC_INCLUDE_PATTERNS = ("README.md", "docs/**/*.md")
 DOC_IGNORE_PATTERNS = ("docs/archive/**",)
 
 
 def _path_matches(path: str, patterns: tuple[str, ...]) -> bool:
-    pure = PurePosixPath(path)
-    return any(pure.match(pattern) for pattern in patterns)
+    return any(path_matches(path, pattern) for pattern in patterns)
 
 
 def _expand_doc_files(repo_root: pathlib.Path) -> list[pathlib.Path]:
