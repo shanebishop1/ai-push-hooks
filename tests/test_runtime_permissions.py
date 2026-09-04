@@ -25,6 +25,7 @@ def test_runtime_directories_and_files_are_private_by_default(tmp_path, monkeypa
     config, _ = load_config(repo)
     config = replace(config, llm=replace(config.llm, delete_session_after_run=False))
     context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
 
     store = ArtifactStore(context.run_dir)
     state = ModuleRuntimeState(module=config.modules["docs"])
