@@ -9,6 +9,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import threading
 import time
 from typing import Any
 from urllib.parse import urlsplit
@@ -78,6 +79,9 @@ BEADS_ENV_NAMES = frozenset(
 )
 BEADS_ENV_PREFIXES = ("AWS_", "BD_", "BEADS_", "DOLT_")
 GITHUB_REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+\Z")
+GIT_DIFF_CHUNK_BYTES = 64 * 1024
+GIT_ERROR_BYTES = 64 * 1024
+DIFF_TRUNCATION_MARKER = "\n[diff truncated]\n"
 
 
 def env_bool(name: str) -> bool | None:
@@ -413,22 +417,153 @@ def collect_ranges_from_stdin(
 def collect_changed_files(repo_root: pathlib.Path, ranges: list[str]) -> list[str]:
     files: set[str] = set()
     for range_expr in ranges:
-        output = git(
-            repo_root, ["diff", "--name-only", "--diff-filter=ACMRD", range_expr], check=True
-        )
-        for line in output.splitlines():
-            clean = line.strip()
-            if clean:
-                files.add(clean)
+        output = run_command(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=ACMRD",
+                "-z",
+                range_expr,
+            ],
+            cwd=repo_root,
+            check=True,
+        ).stdout
+        for path in output.split("\x00"):
+            if path:
+                files.add(path)
     return sorted(files)
 
 
+def _read_bounded_stderr(stream: Any, captured: bytearray) -> None:
+    try:
+        while True:
+            chunk = stream.read(GIT_DIFF_CHUNK_BYTES)
+            if not chunk:
+                return
+            remaining = GIT_ERROR_BYTES - len(captured)
+            if remaining > 0:
+                captured.extend(chunk[:remaining])
+    except (OSError, ValueError):
+        return
+
+
+def _terminate_and_wait(process: subprocess.Popen[bytes]) -> int:
+    if process.poll() is None:
+        process.terminate()
+    try:
+        return process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            return process.wait(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            raise HookError("Git diff process did not terminate safely") from error
+
+
+def _collect_bounded_git_diff(
+    repo_root: pathlib.Path, args: list[str], max_bytes: int
+) -> tuple[bytes, bool]:
+    process = subprocess.Popen(
+        args,
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.stdout is None or process.stderr is None:
+        raise HookError("Could not capture Git diff output")
+
+    stderr = bytearray()
+    stderr_thread = threading.Thread(
+        target=_read_bounded_stderr,
+        args=(process.stderr, stderr),
+        daemon=True,
+    )
+    stderr_thread.start()
+    output = bytearray()
+    limit = max(0, max_bytes)
+    truncated = False
+    returncode: int | None = None
+    try:
+        while True:
+            remaining = limit - len(output)
+            chunk = process.stdout.read(min(GIT_DIFF_CHUNK_BYTES, remaining + 1))
+            if not chunk:
+                break
+            if len(chunk) > remaining:
+                if remaining > 0:
+                    output.extend(chunk[:remaining])
+                truncated = True
+                returncode = _terminate_and_wait(process)
+                break
+            output.extend(chunk)
+        if returncode is None:
+            returncode = process.wait()
+    finally:
+        if process.poll() is None:
+            _terminate_and_wait(process)
+        stderr_thread.join(timeout=5)
+        if stderr_thread.is_alive():
+            process.stderr.close()
+            stderr_thread.join(timeout=5)
+        process.stdout.close()
+        process.stderr.close()
+
+    if returncode != 0 and not truncated:
+        details = bytes(stderr).decode("utf-8", errors="surrogateescape").strip()
+        details = details or f"exit code {returncode}"
+        raise HookError(f"Command failed: {' '.join(args)} :: {details}")
+    return bytes(output), truncated
+
+
+def _decode_diff_output(output: bytes, max_bytes: int, truncated: bool) -> str:
+    if not truncated:
+        return output.decode("utf-8", errors="surrogateescape")
+    limit = max(0, max_bytes)
+    if limit == 0:
+        return ""
+    marker = DIFF_TRUNCATION_MARKER.encode("utf-8")
+    if len(marker) >= limit:
+        return marker[:limit].decode("utf-8", errors="surrogateescape")
+    return (output[: limit - len(marker)] + marker).decode(
+        "utf-8", errors="surrogateescape"
+    )
+
+
 def collect_diff(repo_root: pathlib.Path, ranges: list[str], max_bytes: int) -> str:
-    chunks: list[str] = []
-    for range_expr in ranges:
-        body = git(repo_root, ["diff", "--unified=3", range_expr], check=True)
-        chunks.append(f"### RANGE {range_expr}\n{body}\n")
-    return "\n".join(chunks)[:max_bytes]
+    output = bytearray()
+    limit = max(0, max_bytes)
+    truncated = False
+    for index, range_expr in enumerate(ranges):
+        prefix = ("\n" if index else "") + f"### RANGE {range_expr}\n"
+        prefix_bytes = prefix.encode("utf-8", errors="surrogateescape")
+        remaining = limit - len(output)
+        if len(prefix_bytes) > remaining:
+            output.extend(prefix_bytes[:remaining])
+            truncated = True
+            break
+        output.extend(prefix_bytes)
+
+        body, body_truncated = _collect_bounded_git_diff(
+            repo_root,
+            ["git", "diff", "--unified=3", range_expr],
+            limit - len(output),
+        )
+        if not body_truncated:
+            # `git()` historically stripped the captured diff before adding the
+            # section's trailing newline. Keep that output shape when the body
+            # fits, without ever collecting more than the remaining budget.
+            body = body.rstrip()
+        output.extend(body)
+        if body_truncated:
+            truncated = True
+            break
+
+        if len(output) >= limit:
+            truncated = True
+            break
+        output.extend(b"\n")
+    return _decode_diff_output(bytes(output), limit, truncated)
 
 
 def collect_commit_messages_for_ranges(

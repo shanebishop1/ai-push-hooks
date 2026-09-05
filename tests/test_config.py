@@ -70,6 +70,245 @@ docs = { enabled = true, steps = [{ id = "collect", type = "collect", collector 
     assert config.modules["docs"].steps[0].id == "collect"
 
 
+def test_load_config_preserves_existing_valid_configuration(repo: pathlib.Path) -> None:
+    config, config_path = load_config(repo)
+
+    assert config_path == repo / "ai-push-hooks.toml"
+    assert config.general.allow_push_on_error is False
+    assert config.modules["docs"].enabled is True
+    assert config.workflow.modules == ("docs",)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("allow_push_on_error", '"false"', "general.allow_push_on_error"),
+        ("require_clean_worktree", '"false"', "general.require_clean_worktree"),
+        ("skip_on_sync_branch", '"true"', "general.skip_on_sync_branch"),
+    ],
+)
+def test_load_config_rejects_quoted_security_booleans(
+    tmp_path: pathlib.Path, field: str, value: str, message: str
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        f"""
+[general]
+{field} = {value}
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match=message):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_quoted_module_enabled(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = "false"
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match="modules.docs.enabled"):
+        load_config(tmp_path)
+
+
+def test_load_config_preserves_string_arrays(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "apply"
+type = "apply"
+prompt = "Apply the change"
+inputs = ["collect/context.txt"]
+allow_paths = ["README.md", "docs/**/*.md"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, _ = load_config(tmp_path)
+    step = config.modules["docs"].steps[0]
+
+    assert step.inputs == ("collect/context.txt",)
+    assert step.allow_paths == ("README.md", "docs/**/*.md")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("timeout_seconds", '"800"'),
+        ("max_parallel", "1.5"),
+        ("json_max_retries", "true"),
+        ("invalid_json_feedback_max_chars", "0"),
+        ("max_diff_bytes", "-1"),
+    ],
+)
+def test_load_config_rejects_invalid_numeric_budgets(
+    tmp_path: pathlib.Path, field: str, value: str
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        f"""
+[llm]
+{field} = {value}
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match=f"llm\\.{field}"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_non_string_list_entries(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs", 3]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match="workflow.modules must be an array of strings"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_unknown_nested_field(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+unexpected = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match="Unknown field.*unexpected"):
+        load_config(tmp_path)
+
+
+def test_load_config_reports_malformed_toml(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text("[workflow\n", encoding="utf-8")
+
+    with pytest.raises(HookError, match="Invalid TOML.*line"):
+        load_config(tmp_path)
+
+
+def test_load_config_reports_invalid_utf8(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_bytes(b"[workflow]\nmodules = [\xff]\n")
+
+    with pytest.raises(HookError, match="not valid UTF-8"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_invalid_numeric_environment_override(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_PUSH_HOOKS_TIMEOUT_SECONDS", "not-a-number")
+
+    with pytest.raises(HookError, match="AI_PUSH_HOOKS_TIMEOUT_SECONDS"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_invalid_boolean_environment_override(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR", "sometimes")
+
+    with pytest.raises(HookError, match="AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR"):
+        load_config(tmp_path)
+
+
 def test_load_config_ignores_legacy_dot_filename(tmp_path: pathlib.Path) -> None:
     (tmp_path / ".ai-push-hooks.toml").write_text(
         """

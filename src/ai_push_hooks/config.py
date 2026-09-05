@@ -24,6 +24,172 @@ except ModuleNotFoundError:  # pragma: no cover
 
 ALLOWED_TOP_LEVEL_KEYS = {"general", "llm", "logging", "workflow", "modules"}
 STORAGE_NAMESPACE_PARTS = (".git", "ai-push-hooks")
+GENERAL_KEYS = {
+    "enabled",
+    "allow_push_on_error",
+    "require_clean_worktree",
+    "skip_on_sync_branch",
+    "base_branch",
+}
+LLM_KEYS = {
+    "runner",
+    "model",
+    "variant",
+    "timeout_seconds",
+    "max_parallel",
+    "json_max_retries",
+    "invalid_json_feedback_max_chars",
+    "json_retry_new_session",
+    "delete_session_after_run",
+    "max_diff_bytes",
+    "session_title_prefix",
+}
+LOGGING_KEYS = {
+    "level",
+    "jsonl",
+    "dir",
+    "capture_llm_transcript",
+    "transcript_dir",
+    "summary_dir",
+    "print_llm_output",
+}
+STEP_KEYS = {
+    "id",
+    "type",
+    "inputs",
+    "output",
+    "schema",
+    "prompt",
+    "prompt_file",
+    "fallback_prompt_id",
+    "collector",
+    "allow_paths",
+    "executor",
+    "assertion",
+    "when_env",
+}
+
+
+def _require_table(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HookError(f"{label} must be a table")
+    return value
+
+
+def _validate_unknown_keys(table: dict[str, Any], allowed: set[str], label: str) -> None:
+    unknown = set(table) - allowed
+    if unknown:
+        raise HookError(f"Unknown field(s) in {label}: {', '.join(sorted(unknown))}")
+
+
+def _validate_bool(table: dict[str, Any], key: str, label: str) -> None:
+    if key in table and type(table[key]) is not bool:
+        raise HookError(f"{label}.{key} must be a TOML boolean")
+
+
+def _validate_string(
+    table: dict[str, Any], key: str, label: str, *, allow_none: bool = False
+) -> None:
+    if key in table and (table[key] is None and allow_none):
+        return
+    if key in table and not isinstance(table[key], str):
+        raise HookError(f"{label}.{key} must be a string")
+
+
+def _validate_string_list(table: dict[str, Any], key: str, label: str) -> None:
+    if key not in table:
+        return
+    value = table[key]
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, str) for item in value
+    ):
+        raise HookError(f"{label}.{key} must be an array of strings")
+
+
+def _validate_integer(
+    table: dict[str, Any], key: str, label: str, *, minimum: int | None = None
+) -> None:
+    if key not in table:
+        return
+    value = table[key]
+    if type(value) is not int:
+        raise HookError(f"{label}.{key} must be an integer")
+    if minimum is not None and value < minimum:
+        raise HookError(f"{label}.{key} must be at least {minimum}")
+
+
+def _validate_config_types(raw: dict[str, Any]) -> None:
+    unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
+    if unknown:
+        raise HookError(
+            "Legacy or unsupported config keys are not allowed: " + ", ".join(sorted(unknown))
+        )
+
+    general = _require_table(raw.get("general", {}), "general")
+    _validate_unknown_keys(general, GENERAL_KEYS, "general")
+    for key in (
+        "enabled",
+        "allow_push_on_error",
+        "require_clean_worktree",
+        "skip_on_sync_branch",
+    ):
+        _validate_bool(general, key, "general")
+    _validate_string(general, "base_branch", "general")
+
+    llm = _require_table(raw.get("llm", {}), "llm")
+    _validate_unknown_keys(llm, LLM_KEYS, "llm")
+    for key in ("runner", "model", "variant", "session_title_prefix"):
+        _validate_string(llm, key, "llm")
+    for key in ("json_retry_new_session", "delete_session_after_run"):
+        _validate_bool(llm, key, "llm")
+    _validate_integer(llm, "timeout_seconds", "llm", minimum=1)
+    _validate_integer(llm, "max_parallel", "llm", minimum=1)
+    _validate_integer(llm, "json_max_retries", "llm", minimum=0)
+    _validate_integer(llm, "invalid_json_feedback_max_chars", "llm", minimum=1)
+    _validate_integer(llm, "max_diff_bytes", "llm", minimum=1)
+
+    logging = _require_table(raw.get("logging", {}), "logging")
+    _validate_unknown_keys(logging, LOGGING_KEYS, "logging")
+    for key in ("level", "dir", "transcript_dir", "summary_dir"):
+        _validate_string(logging, key, "logging")
+    for key in ("jsonl", "capture_llm_transcript", "print_llm_output"):
+        _validate_bool(logging, key, "logging")
+
+    workflow = _require_table(raw.get("workflow", {}), "workflow")
+    _validate_unknown_keys(workflow, {"modules"}, "workflow")
+    _validate_string_list(workflow, "modules", "workflow")
+
+    modules = _require_table(raw.get("modules", {}), "modules")
+    for module_id, module_value in modules.items():
+        if not isinstance(module_id, str):
+            raise HookError("modules keys must be strings")
+        module = _require_table(module_value, f"modules.{module_id}")
+        _validate_unknown_keys(module, {"enabled", "steps"}, f"modules.{module_id}")
+        _validate_bool(module, "enabled", f"modules.{module_id}")
+        if "steps" in module:
+            steps = module["steps"]
+            if not isinstance(steps, (list, tuple)):
+                raise HookError(f"modules.{module_id}.steps must be an array of tables")
+            for index, step_value in enumerate(steps, start=1):
+                step = _require_table(step_value, f"modules.{module_id}.steps[{index}]")
+                label = f"modules.{module_id}.steps[{index}]"
+                _validate_unknown_keys(step, STEP_KEYS, label)
+                for key in ("id", "type"):
+                    _validate_string(step, key, label)
+                for key in (
+                    "collector",
+                    "executor",
+                    "assertion",
+                    "output",
+                    "schema",
+                    "prompt",
+                    "prompt_file",
+                    "fallback_prompt_id",
+                    "when_env",
+                ):
+                    _validate_string(step, key, label, allow_none=True)
+                for key in ("inputs", "allow_paths"):
+                    _validate_string_list(step, key, label)
 
 
 def _normalize_step(raw: dict[str, Any]) -> StepConfig:
@@ -76,6 +242,9 @@ def _normalize_step(raw: dict[str, Any]) -> StepConfig:
 
 
 def _build_config(raw: dict[str, Any]) -> HookConfig:
+    if not isinstance(raw, dict):
+        raise HookError("Config document must contain a top-level table")
+    _validate_config_types(raw)
     unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
     if unknown:
         raise HookError(
@@ -145,16 +314,27 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
             "steps": [step.__dict__.copy() for step in module.steps],
         }
 
-    skip = env_bool("AI_PUSH_HOOKS_SKIP")
+    def read_env_bool(name: str) -> bool | None:
+        value = os.getenv(name)
+        if value is None:
+            return None
+        parsed = env_bool(name)
+        if parsed is None:
+            raise HookError(
+                f"Invalid boolean environment override {name}: expected true/false"
+            )
+        return parsed
+
+    skip = read_env_bool("AI_PUSH_HOOKS_SKIP")
     if skip is True:
         raw["general"]["enabled"] = False
-    allow_on_error = env_bool("AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR")
+    allow_on_error = read_env_bool("AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR")
     if allow_on_error is not None:
         raw["general"]["allow_push_on_error"] = allow_on_error
-    require_clean = env_bool("AI_PUSH_HOOKS_REQUIRE_CLEAN")
+    require_clean = read_env_bool("AI_PUSH_HOOKS_REQUIRE_CLEAN")
     if require_clean is not None:
         raw["general"]["require_clean_worktree"] = require_clean
-    allow_dirty = env_bool("AI_PUSH_HOOKS_ALLOW_DIRTY")
+    allow_dirty = read_env_bool("AI_PUSH_HOOKS_ALLOW_DIRTY")
     if allow_dirty is True:
         raw["general"]["require_clean_worktree"] = False
     base_branch = os.getenv("AI_PUSH_HOOKS_BASE_BRANCH")
@@ -164,7 +344,7 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
     logging_level = os.getenv("AI_PUSH_HOOKS_LOG_LEVEL")
     if logging_level:
         raw["logging"]["level"] = logging_level.strip().lower()
-    print_output = env_bool("AI_PUSH_HOOKS_PRINT_LLM_OUTPUT")
+    print_output = read_env_bool("AI_PUSH_HOOKS_PRINT_LLM_OUTPUT")
     if print_output is not None:
         raw["logging"]["print_llm_output"] = print_output
     model = os.getenv("AI_PUSH_HOOKS_MODEL")
@@ -174,8 +354,20 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
     if variant is not None:
         raw["llm"]["variant"] = variant.strip()
     timeout = os.getenv("AI_PUSH_HOOKS_TIMEOUT_SECONDS")
-    if timeout:
-        raw["llm"]["timeout_seconds"] = int(timeout)
+    if timeout is not None:
+        try:
+            parsed_timeout = int(timeout.strip())
+        except ValueError as exc:
+            raise HookError(
+                "Invalid numeric environment override AI_PUSH_HOOKS_TIMEOUT_SECONDS: "
+                f"{timeout!r}"
+            ) from exc
+        if parsed_timeout < 1:
+            raise HookError(
+                "Invalid numeric environment override AI_PUSH_HOOKS_TIMEOUT_SECONDS: "
+                "must be at least 1"
+            )
+        raw["llm"]["timeout_seconds"] = parsed_timeout
     return _build_config(raw)
 
 
@@ -186,10 +378,21 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
             "Missing required config file `ai-push-hooks.toml` in repo root. "
             "Run `ai-push-hooks init --template minimal-docs` first"
         )
-    text = config_path.read_text(encoding="utf-8")
-    loaded = tomllib.loads(text)
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise HookError(f"Config file is not valid UTF-8: {config_path}") from exc
+    except OSError as exc:
+        raise HookError(f"Could not read config file {config_path}: {exc}") from exc
+    try:
+        loaded = tomllib.loads(text)
+    except ValueError as exc:
+        location = ""
+        if hasattr(exc, "lineno") and hasattr(exc, "colno"):
+            location = f" at line {exc.lineno}, column {exc.colno}"
+        raise HookError(f"Invalid TOML in {config_path}{location}: {exc}") from exc
     if not isinstance(loaded, dict):
-        raise HookError(f"Invalid config format in {config_path}")
+        raise HookError(f"Invalid config format in {config_path}: expected a top-level table")
     return _apply_env_overrides(_build_config(loaded)), config_path
 
 
