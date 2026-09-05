@@ -140,23 +140,49 @@ def _append_context_chunk(chunks: list[str], chunk: str, budget: int) -> bool:
     return not truncated
 
 
+def _fallback_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path]) -> str:
+    snippets: list[str] = []
+    for path in doc_files[:DOC_FALLBACK_FILE_LIMIT]:
+        relative = path.relative_to(repo_root).as_posix()
+        content = _read_bounded_text(path)
+        block = f"--- {relative} ---\n{content}"
+        current_size = len("\n\n".join(snippets))
+        remaining = DOC_CONTEXT_BUDGET - current_size
+        if len(block) > remaining:
+            if not snippets and remaining > 0:
+                snippets.append(block[:remaining])
+            break
+        snippets.append(block)
+    return "\n\n".join(snippets)
+
+
 def _search_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path], queries: list[str]) -> str:
+    repo_root = repo_root.resolve(strict=True)
     if not doc_files:
         return ""
-    if shutil.which("rg") is None or not queries:
-        snippets: list[str] = []
-        for path in doc_files[:DOC_FALLBACK_FILE_LIMIT]:
-            relative = path.relative_to(repo_root).as_posix()
-            content = _read_bounded_text(path)
-            block = f"--- {relative} ---\n{content}"
-            current_size = len("\n\n".join(snippets))
-            remaining = DOC_CONTEXT_BUDGET - current_size
-            if len(block) > remaining:
-                if not snippets and remaining > 0:
-                    snippets.append(block[:remaining])
-                break
-            snippets.append(block)
-        return "\n\n".join(snippets)
+    if not queries:
+        return _fallback_docs_context(repo_root, doc_files)
+
+    if shutil.which("rg") is None:
+        chunks: list[str] = []
+        seen: set[tuple[str, int]] = set()
+        for query in queries:
+            for path in doc_files:
+                relative = path.relative_to(repo_root).as_posix()
+                lines = _read_bounded_text(path).splitlines()
+                matching_lines = [index for index, line in enumerate(lines) if query in line]
+                for matching_index in matching_lines:
+                    first = max(0, matching_index - DOC_CONTEXT_LINES)
+                    last = min(len(lines), matching_index + DOC_CONTEXT_LINES + 1)
+                    for index in range(first, last):
+                        key = (relative, index + 1)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        chunk = f"{relative}:{index + 1}: {lines[index]}"
+                        if not _append_context_chunk(chunks, chunk, DOC_CONTEXT_BUDGET):
+                            return "\n".join(chunks)
+        return "\n".join(chunks) if chunks else _fallback_docs_context(repo_root, doc_files)
 
     files = [path.relative_to(repo_root).as_posix() for path in doc_files]
     allowed_files = set(files)
