@@ -13,6 +13,7 @@ from ai_push_hooks.executors.llm import (
     OPENCODE_READ_ONLY_AGENT,
     OpenCodeRunResult,
     call_opencode,
+    finalize_opencode_session,
     run_llm_step,
 )
 from ai_push_hooks.types import HookError
@@ -145,7 +146,7 @@ def test_call_opencode_constructs_command_with_explicit_agent(
         assert permissions[denied] == "deny"
 
 
-def test_call_opencode_apply_config_only_allows_configured_edit_paths(
+def test_call_opencode_apply_config_uses_edit_permission_for_all_mutating_tools(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
@@ -153,6 +154,10 @@ def test_call_opencode_apply_config_only_allows_configured_edit_paths(
     config, _ = load_config(repo)
     context = build_context(repo, config)
     context.opencode_executable = "/usr/local/bin/opencode"
+    staging = tmp_path / "Temp Root" / "OpenCode-Staging"
+    staging.mkdir(parents=True)
+    staging_link = tmp_path / "staging-link"
+    staging_link.symlink_to(staging, target_is_directory=True)
     captured: dict[str, object] = {}
 
     def fake_run_command(args, **kwargs):
@@ -170,6 +175,7 @@ def test_call_opencode_apply_config_only_allows_configured_edit_paths(
         [],
         agent="apply",
         allow_paths=("README.md", "docs/**/*.md"),
+        working_directory=staging_link,
     )
 
     assert captured["args"][2:6] == ["--agent", OPENCODE_APPLY_AGENT, "--pure", "--format"]
@@ -180,16 +186,257 @@ def test_call_opencode_apply_config_only_allows_configured_edit_paths(
     assert permissions["glob"] == "deny"
     assert permissions["grep"] == "deny"
     assert permissions["list"] == "deny"
+    prefix = staging.resolve().relative_to(pathlib.Path(staging.anchor)).as_posix()
     assert permissions["edit"] == {
         "*": "deny",
-        "README.md": "allow",
-        "docs/*.md": "allow",
-        "docs/**/*.md": "allow",
-        ".git": "deny",
-        ".git/**": "deny",
+        f"{prefix}/README.md": "allow",
+        f"{prefix}/docs/*.md": "allow",
+        f"{prefix}/docs/**/*.md": "allow",
+        f"{prefix}/.git": "deny",
+        f"{prefix}/.git/**": "deny",
     }
+    # OpenCode 1.18.29's write and edit tools both request the `edit`
+    # permission; a separate `write` grant would be ineffective and broader
+    # than the documented permission contract.
+    assert "write" not in permissions
     for denied in ("bash", "task", "external_directory", "webfetch", "websearch"):
         assert permissions[denied] == "deny"
+
+
+def test_call_opencode_apply_requires_isolated_staging_directory(
+    tmp_path: pathlib.Path,
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+
+    with pytest.raises(HookError, match="requires an isolated staging directory"):
+        call_opencode(
+            context,
+            "docs.apply",
+            "apply:apply",
+            "prompt",
+            [],
+            agent="apply",
+            allow_paths=("README.md",),
+        )
+
+
+@pytest.mark.parametrize("directory_kind", ["missing", "file"])
+def test_call_opencode_apply_rejects_missing_or_non_directory_working_directory(
+    tmp_path: pathlib.Path, directory_kind: str
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    working_directory = tmp_path / "not-a-directory"
+    if directory_kind == "file":
+        working_directory.write_text("not a directory\n", encoding="utf-8")
+
+    with pytest.raises(HookError, match="existing directory"):
+        call_opencode(
+            context,
+            "docs.apply",
+            "apply:apply",
+            "prompt",
+            [],
+            agent="apply",
+            allow_paths=("README.md",),
+            working_directory=working_directory,
+        )
+
+
+def test_finalize_session_exports_from_private_scratch_and_deletes_same_session(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(
+        config,
+        llm=replace(config.llm, delete_session_after_run=True),
+        logging=replace(config.logging, capture_llm_transcript=True),
+    )
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    calls: list[tuple[list[str], pathlib.Path]] = []
+    status_before = subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    def fake_run_command(args, **kwargs):
+        cwd = pathlib.Path(kwargs["cwd"])
+        calls.append((args, cwd))
+        assert not cwd.is_relative_to(repo.resolve())
+        assert list(cwd.iterdir()) == []
+        assert kwargs["inherit_env"] is False
+        assert kwargs["env"]["OPENCODE_PURE"] == "true"
+        assert pathlib.Path(kwargs["env"]["HOME"]).is_relative_to(context.run_dir)
+        assert "OPENCODE_CONFIG" not in kwargs["env"]
+        if args[1] == "export":
+            return subprocess.CompletedProcess(
+                args, 0, stdout='{"session":"session-1"}\n', stderr=""
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+
+    finalize_opencode_session(context, "docs.apply", "session-1")
+
+    assert [args[1:3] for args, _ in calls] == [
+        ["export", "session-1"],
+        ["session", "delete"],
+    ]
+    transcript = next((context.git_dir / "ai-push-hooks" / "transcripts").iterdir())
+    assert transcript.read_text(encoding="utf-8") == '{"session":"session-1"}\n'
+    assert not (repo / ".git" / "opencode").exists()
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert status_after == status_before
+
+
+@pytest.mark.parametrize(
+    ("return_code", "stdout"),
+    [(1, "export failed\n"), (0, "")],
+)
+def test_finalize_session_warns_and_deletes_when_export_returns_false(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+    return_code: int,
+    stdout: str,
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(
+        config,
+        llm=replace(config.llm, delete_session_after_run=True),
+        logging=replace(config.logging, capture_llm_transcript=True),
+    )
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    commands: list[list[str]] = []
+
+    def fake_run_command(args, **kwargs):
+        commands.append(args)
+        if args[1] == "export":
+            return subprocess.CompletedProcess(args, return_code, stdout=stdout, stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+
+    finalize_opencode_session(context, "docs.query", "session-failed")
+
+    assert [args[1:3] for args in commands] == [
+        ["export", "session-failed"],
+        ["session", "delete"],
+    ]
+    assert list((context.git_dir / "ai-push-hooks" / "transcripts").iterdir()) == []
+    assert "Could not capture the OpenCode transcript" in capsys.readouterr().err
+
+
+def test_finalize_session_warns_and_deletes_when_export_raises(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(
+        config,
+        llm=replace(config.llm, delete_session_after_run=True),
+        logging=replace(config.logging, capture_llm_transcript=True),
+    )
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    commands: list[list[str]] = []
+
+    def fake_run_command(args, **kwargs):
+        commands.append(args)
+        if args[1] == "export":
+            raise subprocess.TimeoutExpired(args, 1)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+
+    finalize_opencode_session(context, "docs.query", "session-timeout")
+
+    assert [args[1:3] for args in commands] == [
+        ["export", "session-timeout"],
+        ["session", "delete"],
+    ]
+    assert "Could not capture the OpenCode transcript" in capsys.readouterr().err
+
+
+def test_finalize_session_warns_and_deletes_when_transcript_write_raises(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(
+        config,
+        llm=replace(config.llm, delete_session_after_run=True),
+        logging=replace(config.logging, capture_llm_transcript=True),
+    )
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    commands: list[list[str]] = []
+
+    def fake_run_command(args, **kwargs):
+        commands.append(args)
+        return subprocess.CompletedProcess(
+            args, 0, stdout='{"session":"session-write"}\n', stderr=""
+        )
+
+    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.llm.write_text_no_follow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated transcript failure")),
+    )
+
+    finalize_opencode_session(context, "docs.query", "session-write")
+
+    assert [args[1:3] for args in commands] == [
+        ["export", "session-write"],
+        ["session", "delete"],
+    ]
+    assert "Could not capture the OpenCode transcript" in capsys.readouterr().err
+
+
+def test_finalize_session_delete_runs_outside_repository(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(
+        config,
+        logging=replace(config.logging, capture_llm_transcript=False),
+        llm=replace(config.llm, delete_session_after_run=True),
+    )
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    captured: dict[str, object] = {}
+
+    def fake_run_command(args, **kwargs):
+        captured["args"] = args
+        captured["cwd"] = kwargs["cwd"]
+        captured["cwd_entries"] = list(kwargs["cwd"].iterdir())
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+
+    finalize_opencode_session(context, "docs.apply", "session-1")
+
+    assert captured["args"][1:3] == ["session", "delete"]
+    assert not pathlib.Path(captured["cwd"]).is_relative_to(repo.resolve())
+    assert captured["cwd_entries"] == []
 
 
 def test_run_llm_step_always_selects_read_only_agent_policy(

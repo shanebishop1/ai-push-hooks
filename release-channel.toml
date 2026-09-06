@@ -1,0 +1,9 @@
+# Release preparation metadata. PyPI has no equivalent beta channel; publish
+# the exact Python version and document that limitation in user-facing setup.
+[release]
+version = "0.2.0"
+channel = "beta"
+npm_dist_tag = "beta"
+github_prerelease = true
+python_classifier = "Development Status :: 4 - Beta"
+pypi_channel = "none"

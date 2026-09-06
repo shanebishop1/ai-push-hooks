@@ -64,8 +64,6 @@ class WorkflowEngine:
                         continue
                     if any(not running_step.is_read_only for _future, (_state, running_step) in futures.items()):
                         continue
-                    if not step.is_read_only and futures:
-                        continue
                     if step.is_read_only and len(futures) >= max(1, self.context.config.llm.max_parallel):
                         continue
                     future = pool.submit(self._execute_step, state, step)

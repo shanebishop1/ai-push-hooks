@@ -4,19 +4,55 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      recover_bookkeeping:
+        description: "Only recover an already-created npm deployment status"
+        required: false
+        default: false
+        type: boolean
+      tag:
+        description: "Release tag used by the bookkeeping recovery"
+        required: true
+        type: string
+      commit:
+        description: "Expected full commit SHA for the deployment"
+        required: true
+        type: string
+      deployment_id:
+        description: "Existing GitHub deployment id"
+        required: true
+        type: string
+      run_url:
+        description: "Run URL to put in the recovered deployment status"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RELEASE_ROOT: release-set
 
 jobs:
   verify:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      npm_version: ${{ steps.release.outputs.npm_version }}
+      npm_dist_tag: ${{ steps.release.outputs.npm_dist_tag }}
     steps:
-      - name: Checkout
+      - name: Checkout tagged commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -28,72 +64,89 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Validate tag and package versions
+      - name: Validate source, tag, commit, and version policy
+        id: release
         run: |
-          python - <<'PY'
-          import json
-          import tomllib
-          import os
+          python scripts/release_validation.py validate \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" \
+            --release-channel release-channel.toml \
+            --output "$GITHUB_OUTPUT"
 
-          tag = os.environ["GITHUB_REF_NAME"]
-          if not tag.startswith("v"):
-            raise SystemExit(f"tag must start with v: {tag}")
-          tag_version = tag[1:]
+      - name: Install pinned validation tools
+        run: python -m pip install --requirement constraints-ci.txt
 
-          with open("pyproject.toml", "rb") as f:
-            pyproject = tomllib.load(f)
-          py_version = pyproject["project"]["version"]
+      - name: Run deterministic tests
+        run: python -m pytest tests -q --ignore=tests/test_installed_hook_e2e.py
 
-          with open("package.json", "r", encoding="utf-8") as f:
-            package = json.load(f)
-          npm_version = package["version"]
+      - name: Run Ruff
+        run: python -m ruff check .
 
-          if py_version != npm_version:
-            raise SystemExit(
-              f"version mismatch: pyproject.toml={py_version} package.json={npm_version}"
-            )
-          if tag_version != py_version:
-            raise SystemExit(
-              f"tag/version mismatch: tag={tag_version} package={py_version}"
-            )
-
-          print(f"release version verified: {py_version}")
-          PY
-
-      - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest build twine
-
-      - name: Run tests
-        run: pytest tests -q
-
-      - name: Build Python distributions
-        run: python -m build
-
-      - name: Validate Python distributions
-        run: python -m twine check dist/*
-
-      - name: Smoke-test installed Python CLI
+      - name: Build the immutable release set once
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          NPM_VERSION: ${{ steps.release.outputs.npm_version }}
         run: |
-          python -m venv .venv-smoke
-          . .venv-smoke/bin/activate
-          pip install dist/*.whl
-          tmp_dir=$(mktemp -d)
-          ai-push-hooks --help > /dev/null
+          rm -rf "$RELEASE_ROOT"
+          mkdir -p "$RELEASE_ROOT/python" "$RELEASE_ROOT/npm"
+          PIP_CONSTRAINT="$GITHUB_WORKSPACE/constraints-ci.txt" \
+            python -m build --outdir "$RELEASE_ROOT/python"
+          npm pack --json --pack-destination "$RELEASE_ROOT/npm" > "$RELEASE_ROOT/npm-pack.json"
+          python scripts/release_validation.py manifest \
+            --root "$RELEASE_ROOT" \
+            --version "$VERSION" \
+            --npm-version "$NPM_VERSION" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" \
+            --release-channel release-channel.toml \
+            --output "$RELEASE_ROOT/checksum-manifest.json"
+          python -m twine check "$RELEASE_ROOT/python"/*
+
+      - name: Smoke-test the exact wheel
+        run: |
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          python -m venv "$smoke_dir/venv"
+          "$smoke_dir/venv/bin/pip" install --no-index --no-deps "$RELEASE_ROOT/python"/*.whl
+          "$smoke_dir/venv/bin/ai-push-hooks" --help > /dev/null
           (
-            cd "$tmp_dir"
-            ai-push-hooks init --template minimal-docs
+            cd "$smoke_dir"
+            "$smoke_dir/venv/bin/ai-push-hooks" init --template minimal-docs
           )
 
-      - name: Smoke-test npm wrapper
-        run: npm run test:npm-pack
+      - name: Smoke-test the exact npm tarball without network fallback
+        run: |
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          npm init -y --prefix "$smoke_dir" > /dev/null
+          npm install --prefix "$smoke_dir" --ignore-scripts --no-audit --no-fund \
+            "$RELEASE_ROOT/npm"/*.tgz
+          "$smoke_dir/node_modules/.bin/ai-push-hooks" --help > /dev/null
+          (
+            cd "$smoke_dir"
+            "$smoke_dir/node_modules/.bin/ai-push-hooks" init --template minimal-docs
+          )
 
-      - name: Upload Python dist artifacts
+      - name: Run installed-hook E2E against exact promoted artifacts
+        run: |
+          wheel_path=$(python scripts/release_validation.py manifest-artifact \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json" --kind wheel)
+          npm_path=$(python scripts/release_validation.py manifest-artifact \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json" --kind npm)
+          AI_PUSH_HOOKS_RELEASE_WHEEL="$RELEASE_ROOT/$wheel_path" \
+            AI_PUSH_HOOKS_RELEASE_NPM_TARBALL="$RELEASE_ROOT/$npm_path" \
+            python -m pytest -q tests/test_installed_hook_e2e.py \
+              -k test_installed_hook_runs_real_local_push_scenario
+
+      - name: Upload the immutable release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: python-dist
-          path: dist/
+          name: release-set-${{ github.ref_name }}
+          path: release-set/
+          if-no-files-found: error
 
   publish-pypi:
+    if: github.event_name == 'push'
     needs: verify
     runs-on: ubuntu-latest
     permissions:
@@ -101,49 +154,68 @@ jobs:
     environment:
       name: pypi
     steps:
-      - name: Download Python dist artifacts
+      - name: Checkout tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable release set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: python-dist
-          path: dist/
+          name: release-set-${{ github.ref_name }}
+          path: release-set/
 
-      - name: Check whether PyPI version already exists
-        id: pypi-version
-        env:
-          PACKAGE_VERSION: ${{ github.ref_name }}
+      - name: Check PyPI artifact identities
+        id: pypi
         run: |
-          python - <<'PY'
-          import os
-          import urllib.error
-          import urllib.request
+          python scripts/release_validation.py registry-check \
+            --registry pypi \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json" \
+            --decision "$RELEASE_ROOT/pypi-decision.json" \
+            --output "$GITHUB_OUTPUT"
 
-          version = os.environ["PACKAGE_VERSION"].removeprefix("v")
-          url = f"https://pypi.org/pypi/ai-push-hooks/{version}/json"
-          try:
-              with urllib.request.urlopen(url) as response:
-                  exists = response.status == 200
-          except urllib.error.HTTPError as exc:
-              if exc.code != 404:
-                  raise
-              exists = False
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"exists={'true' if exists else 'false'}\n")
-          PY
+      - name: Stage only missing approved artifacts
+        if: steps.pypi.outputs.publish_required == 'true'
+        run: |
+          python scripts/release_validation.py stage-missing \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json" \
+            --root "$RELEASE_ROOT" \
+            --decision "$RELEASE_ROOT/pypi-decision.json" \
+            --destination pypi-publish
 
-      - name: Publish to PyPI
-        if: steps.pypi-version.outputs.exists != 'true'
+      - name: Publish missing PyPI artifacts once
+        if: steps.pypi.outputs.publish_required == 'true'
+        continue-on-error: true
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: pypi-publish
+
+      - name: Verify PyPI identities after the single publish attempt
+        if: always()
+        run: |
+          python scripts/release_validation.py registry-verify \
+            --registry pypi \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json"
 
   publish-npm:
+    if: github.event_name == 'push'
     needs: [verify, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-      deployments: write
     steps:
-      - name: Checkout
+      - name: Checkout tagged commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -151,90 +223,142 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Check whether npm version already exists
-        id: npm-version
-        env:
-          PACKAGE_VERSION: ${{ github.ref_name }}
+      - name: Setup Python for bounded registry validation
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable release set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-set-${{ github.ref_name }}
+          path: release-set/
+
+      - name: Check npm artifact identity
+        id: npm
         run: |
-          version="${PACKAGE_VERSION#v}"
-          if npm view "ai-push-hooks@$version" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          python scripts/release_validation.py registry-check \
+            --registry npm \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json" \
+            --decision "$RELEASE_ROOT/npm-decision.json" \
+            --output "$GITHUB_OUTPUT"
 
-      - name: Publish to npm
-        if: steps.npm-version.outputs.exists != 'true'
-        run: npm publish --access public --provenance
+      - name: Publish the exact npm tarball once
+        if: steps.npm.outputs.publish_required == 'true'
+        continue-on-error: true
+        env:
+          npm_config_fetch_retries: "0"
+          npm_config_fetch_timeout: "10000"
+        run: |
+          npm publish \
+            "$RELEASE_ROOT/$(python scripts/release_validation.py manifest-artifact \
+              --manifest "$RELEASE_ROOT/checksum-manifest.json" --kind npm)" \
+            --access public \
+            --tag "$(python scripts/release_validation.py manifest-value \
+              --manifest "$RELEASE_ROOT/checksum-manifest.json" --key npm_dist_tag)" \
+            --provenance
 
-      - name: Record npm deployment status
+      - name: Verify npm identity after the single publish attempt
+        if: always()
+        run: |
+          python scripts/release_validation.py registry-verify \
+            --registry npm \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json"
+
+  record-npm-bookkeeping:
+    if: github.event_name == 'push'
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable release set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-set-${{ github.ref_name }}
+          path: release-set/
+
+      - name: Record bookkeeping without republishing
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          NPM_VERSION_EXISTED: ${{ steps.npm-version.outputs.exists }}
         run: |
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          repo = os.environ["GITHUB_REPOSITORY"]
-          token = os.environ["GITHUB_TOKEN"]
-          ref = os.environ["GITHUB_REF_NAME"]
-          run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-          }
-
-          deployment_payload = {
-              "ref": ref,
-              "environment": "npm",
-              "description": "npm publish",
-              "auto_merge": False,
-              "transient_environment": False,
-              "production_environment": False,
-              "required_contexts": [],
-          }
-          deployment_request = urllib.request.Request(
-              f"https://api.github.com/repos/{repo}/deployments",
-              data=json.dumps(deployment_payload).encode("utf-8"),
-              headers=headers,
-              method="POST",
-          )
-          with urllib.request.urlopen(deployment_request) as response:
-              deployment = json.load(response)
-
-          description = (
-              "npm version already available"
-              if os.environ["NPM_VERSION_EXISTED"] == "true"
-              else "npm publish successful"
-          )
-          status_payload = {
-              "state": "success",
-              "log_url": run_url,
-              "description": description,
-          }
-          status_request = urllib.request.Request(
-              f"https://api.github.com/repos/{repo}/deployments/{deployment['id']}/statuses",
-              data=json.dumps(status_payload).encode("utf-8"),
-              headers=headers,
-              method="POST",
-          )
-          with urllib.request.urlopen(status_request):
-              pass
-
-          print(f"Recorded npm deployment {deployment['id']} as success")
-          PY
+          python scripts/release_validation.py record-deployment \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json"
 
   create-github-release:
+    if: github.event_name == 'push'
     needs: [publish-pypi, publish-npm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Create GitHub Release
+      - name: Checkout tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable release set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-set-${{ github.ref_name }}
+          path: release-set/
+
+      - name: Create or verify the correctly-classified GitHub release
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/release_validation.py github-release \
+            --repo "$GITHUB_REPOSITORY" \
+            --manifest "$RELEASE_ROOT/checksum-manifest.json"
+
+  recover-bookkeeping:
+    if: github.event_name == 'workflow_dispatch' && inputs.recover_bookkeeping == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Checkout recovery helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Recover only the deployment status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          RECOVERY_TAG: ${{ inputs.tag }}
+          RECOVERY_COMMIT: ${{ inputs.commit }}
+          RECOVERY_RUN_URL: ${{ inputs.run_url }}
+        run: |
+          test -n "$DEPLOYMENT_ID" -a -n "$RECOVERY_RUN_URL"
+          python scripts/release_validation.py recover-deployment \
+            --repo "$GITHUB_REPOSITORY" \
+            --deployment-id "$DEPLOYMENT_ID" \
+            --tag "$RECOVERY_TAG" \
+            --commit "$RECOVERY_COMMIT" \
+            --run-url "$RECOVERY_RUN_URL"

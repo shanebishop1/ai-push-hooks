@@ -1,0 +1,7 @@
+# Exact CI/test/build tools. Runtime dependencies stay ranged in pyproject.toml.
+build==1.2.2.post1
+pytest==8.3.5
+ruff==0.13.3
+setuptools==77.0.1
+twine==6.1.0
+wheel==0.45.1

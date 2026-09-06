@@ -42,12 +42,12 @@ def test_runtime_directories_and_files_are_private_by_default(tmp_path, monkeypa
     context.logger.status("test.private", "private runtime output")
     _write_summary(context, {"ok": True})
 
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.llm.run_command",
-        lambda args, **kwargs: subprocess.CompletedProcess(
-            args, 0, stdout='{"session":"ok"}\n', stderr=""
-        ),
-    )
+    def fake_run_command(args, **kwargs):
+        assert not pathlib.Path(kwargs["cwd"]).is_relative_to(repo.resolve())
+        assert list(kwargs["cwd"].iterdir()) == []
+        return subprocess.CompletedProcess(args, 0, stdout='{"session":"ok"}\n', stderr="")
+
+    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
     finalize_opencode_session(context, "docs.query", "session-1")
 
     transcript_dir = runtime_root / "transcripts"

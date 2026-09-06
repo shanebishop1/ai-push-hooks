@@ -7,6 +7,7 @@ import stat
 import sys
 
 from .hook import run_hook
+from .install import install_hook
 from .paths import path_is_link_or_reparse, write_text_no_follow
 from .prompts_builtin import MINIMAL_DOCS_TEMPLATE
 from .types import HookError
@@ -23,6 +24,11 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="Write a starter config")
     init_parser.add_argument("--template", default="minimal-docs")
     init_parser.add_argument("--force", action="store_true")
+
+    install_parser = subparsers.add_parser(
+        "install", help="Install a repo-local pre-push hook"
+    )
+    install_parser.add_argument("--force", action="store_true")
     return parser
 
 
@@ -92,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_hook(args.remote_name, args.remote_url)
         if args.command == "init":
             return init_config(args.template, args.force)
+        if args.command == "install":
+            return install_hook(args.force)
         raise HookError(f"Unknown command: {args.command}")
     except HookError as exc:
         sys.stderr.write(f"[ai-push-hooks] {exc}\n")

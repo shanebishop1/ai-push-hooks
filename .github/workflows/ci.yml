@@ -11,10 +11,11 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PIP_CONSTRAINT: ${{ github.workspace }}/constraints-ci.txt
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }}
+    name: Linux Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -30,10 +31,79 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install package and test dependencies
-        run: python -m pip install --upgrade pip pytest .
+        run: python -m pip install --constraint constraints-ci.txt ".[dev]"
+
+      - name: Show compatibility versions
+        run: |
+          python --version
+          python -m pip --version
+          python -m pytest --version
+          git --version
+          bash --version | head -n 1
 
       - name: Run tests
         run: python -m pytest tests -q
+
+  macos:
+    name: macOS Python 3.13
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+
+      - name: Install package and test dependencies
+        run: python -m pip install --constraint constraints-ci.txt ".[dev]"
+
+      - name: Show macOS compatibility versions
+        run: |
+          sw_vers
+          uname -m
+          python --version
+          python -m pip --version
+          python -m pytest --version
+          node --version
+          npm --version
+          git --version
+          bash --version | head -n 1
+
+      - name: Run full Python suite
+        run: python -m pytest tests -q
+
+      - name: Smoke-test packed npm install
+        env:
+          NPM_CONFIG_OFFLINE: "true"
+        run: npm run test:npm-pack
+
+  lint:
+    name: Ruff 0.13.3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Install Ruff
+        run: python -m pip install --constraint constraints-ci.txt ruff
+
+      - name: Show Ruff version
+        run: ruff --version
+
+      - name: Run Ruff
+        run: ruff check .
 
   package:
     name: Package validation
@@ -53,7 +123,17 @@ jobs:
           node-version: "24"
 
       - name: Install Python build tools
-        run: python -m pip install --upgrade pip build twine
+        run: python -m pip install --constraint constraints-ci.txt build twine
+
+      - name: Show package tool versions
+        run: |
+          python --version
+          python -m pip --version
+          python -m build --version
+          python -m twine --version
+          node --version
+          npm --version
+          git --version
 
       - name: Build Python distributions
         run: python -m build
@@ -62,4 +142,106 @@ jobs:
         run: python -m twine check dist/*
 
       - name: Smoke-test packed npm install
+        env:
+          NPM_CONFIG_OFFLINE: "true"
         run: npm run test:npm-pack
+
+  node-minimum:
+    name: Node.js 18 wrapper compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.10"
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "18"
+
+      - name: Show minimum compatibility versions
+        run: |
+          python --version
+          python -m pip --version
+          node --version
+          npm --version
+          git --version
+
+      - name: Verify Python 3.10 parser fallback with and without tomli
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_bin="$(command -v node)"
+          parser_env="$(mktemp -d "${RUNNER_TEMP}/ai-push-hooks-parser.XXXXXX")"
+          trap 'rm -rf "$parser_env"' EXIT
+          python -m venv "$parser_env/venv"
+
+          if PATH="$parser_env/venv/bin" "$node_bin" bin/ai-push-hooks.js --help \
+              >"$parser_env/without-parser.out" 2>"$parser_env/without-parser.err"; then
+            printf 'wrapper unexpectedly succeeded without tomli\n' >&2
+            exit 1
+          fi
+          grep -F 'Python 3.11+ is required for npm installs. Python 3.10 can be used if tomli is installed.' \
+            "$parser_env/without-parser.err"
+
+          "$parser_env/venv/bin/python" -m pip install --constraint constraints-ci.txt .
+          PATH="$parser_env/venv/bin" "$node_bin" bin/ai-push-hooks.js --help
+
+      - name: Smoke-test packed npm install
+        env:
+          NPM_CONFIG_OFFLINE: "true"
+        run: npm run test:npm-pack
+
+  lefthook:
+    name: Real Lefthook 2.1.9 installed-hook gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+
+      - name: Install pinned Python test/build tools
+        run: python -m pip install --constraint constraints-ci.txt ".[dev]" build
+
+      - name: Install Lefthook 2.1.9
+        run: |
+          go install github.com/evilmartians/lefthook/v2@v2.1.9
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          "$(go env GOPATH)/bin/lefthook" version
+
+      - name: Run the real Lefthook installed-hook test
+        env:
+          AI_PUSH_HOOKS_REQUIRE_LEFTHOOK: "1"
+        run: python -m pytest -q tests/test_installed_hook_e2e.py::test_real_lefthook_install_uses_installed_runner
+
+  opencode-contract:
+    name: OpenCode 1.18.29 Docker contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Show Docker and compatibility versions
+        run: |
+          docker --version
+          docker info
+          git --version
+          bash --version | head -n 1
+
+      - name: Run real OpenCode contract smoke test
+        run: bash scripts/opencode-contract-smoke.sh

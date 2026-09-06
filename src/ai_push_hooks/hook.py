@@ -116,26 +116,22 @@ def _run_hook_impl(
             item for item in revision_ranges if item.update.branch_name == branch_name
         ]
         branch_ranges = unique_range_expressions(branch_revision_ranges)
-        branch_changed_files = (
-            collect_changed_files(repo_root, branch_ranges) if branch_ranges else []
-        )
-        branch_diff_text = (
-            collect_diff(repo_root, branch_ranges, config.llm.max_diff_bytes)
-            if branch_ranges
-            else ""
-        )
+        if branch_ranges == ranges:
+            branch_changed_files = changed_files
+            branch_diff_text = diff_text
+        else:
+            branch_changed_files = (
+                collect_changed_files(repo_root, branch_ranges) if branch_ranges else []
+            )
+            branch_diff_text = (
+                collect_diff(repo_root, branch_ranges, config.llm.max_diff_bytes)
+                if branch_ranges
+                else ""
+            )
         branch_is_new = any(
             update.branch_name == branch_name and update.operation == "create"
             for update in push_updates
         )
-    elif pushed_branches:
-        branch_name = ""
-        branch_selection_reason = "multiple pushed branches: " + ", ".join(pushed_branches)
-        branch_revision_ranges = []
-        branch_ranges = []
-        branch_changed_files = []
-        branch_diff_text = ""
-        branch_is_new = False
     else:
         branch_name = ""
         branch_selection_reason = "no pushed branch updates"

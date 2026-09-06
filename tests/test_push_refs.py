@@ -71,6 +71,21 @@ def test_hook_uses_single_non_head_pushed_branch_and_preserves_update(
     tip = _commit_file(repo, "src/second.py", "second = True\n", "second feature commit")
     _git(repo, "checkout", "main")
     zero = "0" * len(tip)
+    changed_file_ranges: list[list[str]] = []
+    diff_ranges: list[list[str]] = []
+    real_collect_changed_files = hook_module.collect_changed_files
+    real_collect_diff = hook_module.collect_diff
+
+    def collect_changed_files(repo_root: pathlib.Path, ranges: list[str]) -> list[str]:
+        changed_file_ranges.append(ranges)
+        return real_collect_changed_files(repo_root, ranges)
+
+    def collect_diff(repo_root: pathlib.Path, ranges: list[str], max_bytes: int) -> str:
+        diff_ranges.append(ranges)
+        return real_collect_diff(repo_root, ranges, max_bytes)
+
+    monkeypatch.setattr(hook_module, "collect_changed_files", collect_changed_files)
+    monkeypatch.setattr(hook_module, "collect_diff", collect_diff)
 
     context = _capture_hook_context(
         repo,
@@ -96,6 +111,8 @@ def test_hook_uses_single_non_head_pushed_branch_and_preserves_update(
     assert context.cache["checked_out_branch"] == "main"
     assert context.cache["branch_ranges"] == [f"{base}..{tip}"]
     assert context.cache["branch_changed_files"] == ["src/first.py", "src/second.py"]
+    assert changed_file_ranges == [[f"{base}..{tip}"]]
+    assert diff_ranges == [[f"{base}..{tip}"]]
     commits = collect_commit_messages_for_ranges(repo, context.cache["branch_ranges"])
     assert {commit["subject"] for commit in commits} == {
         "first feature commit",
@@ -105,6 +122,49 @@ def test_hook_uses_single_non_head_pushed_branch_and_preserves_update(
     beads_result = collect_beads_status_context(context, object())
     assert beads_result.skip_module is False
     assert "branch=feature/pushed\n" in str(beads_result.artifacts["branch-context.txt"])
+
+
+def test_hook_does_not_reuse_whole_push_files_or_diff_for_mixed_ranges(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature/source")
+    tip = _commit_file(repo, "src/feature.py", "feature = True\n", "feature commit")
+    _git(repo, "checkout", "main")
+    zero = "0" * len(tip)
+    changed_file_ranges: list[list[str]] = []
+    diff_ranges: list[list[str]] = []
+    real_collect_changed_files = hook_module.collect_changed_files
+    real_collect_diff = hook_module.collect_diff
+
+    def collect_changed_files(repo_root: pathlib.Path, ranges: list[str]) -> list[str]:
+        changed_file_ranges.append(ranges)
+        return real_collect_changed_files(repo_root, ranges)
+
+    def collect_diff(repo_root: pathlib.Path, ranges: list[str], max_bytes: int) -> str:
+        diff_ranges.append(ranges)
+        return real_collect_diff(repo_root, ranges, max_bytes)
+
+    monkeypatch.setattr(hook_module, "collect_changed_files", collect_changed_files)
+    monkeypatch.setattr(hook_module, "collect_diff", collect_diff)
+
+    context = _capture_hook_context(
+        repo,
+        monkeypatch,
+        [
+            f"refs/heads/feature/source {tip} refs/heads/feature/pushed {zero}",
+            f"refs/tags/v1 {base} refs/tags/v1 {zero}",
+        ],
+    )
+
+    branch_range = f"{base}..{tip}"
+    tag_range = f"{base}..{base}"
+    assert context.cache["ranges"] == [branch_range, tag_range]
+    assert context.cache["branch_ranges"] == [branch_range]
+    assert changed_file_ranges == [[branch_range, tag_range], [branch_range]]
+    assert diff_ranges == [[branch_range, tag_range], [branch_range]]
+    assert context.cache["branch_changed_files"] == ["src/feature.py"]
 
 
 def test_multiple_pushed_branches_fail_closed_before_workflow(
@@ -130,6 +190,18 @@ def test_multiple_pushed_branches_fail_closed_before_workflow(
 
     with pytest.raises(HookError, match="multiple branch updates"):
         _capture_hook_context(repo, monkeypatch, lines)
+
+
+def test_duplicate_pushed_branch_updates_fail_closed_before_workflow(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+    tip = _git(repo, "rev-parse", "HEAD")
+    zero = "0" * len(tip)
+    line = f"refs/heads/main {tip} refs/heads/feature/duplicate {zero}"
+
+    with pytest.raises(HookError, match="multiple branch updates"):
+        _capture_hook_context(repo, monkeypatch, [line, line])
 
 
 def test_setup_failure_honors_environment_fail_open(
@@ -202,6 +274,19 @@ def test_deletion_only_push_never_falls_back_to_head(tmp_path: pathlib.Path) -> 
     )
 
     assert ranges == []
+
+
+def test_empty_push_stdin_has_no_ranges_or_selected_branch(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+
+    context = _capture_hook_context(repo, monkeypatch, [])
+
+    assert context.cache["push_updates"] == []
+    assert context.cache["ranges"] == []
+    assert context.cache["branch_name"] == ""
+    assert context.cache["branch_selection_reason"] == "no pushed branch updates"
 
 
 def test_root_new_branch_without_base_uses_hash_format_empty_tree(

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const packageRoot = path.resolve(__dirname, '..');
@@ -10,6 +11,8 @@ const pythonCommands = ['python3.14', 'python3.13', 'python3.12', 'python3.11', 
 
 function buildEnv() {
   const env = { ...process.env };
+  env.AI_PUSH_HOOKS_NODE_EXECUTABLE = process.execPath;
+  env.AI_PUSH_HOOKS_NODE_SCRIPT = fs.realpathSync(__filename);
   env.PYTHONPATH = env.PYTHONPATH
     ? `${srcDir}${path.delimiter}${env.PYTHONPATH}`
     : srcDir;

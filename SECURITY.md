@@ -12,6 +12,24 @@ OpenCode is a separate local process and communicates with the model provider se
 
 Hook logs, summaries, run artifacts, and transcripts are stored locally under `.git/ai-push-hooks/` with private runtime permissions. Transcript capture defaults to **on** at `.git/ai-push-hooks/transcripts`; set `logging.capture_llm_transcript = false` to disable it. OpenCode session deletion defaults to on, but provider-side retention is controlled by the provider.
 
+Transcript export is best effort. If export fails or produces no usable output,
+the run emits a warning and still applies the configured session-deletion
+policy; it does not claim that a transcript was captured. A provider may have
+already received the request even when local export fails. Do not use local
+transcript files as proof that provider-side data was deleted.
+
 ## Sandbox limitation
 
 OpenCode permissions and temporary-workspace isolation are **not an operating-system sandbox**. The process retains the invoking user's OS-level access, and bounded snapshots cannot observe every ignored path, Git object/LFS store, shared reflog, other linked-worktree metadata, or race with an independent local process. Use an OS sandbox, container, VM, or dedicated low-privilege account when stronger isolation is required. See the README's [OpenCode isolation limits](README.md#opencode-isolation-limits) for the detailed guarantees and exclusions.
+
+## Tested security boundary
+
+The beta evidence covers the real OpenCode **1.18.29** permission contract in a
+no-network Docker fixture and a limited synthetic provider run using a model
+that was listed as free at test time,
+`opencode/muse-spark-1.3-contributor-free`. Free-model catalogs and pricing can
+change; verify the current catalog before use. This evidence does not cover
+every provider, model, authentication mode, or live `apply` path. Windows has
+no native beta evidence. Treat the generated hook's repository-local path
+checks and the Lefthook runner as integration safeguards, not isolation
+boundaries.

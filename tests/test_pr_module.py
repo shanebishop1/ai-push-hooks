@@ -201,6 +201,68 @@ def test_initial_push_returns_actionable_deferred_result_without_calling_gh(
     assert "gh pr create --head feature/initial --base main" in result["reason"]
 
 
+def test_gh_pr_create_does_not_create_after_lookup_failure(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text('{"title":"Title","body":"Body"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        exec_module,
+        "lookup_open_pr_url",
+        lambda *args, **kwargs: (_ for _ in ()).throw(HookError("gh lookup failed")),
+    )
+    monkeypatch.setattr(
+        exec_module,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("PR creation must not follow a failed lookup")
+        ),
+    )
+
+    with pytest.raises(HookError, match="gh lookup failed"):
+        gh_pr_create_executor(
+            context,
+            type("State", (), {"metadata": {}})(),
+            config.modules["pr"].steps[-1],
+            [payload],
+        )
+
+
+def test_gh_pr_create_reuses_existing_open_pr_without_creating_another(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text('{"title":"Title","body":"Body"}\n', encoding="utf-8")
+    existing_url = "https://github.com/test/repo/pull/42"
+
+    monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(exec_module, "lookup_open_pr_url", lambda *args, **kwargs: existing_url)
+    monkeypatch.setattr(
+        exec_module,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("an existing PR must be reused")
+        ),
+    )
+
+    result = gh_pr_create_executor(
+        context,
+        type("State", (), {"metadata": {}})(),
+        config.modules["pr"].steps[-1],
+        [payload],
+    )
+
+    assert result == {"skipped": False, "pr_url": existing_url, "already_exists": True}
+
+
 def test_initial_push_workflow_defers_before_llm_or_gh(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:

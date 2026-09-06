@@ -246,19 +246,22 @@ def export_opencode_session_json(
     session_id: str,
     export_path: pathlib.Path,
 ) -> bool:
-    completed = run_command(
-        [
-            context.opencode_executable or resolve_opencode_executable(),
-            "export",
-            session_id,
-            "--pure",
-        ],
-        cwd=context.repo_root,
-        timeout=context.config.llm.timeout_seconds,
-        check=False,
-        env=opencode_isolation_env(context, non_agent_opencode_config(), "session-export"),
-        inherit_env=False,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="ai-push-hooks-session-export-"
+    ) as temporary_directory:
+        completed = run_command(
+            [
+                context.opencode_executable or resolve_opencode_executable(),
+                "export",
+                session_id,
+                "--pure",
+            ],
+            cwd=pathlib.Path(temporary_directory).resolve(strict=True),
+            timeout=context.config.llm.timeout_seconds,
+            check=False,
+            env=opencode_isolation_env(context, non_agent_opencode_config(), "session-export"),
+            inherit_env=False,
+        )
     if completed.returncode != 0:
         return False
     payload = (completed.stdout or "").strip()
@@ -269,23 +272,32 @@ def export_opencode_session_json(
 
 
 def delete_opencode_session(context: RuntimeContext, session_id: str) -> None:
-    run_command(
-        [
-            context.opencode_executable or resolve_opencode_executable(),
-            "session",
-            "delete",
-            session_id,
-            "--pure",
-        ],
-        cwd=context.repo_root,
-        timeout=context.config.llm.timeout_seconds,
-        check=False,
-        env=opencode_isolation_env(context, non_agent_opencode_config(), "session-delete"),
-        inherit_env=False,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="ai-push-hooks-session-delete-"
+    ) as temporary_directory:
+        run_command(
+            [
+                context.opencode_executable or resolve_opencode_executable(),
+                "session",
+                "delete",
+                session_id,
+                "--pure",
+            ],
+            cwd=pathlib.Path(temporary_directory).resolve(strict=True),
+            timeout=context.config.llm.timeout_seconds,
+            check=False,
+            env=opencode_isolation_env(context, non_agent_opencode_config(), "session-delete"),
+            inherit_env=False,
+        )
 
 
 def finalize_opencode_session(context: RuntimeContext, stage_name: str, session_id: str | None) -> None:
+    """Capture and finalize a session without retaining it on export failure.
+
+    Transcript capture is best effort. A failed or interrupted export emits a
+    visible warning, then the configured deletion policy still runs so a
+    failed capture does not silently retain provider data.
+    """
     if not session_id:
         return
     transcript_dir = _transcript_dir(context)
@@ -300,7 +312,20 @@ def finalize_opencode_session(context: RuntimeContext, stage_name: str, session_
             export_name,
             "OpenCode transcript path",
         )
-        export_opencode_session_json(context, session_id, export_path)
+        export_failure: str | None = None
+        try:
+            exported = export_opencode_session_json(context, session_id, export_path)
+        except Exception as exc:  # noqa: BLE001
+            exported = False
+            export_failure = type(exc).__name__
+        if not exported:
+            context.logger.warn(
+                "llm.transcript_export_failed",
+                "Could not capture the OpenCode transcript; applying configured session deletion.",
+                stage_name=stage_name,
+                session_id=session_id,
+                reason=export_failure or "export returned no transcript",
+            )
     if context.config.llm.delete_session_after_run:
         delete_opencode_session(context, session_id)
 
@@ -308,6 +333,8 @@ def finalize_opencode_session(context: RuntimeContext, stage_name: str, session_
 def build_opencode_security_config(
     agent_policy: str,
     allow_paths: tuple[str, ...] = (),
+    *,
+    non_vcs_working_directory: pathlib.Path | None = None,
 ) -> tuple[str, dict[str, Any]]:
     permissions: dict[str, Any] = {
         "*": "deny",
@@ -342,12 +369,29 @@ def build_opencode_security_config(
             while "**/" in collapsed:
                 collapsed = collapsed.replace("**/", "", 1)
                 permission_patterns.add(collapsed)
+        protected_patterns = {".git", ".git/**"}
+        if non_vcs_working_directory is not None:
+            # OpenCode 1.18.29 assigns `/` as the worktree for a directory
+            # without VCS metadata. Its write and edit tools then request the
+            # `edit` permission using paths relative to that filesystem root,
+            # not relative to the process cwd. Keep the staging checkout free
+            # of Git metadata and qualify only its allowlisted paths.
+            anchor = pathlib.Path(non_vcs_working_directory.anchor)
+            prefix = non_vcs_working_directory.relative_to(anchor).as_posix()
+            permission_patterns = {
+                f"{prefix}/{pattern}" if prefix else pattern
+                for pattern in permission_patterns
+            }
+            protected_patterns = {
+                f"{prefix}/{pattern}" if prefix else pattern
+                for pattern in protected_patterns
+            }
         edit_permissions = {
             "*": "deny",
             **{pattern: "allow" for pattern in sorted(permission_patterns)},
         }
-        edit_permissions[".git"] = "deny"
-        edit_permissions[".git/**"] = "deny"
+        for pattern in sorted(protected_patterns):
+            edit_permissions[pattern] = "deny"
         permissions["edit"] = edit_permissions
     else:
         raise HookError(f"Unsupported OpenCode agent policy: {agent_policy}")
@@ -404,15 +448,42 @@ def call_opencode(
     total_attempts: int | None = None,
     existing_session_id: str | None = None,
 ) -> OpenCodeRunResult:
+    """Run OpenCode with a policy-specific isolated working directory.
+
+    Apply callers must provide the hook-owned, non-VCS staging directory built
+    by ``run_apply_step``; this is an internal precondition rather than a
+    general repository-working-directory interface.
+    """
     if agent not in OPENCODE_AGENT_POLICIES:
         raise HookError(f"Unsupported OpenCode agent policy: {agent}")
     if agent == "apply" and not allow_paths:
         raise HookError("OpenCode apply agent requires an explicit non-empty allow_paths")
+    if agent == "apply" and working_directory is None:
+        raise HookError("OpenCode apply agent requires an isolated staging directory")
     if agent == "read-only" and allow_paths:
         raise HookError("OpenCode read-only agent does not accept write paths")
 
     validated_files = validate_opencode_attachments(context, files)
-    agent_name, security_config = build_opencode_security_config(agent, allow_paths)
+    if working_directory is None:
+        resolved_working_directory = None
+    else:
+        try:
+            resolved_working_directory = working_directory.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise HookError(
+                f"OpenCode working directory must be an existing directory: {working_directory}"
+            ) from exc
+        if not resolved_working_directory.is_dir():
+            raise HookError(
+                f"OpenCode working directory must be an existing directory: {working_directory}"
+            )
+    agent_name, security_config = build_opencode_security_config(
+        agent,
+        allow_paths,
+        non_vcs_working_directory=(
+            resolved_working_directory if agent == "apply" else None
+        ),
+    )
     executable = context.opencode_executable or resolve_opencode_executable()
     context.logger.llm_call(stage_name, purpose, context.config.llm.model, attempt, total_attempts)
     isolated_env = opencode_isolation_env(context, security_config, stage_name)
@@ -450,7 +521,7 @@ def call_opencode(
     else:
         completed = run_command(
             cmd,
-            cwd=working_directory.resolve(strict=True),
+            cwd=resolved_working_directory,
             timeout=context.config.llm.timeout_seconds,
             check=False,
             env=isolated_env,
