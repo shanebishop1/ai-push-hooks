@@ -78,6 +78,13 @@ BEADS_ENV_NAMES = frozenset(
     }
 )
 BEADS_ENV_PREFIXES = ("AWS_", "BD_", "BEADS_", "DOLT_")
+BEADS_MIGRATION_OVERRIDE_ENV_NAMES = frozenset(
+    {
+        "BD_ALLOW_REMOTE_MIGRATE",
+        "BD_IGNORE_SCHEMA_SKEW",
+        "BD_SMART_GATE",
+    }
+)
 GITHUB_REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+\Z")
 GIT_DIFF_CHUNK_BYTES = 64 * 1024
 GIT_ERROR_BYTES = 64 * 1024
@@ -950,7 +957,8 @@ def beads_alignment_env() -> dict[str, str]:
     return {
         name: value
         for name, value in os.environ.items()
-        if name in BEADS_ENV_NAMES or name.startswith(BEADS_ENV_PREFIXES)
+        if name not in BEADS_MIGRATION_OVERRIDE_ENV_NAMES
+        and (name in BEADS_ENV_NAMES or name.startswith(BEADS_ENV_PREFIXES))
     }
 
 

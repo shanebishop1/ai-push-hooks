@@ -12,7 +12,7 @@ Use it to keep docs aligned with code, check branch/task consistency, or prepare
 - [Python 3.10–3.13](https://www.python.org/downloads/). Python is required even when installing the npm wrapper. The wrapper probes Python 3.14, 3.13, 3.12, 3.11, 3.10, then `python`; the 3.14 probe is not a beta support claim. Python 3.10 additionally needs the `tomli` package available to that interpreter.
 - [OpenCode](https://opencode.ai/docs/#install) is optional for workflows that use only deterministic steps, but the `minimal-docs` starter uses `llm` and `apply`. Those steps also need a provider/model and authentication; check with `opencode auth list`.
 - [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is optional and needed only for `gh_pr_create`.
-- [Beads (`bd`)](https://github.com/steveyegge/beads) is optional and needed only for Beads alignment steps.
+- [Beads (`bd`)](https://github.com/steveyegge/beads) is optional and needed only for Beads alignment steps. The integration requires the native `bd` CLI; Beads-Rust (`br`) is not a supported substitute.
 - [Lefthook](https://lefthook.dev/installation/) and [Mise](https://mise.jdx.dev/getting-started.html) are optional hook-manager/tool-version alternatives described below.
 
 ### Install ai-push-hooks
@@ -106,6 +106,24 @@ Global and repository OpenCode instructions, custom agents, MCP servers, formatt
 After OpenCode session finalization, apply verifies that the Git-visible checkout, index, current-worktree control state, and critical shared `HEAD`/config/packed-refs/refs/hooks state still match their baselines. Pre-existing symlinks in monitored Git metadata fail closed before OpenCode runs, and symlinks introduced during execution fail before propagation. Apply then preflights every destination against its exact baseline type, content digest, and mode before propagating anything, performs atomic file replacement, and verifies the resulting checkout and protected Git state again. Safe existing ordinary `rwx` modes are preserved, existing special bits are stripped, new or group/world-writable modes become owner-only, and staged files carrying setuid/setgid/sticky bits are rejected before any propagation. Hook-owned runtime files default to `0600` and runtime directories to `0700`.
 
 These controls are OpenCode permission and workspace isolation, not an operating-system sandbox. Compare-and-swap preflight minimizes lost updates but cannot make the interval between preflight and filesystem replacement atomic against an independent local process. Ignored worktree trees, Git object/LFS stores, shared reflogs, and metadata belonging only to other linked worktrees are intentionally excluded from bounded snapshots; direct changes there may not be detected. Critical shared refs/config/hooks remain monitored. Automatic rollback is avoided so pre-existing user changes are not overwritten.
+
+### Beads maintenance boundary
+
+The `beads_alignment` executor is for ordinary native `bd update` and `bd close`
+operations only. It does not run migrations, synchronize embedded Dolt, or
+publish Dolt refs. Hook-launched Beads commands also discard
+`BD_ALLOW_REMOTE_MIGRATE`, `BD_IGNORE_SCHEMA_SKEW`, and `BD_SMART_GATE` from
+their inherited environment so an operator maintenance override cannot leak
+into a push hook.
+
+Treat a Beads schema migration as separate operator maintenance. Pin and
+verify the native `bd` version, stop Beads writers and hooks, take a cold full
+backup of `.beads`, and rehearse against a disposable copy before opening the
+live embedded-Dolt store. Verify the schema, semantic issue/dependency data,
+memories, and a clean Dolt working set before and after the live cutover.
+Remote publication, including `bd dolt push`, is a separate explicit action;
+a successful local migration does not authorize it. Do not replace this flow
+with Beads-Rust (`br`).
 
 ## Full-featured alternative: Lefthook
 

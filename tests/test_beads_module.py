@@ -167,6 +167,9 @@ def test_beads_alignment_executes_only_validated_alignment_commands(
     resolutions: list[pathlib.Path] = []
     monkeypatch.setenv("BD_DB", "/tmp/beads.db")
     monkeypatch.setenv("DOLT_USERNAME", "beads-user")
+    monkeypatch.setenv("BD_ALLOW_REMOTE_MIGRATE", "1")
+    monkeypatch.setenv("BD_IGNORE_SCHEMA_SKEW", "1")
+    monkeypatch.setenv("BD_SMART_GATE", "0")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-pass")
     monkeypatch.setenv("PYTHONPATH", "must-not-pass")
 
@@ -212,6 +215,9 @@ def test_beads_alignment_executes_only_validated_alignment_commands(
         assert inherit_env is False
         assert env["BD_DB"] == "/tmp/beads.db"
         assert env["DOLT_USERNAME"] == "beads-user"
+        assert "BD_ALLOW_REMOTE_MIGRATE" not in env
+        assert "BD_IGNORE_SCHEMA_SKEW" not in env
+        assert "BD_SMART_GATE" not in env
         assert "UNRELATED_SECRET" not in env
         assert "PYTHONPATH" not in env
 

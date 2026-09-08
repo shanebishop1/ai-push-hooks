@@ -17,6 +17,23 @@ From a clone with Python and [uv](https://docs.astral.sh/uv/) installed:
 uv run --no-project --with pytest pytest tests -q
 ```
 
+### Beads repository maintenance
+
+Repository task state uses the native Beads `bd` CLI with embedded Dolt. Do
+not substitute Beads-Rust (`br`). Schema migration is an explicit operator
+maintenance task, not part of normal hook execution: freeze Beads writers,
+make and checksum a cold full `.beads` backup outside the repository, rehearse
+the pinned native `bd` migration on a disposable copy, and verify schema,
+semantic records and relations, memories, and a clean Dolt working set before
+touching live data. A local migration does not authorize `bd dolt push`, sync,
+remote/ref changes, or independent migration by another clone.
+
+Never export migration bypasses such as `BD_ALLOW_REMOTE_MIGRATE`,
+`BD_IGNORE_SCHEMA_SKEW`, or `BD_SMART_GATE` into ordinary development or hook
+environments. The Beads alignment executor strips them and permits only the
+documented `bd update` and `bd close` forms. Continue to run tests only against
+disposable repositories, never the live `.beads` store.
+
 Validate both distribution surfaces before submitting package or wrapper changes:
 
 ```bash

@@ -4,7 +4,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
-No changes yet.
+### Fixed
+
+- Prevented hook-launched Beads alignment updates from inheriting schema and
+  remote-migration safety overrides.
+
+### Documentation
+
+- Documented the native `bd` maintenance, backup, rehearsal, and remote
+  publication boundaries; Beads-Rust (`br`) is not supported.
 
 ## [0.2.0] - 2026-09-06
 
