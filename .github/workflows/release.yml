@@ -196,7 +196,7 @@ jobs:
         with:
           packages-dir: pypi-publish
 
-      - name: Verify PyPI identities after the single publish attempt
+      - name: Verify PyPI identities after publish with bounded propagation wait
         if: always()
         run: |
           python scripts/release_validation.py registry-verify \

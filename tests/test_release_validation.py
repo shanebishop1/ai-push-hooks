@@ -215,6 +215,176 @@ def test_registry_identity_and_partial_state_use_exact_hashes(tmp_path, monkeypa
     assert missing == [sdist.name]
 
 
+def _pypi_manifest():
+    return {
+        "version": "1.2.3",
+        "npm_version": "1.2.3",
+        "artifacts": [
+            {
+                "kind": "wheel",
+                "name": "ai_push_hooks-1.2.3-py3-none-any.whl",
+                "sha256": "a" * 64,
+            },
+            {
+                "kind": "sdist",
+                "name": "ai_push_hooks-1.2.3.tar.gz",
+                "sha256": "b" * 64,
+            },
+        ],
+    }
+
+
+def _pypi_payload(manifest, names):
+    return {
+        "info": {"name": "ai-push-hooks", "version": manifest["version"]},
+        "urls": [
+            {
+                "filename": name,
+                "digests": {
+                    "sha256": next(
+                        item["sha256"]
+                        for item in manifest["artifacts"]
+                        if item["name"] == name
+                    )
+                },
+            }
+            for name in names
+        ],
+    }
+
+
+def test_post_publication_verification_retries_404_then_complete(monkeypatch):
+    manifest = _pypi_manifest()
+    complete = json.dumps(
+        _pypi_payload(manifest, [item["name"] for item in manifest["artifacts"]])
+    ).encode()
+    opener, remaining = opener_for(MockResponse(404), MockResponse(200, complete))
+    logs = []
+    monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
+
+    release.verify_registry_after_publish(
+        "pypi",
+        manifest,
+        attempts=3,
+        deadline=10,
+        opener=opener,
+        sleeper=lambda _delay: None,
+        clock=lambda: 0.0,
+        log=logs.append,
+    )
+
+    assert not remaining
+    assert "state=HTTP 404" in logs[0]
+    assert "exact artifact hashes matched" in logs[-1]
+
+
+def test_post_publication_verification_retries_partial_then_complete(monkeypatch):
+    manifest = _pypi_manifest()
+    names = [item["name"] for item in manifest["artifacts"]]
+    partial = json.dumps(_pypi_payload(manifest, names[:1])).encode()
+    complete = json.dumps(_pypi_payload(manifest, names)).encode()
+    opener, remaining = opener_for(MockResponse(200, partial), MockResponse(200, complete))
+    monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
+
+    release.verify_registry_after_publish(
+        "pypi",
+        manifest,
+        attempts=3,
+        deadline=10,
+        opener=opener,
+        sleeper=lambda _delay: None,
+        clock=lambda: 0.0,
+        log=lambda _message: None,
+    )
+
+    assert not remaining
+
+
+@pytest.mark.parametrize("state", ["404", "partial"])
+def test_post_publication_verification_exhausts_incomplete_state(state, monkeypatch):
+    manifest = _pypi_manifest()
+    names = [item["name"] for item in manifest["artifacts"]]
+    response = MockResponse(404) if state == "404" else MockResponse(
+        200, json.dumps(_pypi_payload(manifest, names[:1])).encode()
+    )
+    opener, remaining = opener_for(response, response)
+    monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
+
+    with pytest.raises(release.ReleaseValidationError, match="exhausted after 2 attempts"):
+        release.verify_registry_after_publish(
+            "pypi",
+            manifest,
+            attempts=2,
+            deadline=10,
+            opener=opener,
+            sleeper=lambda _delay: None,
+            clock=lambda: 0.0,
+            log=lambda _message: None,
+        )
+    assert not remaining
+
+
+def test_post_publication_verification_stops_at_deadline(monkeypatch):
+    manifest = _pypi_manifest()
+    now = [0.0]
+    opener, remaining = opener_for(MockResponse(404), MockResponse(404))
+    monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
+
+    with pytest.raises(release.ReleaseValidationError, match="exhausted after 1 attempts"):
+        release.verify_registry_after_publish(
+            "pypi",
+            manifest,
+            attempts=3,
+            deadline=0.1,
+            opener=opener,
+            sleeper=lambda delay: now.__setitem__(0, now[0] + delay),
+            clock=lambda: now[0],
+            log=lambda _message: None,
+        )
+    assert len(remaining) == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        MockResponse(401),
+        MockResponse(
+            200,
+            json.dumps(
+                {
+                    "info": {"name": "ai-push-hooks", "version": "1.2.3"},
+                    "urls": [
+                        {
+                            "filename": "ai_push_hooks-1.2.3-py3-none-any.whl",
+                            "digests": {"sha256": "wrong"},
+                        }
+                    ],
+                }
+            ).encode(),
+        ),
+    ],
+)
+def test_post_publication_verification_fails_immediately_on_auth_or_mismatch(
+    response, monkeypatch
+):
+    manifest = _pypi_manifest()
+    opener, remaining = opener_for(response, MockResponse(200))
+    monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
+
+    with pytest.raises(release.ReleaseValidationError):
+        release.verify_registry_after_publish(
+            "pypi",
+            manifest,
+            attempts=3,
+            deadline=10,
+            opener=opener,
+            sleeper=lambda _delay: None,
+            clock=lambda: 0.0,
+            log=lambda _message: None,
+        )
+    assert len(remaining) == 1
+
+
 def test_registry_404_is_absent_and_not_auth_or_outage(tmp_path):
     manifest = {
         "version": "1.2.3",

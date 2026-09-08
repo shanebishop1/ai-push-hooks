@@ -28,6 +28,8 @@ from typing import Any, Callable, Iterable
 
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_ATTEMPTS = 3
+POST_PUBLICATION_ATTEMPTS = 6
+POST_PUBLICATION_DEADLINE = 60.0
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PROJECT_NAME = "ai-push-hooks"
 PYPI_URL = "https://pypi.org/pypi"
@@ -539,6 +541,76 @@ def registry_decision(
     return _pypi_decision(manifest, payload) if registry == "pypi" else _npm_decision(manifest, payload)
 
 
+def verify_registry_after_publish(
+    registry: str,
+    manifest: dict[str, Any],
+    *,
+    attempts: int = POST_PUBLICATION_ATTEMPTS,
+    deadline: float = POST_PUBLICATION_DEADLINE,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    sleeper: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    log: Callable[[str], None] = print,
+) -> None:
+    """Verify a successful publish while allowing bounded registry propagation.
+
+    Pre-publication checks must continue using :func:`registry_decision`, where
+    a 404 is an absence decision.  This post-publication-only path retries only
+    the safe-to-re-read incomplete states; authentication, outage, malformed
+    metadata, and hash mismatches still raise immediately.
+    """
+
+    if attempts < 1 or deadline <= 0:
+        raise ValueError("attempts must be positive and deadline must be positive")
+    deadline_at = clock() + deadline
+    last_state = "unknown"
+    last_missing: list[str] = []
+    performed_attempts = 0
+    for attempt in range(1, attempts + 1):
+        if attempt > 1 and clock() >= deadline_at:
+            break
+        state, missing = registry_decision(
+            registry,
+            manifest,
+            opener=opener,
+            sleeper=sleeper,
+        )
+        performed_attempts = attempt
+        last_state, last_missing = state, missing
+        status = "HTTP 404" if state == "absent" else state
+        log(
+            f"{registry} post-publication verification attempt "
+            f"{attempt}/{attempts}: state={status}, missing={missing}"
+        )
+        if state == "complete" and not missing:
+            log(
+                f"{registry} post-publication verification complete: "
+                f"exact artifact hashes matched on attempt {attempt}/{attempts}"
+            )
+            return
+        if state not in {"absent", "partial"}:
+            raise ReleaseValidationError(
+                f"{registry} post-publication verification returned unsupported state: {state}"
+            )
+        if attempt == attempts:
+            break
+        remaining = deadline_at - clock()
+        if remaining <= 0:
+            break
+        delay = min(0.25 * (2 ** (attempt - 1)), remaining)
+        log(
+            f"{registry} post-publication verification is {state}; "
+            f"retrying in {delay:.2f}s before deadline"
+        )
+        sleeper(delay)
+    raise ReleaseValidationError(
+        f"{registry} post-publication verification exhausted after "
+        f"{performed_attempts} attempts (limit {attempts}, deadline {deadline:.1f}s): "
+        f"last_state={last_state}, "
+        f"missing={last_missing}"
+    )
+
+
 def stage_missing(manifest: dict[str, Any], root: Path, destination: Path, names: Iterable[str]) -> None:
     wanted = set(names)
     destination.mkdir(parents=True, exist_ok=True)
@@ -977,12 +1049,8 @@ def main(argv: list[str] | None = None) -> int:
             verify_staged(manifest, args.root, args.destination)
         elif args.command == "registry-verify":
             manifest = _read_json(args.manifest)
-            state, missing = registry_decision(args.registry, manifest)
-            if state != "complete" or missing:
-                raise ReleaseValidationError(
-                    f"{args.registry} verification incomplete: state={state}, missing={missing}"
-                )
-            print(f"{args.registry} artifact identity verified")
+            verify_registry_after_publish(args.registry, manifest)
+            print(f"{args.registry} artifact identity verified after publication")
         elif args.command == "github-release":
             manifest = _read_json(args.manifest)
             token = os.environ.get(args.token_env)

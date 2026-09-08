@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format is based on 
 
 - Prevented hook-launched Beads alignment updates from inheriting schema and
   remote-migration safety overrides.
+- Made post-publication PyPI verification tolerate bounded 404/partial metadata
+  propagation while retaining fail-closed artifact hash and authentication checks.
 
 ### Documentation
 
