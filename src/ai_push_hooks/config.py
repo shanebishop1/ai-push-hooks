@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import stat
+from collections.abc import Mapping
 from typing import Any
 
 from .executors.exec import env_bool, resolve_git_common_dir, resolve_git_dir
@@ -15,14 +17,25 @@ from .paths import (
     validate_path_component,
 )
 from .prompts_builtin import BUILTIN_PROMPTS
-from .types import GeneralConfig, HookConfig, HookError, LlmConfig, LoggingConfig, ModuleConfig, StepConfig, SUPPORTED_STEP_TYPES, WorkflowConfig
+from .types import (
+    GeneralConfig,
+    HookConfig,
+    HookError,
+    LlmConfig,
+    LoggingConfig,
+    ModuleConfig,
+    RunnerProfile,
+    StepConfig,
+    SUPPORTED_STEP_TYPES,
+    WorkflowConfig,
+)
 
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
-ALLOWED_TOP_LEVEL_KEYS = {"general", "llm", "logging", "workflow", "modules"}
+ALLOWED_TOP_LEVEL_KEYS = {"general", "llm", "logging", "workflow", "modules", "runners"}
 STORAGE_NAMESPACE_PARTS = (".git", "ai-push-hooks")
 GENERAL_KEYS = {
     "enabled",
@@ -67,7 +80,21 @@ STEP_KEYS = {
     "executor",
     "assertion",
     "when_env",
+    "runner",
 }
+RUNNER_TYPES = frozenset({"opencode", "codex", "claude", "command"})
+PROJECT_ACCESS_VALUES = frozenset({"artifacts", "project"})
+PROMPT_TRANSPORT_VALUES = frozenset({"stdin", "argv"})
+RUNNER_KEYS = {
+    "type",
+    "model",
+    "variant",
+    "project_access",
+    "command",
+    "prompt_transport",
+}
+RUNNER_PLACEHOLDERS = frozenset({"{prompt}", "{model}", "{cwd}", "{stage}"})
+RUNNER_PLACEHOLDER_PATTERN = re.compile(r"\{[^{}]*\}")
 
 
 def _require_table(value: Any, label: str) -> dict[str, Any]:
@@ -106,6 +133,85 @@ def _validate_string_list(table: dict[str, Any], key: str, label: str) -> None:
         raise HookError(f"{label}.{key} must be an array of strings")
 
 
+def _validate_non_empty_string(table: dict[str, Any], key: str, label: str) -> None:
+    _validate_string(table, key, label)
+    if key in table and not table[key].strip():
+        raise HookError(f"{label}.{key} must be a non-empty string")
+
+
+def _validate_runner_command_placeholders(command: list[str] | tuple[str, ...], label: str, transport: str, model: Any) -> None:
+    prompt_count = 0
+    for index, argument in enumerate(command, start=1):
+        argument_label = f"{label}.command[{index}]"
+        for placeholder in RUNNER_PLACEHOLDER_PATTERN.findall(argument):
+            if placeholder not in RUNNER_PLACEHOLDERS:
+                raise HookError(f"Unknown placeholder {placeholder!r} in {argument_label}")
+        if "{" in argument or "}" in argument:
+            if argument not in RUNNER_PLACEHOLDERS:
+                raise HookError(
+                    f"Placeholders in {argument_label} must be whole argv elements"
+                )
+        if argument == "{prompt}":
+            prompt_count += 1
+    if transport == "stdin" and prompt_count:
+        raise HookError(f"{label}.command must not contain {{prompt}} with stdin transport")
+    if transport == "argv" and prompt_count != 1:
+        raise HookError(
+            f"{label}.command must contain exactly one {{prompt}} with argv transport"
+        )
+    if "{model}" in command and not model:
+        raise HookError(f"{label}.command uses {{model}} but {label}.model is not configured")
+
+
+def _validate_runner_profiles(raw: dict[str, Any]) -> None:
+    runners = _require_table(raw.get("runners", {}), "runners")
+    for name, profile_value in runners.items():
+        if not isinstance(name, str) or not name.strip():
+            raise HookError("runners profile names must be non-empty strings")
+        label = f"runners.{name}"
+        profile = _require_table(profile_value, label)
+        _validate_unknown_keys(profile, RUNNER_KEYS, label)
+        if "type" not in profile:
+            raise HookError(f"{label}.type is required")
+        _validate_non_empty_string(profile, "type", label)
+        runner_type = profile["type"].strip()
+        if runner_type not in RUNNER_TYPES:
+            raise HookError(f"{label}.type must be one of: {', '.join(sorted(RUNNER_TYPES))}")
+        _validate_string(profile, "model", label)
+        if "model" in profile and not profile["model"].strip():
+            raise HookError(f"{label}.model must be a non-empty string when provided")
+        _validate_string(profile, "variant", label)
+        _validate_string(profile, "project_access", label)
+        _validate_string(profile, "prompt_transport", label)
+        if "project_access" in profile and profile["project_access"] not in PROJECT_ACCESS_VALUES:
+            raise HookError(f"{label}.project_access must be one of: artifacts, project")
+
+        type_specific_keys = {
+            "variant": runner_type == "opencode",
+            "command": runner_type == "command",
+            "prompt_transport": runner_type == "command",
+        }
+        for key, applicable in type_specific_keys.items():
+            if key in profile and not applicable:
+                raise HookError(f"{label}.{key} is only valid for runner type {('opencode' if key == 'variant' else 'command')}")
+
+        if runner_type != "command":
+            continue
+        if "command" not in profile:
+            raise HookError(f"{label}.command is required for runner type command")
+        _validate_string_list(profile, "command", label)
+        command = profile["command"]
+        if not command:
+            raise HookError(f"{label}.command must be a non-empty array")
+        for index, argument in enumerate(command, start=1):
+            if not argument.strip():
+                raise HookError(f"{label}.command[{index}] must be a non-empty string")
+        transport = profile.get("prompt_transport", "stdin")
+        if transport not in PROMPT_TRANSPORT_VALUES:
+            raise HookError(f"{label}.prompt_transport must be one of: argv, stdin")
+        _validate_runner_command_placeholders(command, label, transport, profile.get("model"))
+
+
 def _validate_integer(
     table: dict[str, Any], key: str, label: str, *, minimum: int | None = None
 ) -> None:
@@ -140,6 +246,7 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
     _validate_unknown_keys(llm, LLM_KEYS, "llm")
     for key in ("runner", "model", "variant", "session_title_prefix"):
         _validate_string(llm, key, "llm")
+    _validate_non_empty_string(llm, "runner", "llm")
     for key in ("json_retry_new_session", "delete_session_after_run"):
         _validate_bool(llm, key, "llm")
     _validate_integer(llm, "timeout_seconds", "llm", minimum=1)
@@ -186,10 +293,39 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     "prompt_file",
                     "fallback_prompt_id",
                     "when_env",
+                    "runner",
                 ):
                     _validate_string(step, key, label, allow_none=True)
                 for key in ("inputs", "allow_paths"):
                     _validate_string_list(step, key, label)
+                if "runner" in step and step["runner"] is not None and not step["runner"].strip():
+                    raise HookError(f"{label}.runner must be a non-empty string")
+                if (
+                    step.get("runner") is not None
+                    and isinstance(step.get("type"), str)
+                    and step["type"] in {"collect", "exec", "assert"}
+                ):
+                    raise HookError(f"{label}.runner is only valid on llm and apply steps")
+
+    _validate_runner_profiles(raw)
+
+
+def _normalize_runner_profile(name: str, raw: dict[str, Any]) -> RunnerProfile:
+    runner_type = str(raw["type"]).strip()
+    return RunnerProfile(
+        name=name,
+        type=runner_type,
+        model=str(raw["model"]) if raw.get("model") is not None else None,
+        variant=str(raw["variant"]) if raw.get("variant") is not None else None,
+        project_access=str(
+            raw.get(
+                "project_access",
+                "artifacts" if runner_type == "opencode" else "project",
+            )
+        ),
+        command=tuple(str(item) for item in raw.get("command", []) or []),
+        prompt_transport=str(raw.get("prompt_transport", "stdin")),
+    )
 
 
 def _normalize_step(raw: dict[str, Any]) -> StepConfig:
@@ -214,6 +350,7 @@ def _normalize_step(raw: dict[str, Any]) -> StepConfig:
         executor=str(raw.get("executor")).strip() if raw.get("executor") is not None else None,
         assertion=str(raw.get("assertion")).strip() if raw.get("assertion") is not None else None,
         when_env=str(raw.get("when_env")).strip() if raw.get("when_env") is not None else None,
+        runner=str(raw.get("runner")).strip() if raw.get("runner") is not None else None,
     )
     if not step.id:
         raise HookError("Every workflow step requires a non-empty id")
@@ -277,6 +414,22 @@ def _build_config(raw: dict[str, Any]) -> HookConfig:
     general = GeneralConfig(**raw.get("general", {}))
     llm = LlmConfig(**raw.get("llm", {}))
     logging = LoggingConfig(**raw.get("logging", {}))
+    runner_payload = raw.get("runners", {})
+    runners = {
+        name: _normalize_runner_profile(name, profile)
+        for name, profile in runner_payload.items()
+    }
+    if llm.runner != "opencode" and llm.runner not in runners:
+        raise HookError(f"llm.runner references missing runner profile `{llm.runner}`")
+    for module in modules.values():
+        for index, step in enumerate(module.steps, start=1):
+            if step.runner is None:
+                continue
+            if step.runner != "opencode" and step.runner not in runners:
+                raise HookError(
+                    f"modules.{module.id}.steps[{index}].runner references missing runner profile "
+                    f"`{step.runner}`"
+                )
     for label, storage_path in (
         ("logging.dir", logging.dir),
         ("logging.transcript_dir", logging.transcript_dir),
@@ -291,6 +444,54 @@ def _build_config(raw: dict[str, Any]) -> HookConfig:
         logging=logging,
         workflow=WorkflowConfig(modules=workflow_modules),
         modules=modules,
+        runners=runners,
+    )
+
+
+def resolve_runner_profile(
+    config: HookConfig,
+    step: StepConfig,
+    env: Mapping[str, str] | None = None,
+) -> RunnerProfile:
+    """Resolve the runner selected by a promptable step and apply final env overrides."""
+    if step.type not in {"llm", "apply"} and step.runner is not None:
+        raise HookError(f"Step `{step.id}` may not select a runner")
+
+    selected_name = step.runner or config.llm.runner
+    profile = config.runners.get(selected_name)
+    if profile is None:
+        if selected_name != "opencode":
+            raise HookError(f"Runner profile `{selected_name}` does not exist")
+        profile = RunnerProfile(
+            name="opencode",
+            type="opencode",
+            model=config.llm.model,
+            variant=config.llm.variant,
+            project_access="artifacts",
+        )
+
+    environment = os.environ if env is None else env
+    model = profile.model
+    model_override = environment.get("AI_PUSH_HOOKS_MODEL")
+    if model_override is not None:
+        if not model_override:
+            raise HookError("AI_PUSH_HOOKS_MODEL must be a non-empty model identifier")
+        model = model_override
+
+    variant = profile.variant
+    if profile.type == "opencode":
+        variant_override = environment.get("AI_PUSH_HOOKS_VARIANT")
+        if variant_override is not None:
+            variant = variant_override.strip()
+
+    return RunnerProfile(
+        name=selected_name,
+        type=profile.type,
+        model=model,
+        variant=variant,
+        project_access=profile.project_access,
+        command=profile.command,
+        prompt_transport=profile.prompt_transport,
     )
 
 
@@ -307,12 +508,26 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
         "logging": config.logging.__dict__.copy(),
         "workflow": {"modules": list(config.workflow.modules)},
         "modules": {},
+        "runners": {},
     }
     for module_id, module in config.modules.items():
         raw["modules"][module_id] = {
             "enabled": module.enabled,
             "steps": [step.__dict__.copy() for step in module.steps],
         }
+    for name, profile in config.runners.items():
+        runner_raw: dict[str, Any] = {
+            "type": profile.type,
+            "project_access": profile.project_access,
+        }
+        if profile.model is not None:
+            runner_raw["model"] = profile.model
+        if profile.variant is not None:
+            runner_raw["variant"] = profile.variant
+        if profile.type == "command":
+            runner_raw["command"] = list(profile.command)
+            runner_raw["prompt_transport"] = profile.prompt_transport
+        raw["runners"][name] = runner_raw
 
     def read_env_bool(name: str) -> bool | None:
         value = os.getenv(name)

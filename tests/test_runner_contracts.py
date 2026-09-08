@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+import pathlib
+import sys
+
+import pytest
+
+from ai_push_hooks.executors.runners import (
+    KNOWN_RUNNER_TYPES,
+    LazyRunnerSpec,
+    ProcessResult,
+    RunnerCapabilities,
+    RunnerError,
+    RunnerExecutableNotFoundError,
+    RunnerMissingOutputError,
+    RunnerNonzeroExitError,
+    RunnerProtocolError,
+    RunnerRegistry,
+    RunnerRequest,
+    RunnerResult,
+    RunnerSignalError,
+    RunnerTimeoutError,
+    RunnerArtifact,
+    SessionMetadata,
+    build_prompt_packet,
+    bounded_redacted_diagnostics,
+    finalize_runner,
+    require_final_text,
+    require_zero_exit,
+    run_process,
+    strip_terminal_controls,
+)
+
+
+def request(tmp_path: pathlib.Path, **overrides: object) -> RunnerRequest:
+    values: dict[str, object] = {
+        "profile_id": "review",
+        "runner_type": "command",
+        "stage": "docs.query",
+        "purpose": "llm:query",
+        "mode": "llm",
+        "instruction": "Summarize the change.",
+        "artifacts": (
+            RunnerArtifact("first.txt", "first body"),
+            RunnerArtifact("second.txt", "second body"),
+        ),
+        "cwd": tmp_path,
+        "timeout_seconds": 2,
+    }
+    values.update(overrides)
+    return RunnerRequest(**values)
+
+
+def test_request_is_flat_and_packet_inputs_remain_ordered(tmp_path: pathlib.Path) -> None:
+    value = request(tmp_path)
+
+    assert value.profile_id == "review"
+    assert value.runner_type == "command"
+    assert [artifact.name for artifact in value.artifacts] == ["first.txt", "second.txt"]
+    assert [artifact.content for artifact in value.artifacts] == ["first body", "second body"]
+    assert "first body" not in repr(value)
+    assert "second body" not in repr(value)
+
+
+def test_prompt_packet_rendering_preserves_instruction_and_artifact_order(tmp_path: pathlib.Path) -> None:
+    value = request(tmp_path)
+    packet = build_prompt_packet(value).render()
+
+    assert packet.index("first.txt") < packet.index("second.txt")
+    assert "first body" in packet and "second body" in packet
+    assert value.instruction in packet
+
+
+def test_registry_has_only_static_known_types_and_loads_lazily(tmp_path: pathlib.Path) -> None:
+    loaded: list[str] = []
+
+    class FakeRunner:
+        capabilities = RunnerCapabilities()
+
+        def run(self, _request: RunnerRequest) -> RunnerResult:
+            return RunnerResult("ok", 0, "", "")
+
+    def factory() -> FakeRunner:
+        loaded.append("command")
+        return FakeRunner()
+
+    specs = {
+        name: LazyRunnerSpec("unused") for name in KNOWN_RUNNER_TYPES
+    }
+    specs["command"] = factory
+    registry = RunnerRegistry(specs)
+
+    assert registry.known_types == KNOWN_RUNNER_TYPES
+    assert loaded == []
+    assert registry.get("command").run(request(tmp_path)).final_text == "ok"
+    assert loaded == ["command"]
+    assert registry.get("command") is registry.get("command")
+    with pytest.raises(ValueError, match="unknown runner type"):
+        registry.get("not-a-runner")
+
+
+def test_result_and_session_metadata_do_not_claim_ephemeral_transcript_as_persisted() -> None:
+    result = RunnerResult(
+        final_text="done",
+        returncode=0,
+        stdout="raw",
+        stderr="",
+        session=SessionMetadata(session_id="s-1", state="ephemeral"),
+    )
+
+    assert result.session is not None
+    assert result.session.state == "ephemeral"
+    assert result.session.resumable is False
+    assert "raw" not in repr(result)
+
+    with pytest.raises(ValueError, match="only persisted"):
+        SessionMetadata(session_id="s-1", state="deleted", resumable=True)
+
+
+def test_optional_finalize_capability_is_a_noop_when_not_supported(tmp_path: pathlib.Path) -> None:
+    class NoLifecycle:
+        capabilities = RunnerCapabilities()
+
+        def run(self, _request: RunnerRequest) -> RunnerResult:
+            return RunnerResult("done", 0, "", "")
+
+    value = request(tmp_path)
+    result = RunnerResult("done", 0, "", "")
+    assert finalize_runner(NoLifecycle(), value, result) is result
+
+
+def test_finalize_capability_must_return_a_runner_result(tmp_path: pathlib.Path) -> None:
+    class BadLifecycle:
+        capabilities = RunnerCapabilities(supports_finalize=True)
+
+        def finalize(self, _request: RunnerRequest, _result: RunnerResult) -> object:
+            return object()
+
+    with pytest.raises(RunnerProtocolError, match="finalizer"):
+        finalize_runner(BadLifecycle(), request(tmp_path), RunnerResult("done", 0, "", ""))
+
+
+def test_diagnostics_are_bounded_redacted_and_do_not_need_environment_or_prompt(tmp_path: pathlib.Path) -> None:
+    diagnostic = bounded_redacted_diagnostics(
+        "prompt body api_key=super-secret " + "x" * 20,
+        "Authorization: Bearer bearer-secret",
+        max_chars=80,
+        secrets=("super-secret", "bearer-secret"),
+    )
+
+    assert len(diagnostic) <= 80
+    assert "super-secret" not in diagnostic
+    assert "bearer-secret" not in diagnostic
+    assert "prompt body" in diagnostic
+
+    value = request(tmp_path, instruction="do not leak this prompt")
+    assert "do not leak this prompt" not in repr(value)
+
+
+def test_result_accepts_multiline_final_text_and_ansi_child_output() -> None:
+    result = RunnerResult(
+        final_text="## Summary\n- one\n- two",
+        returncode=0,
+        stdout="\x1b[32mchild output\x1b[0m\n",
+        stderr="\x1b]0;secret title\x07warning\n",
+    )
+
+    assert result.final_text == "## Summary\n- one\n- two"
+    assert result.stdout.startswith("\x1b[32m")
+    assert strip_terminal_controls(result.stderr) == "warning\n"
+
+
+def test_failure_diagnostics_redact_echoed_packet_and_credential_formats(
+    tmp_path: pathlib.Path,
+) -> None:
+    value = request(
+        tmp_path,
+        instruction="Never expose prompt-secret",
+        artifacts=(RunnerArtifact("input.txt", "artifact-secret"),),
+    )
+    echoed = (
+        value.prompt_packet().render()
+        + '\n{"api_key": "json-secret", "OPENAI_API_KEY": "env-secret"}\n'
+        + "\x1b[31mterminal-secret\x1b[0m"
+    )
+    result = RunnerResult("", 7, echoed, echoed)
+
+    with pytest.raises(RunnerNonzeroExitError) as error:
+        require_zero_exit(
+            value,
+            result,
+            env={"OPENAI_API_KEY": "env-secret", "TERMINAL_TOKEN": "terminal-secret"},
+        )
+
+    message = str(error.value)
+    for secret in (
+        "prompt-secret",
+        "artifact-secret",
+        "json-secret",
+        "env-secret",
+        "terminal-secret",
+    ):
+        assert secret not in message
+    assert "[REDACTED]" in message
+    assert "\x1b" not in message
+
+
+def test_shell_free_process_execution_captures_stdin_and_separate_streams(tmp_path: pathlib.Path) -> None:
+    result = run_process(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('\\x1b[32m' + sys.stdin.read() + '\\x1b[0m', end=''); print('diagnostic', file=sys.stderr)",
+        ],
+        cwd=tmp_path,
+        input_text="ordered packet",
+        timeout_seconds=2,
+    )
+
+    assert isinstance(result, ProcessResult)
+    assert result.returncode == 0
+    assert result.stdout == "\x1b[32mordered packet\x1b[0m"
+    assert result.stderr.strip() == "diagnostic"
+
+
+def test_process_errors_classify_not_found_timeout_and_signal(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(RunnerExecutableNotFoundError):
+        run_process([str(tmp_path / "missing-executable")], cwd=tmp_path, timeout_seconds=1)
+
+    with pytest.raises(RunnerTimeoutError):
+        run_process(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            cwd=tmp_path,
+            timeout_seconds=0.05,
+        )
+
+    with pytest.raises(RunnerSignalError):
+        run_process(
+            [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],
+            cwd=tmp_path,
+            timeout_seconds=2,
+        )
+
+
+def test_process_start_errors_do_not_echo_raw_exception_arguments(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_to_start(*_args: object, **_kwargs: object) -> None:
+        raise OSError("api_key=exception-secret")
+
+    monkeypatch.setattr("ai_push_hooks.executors.runners.process.subprocess.Popen", fail_to_start)
+    with pytest.raises(RunnerError) as error:
+        run_process([sys.executable], cwd=tmp_path, timeout_seconds=1)
+    assert "exception-secret" not in str(error.value)
+
+
+def test_nonzero_and_missing_final_output_are_distinct_contract_failures(tmp_path: pathlib.Path) -> None:
+    value = request(tmp_path)
+    result = RunnerResult("", 7, "", "token=hidden")
+    with pytest.raises(RunnerNonzeroExitError, match="review.*command.*docs.query"):
+        require_zero_exit(value, result, secrets=("hidden",))
+    with pytest.raises(RunnerMissingOutputError):
+        require_final_text("", mode="llm")
+    assert require_final_text("", mode="apply") == ""

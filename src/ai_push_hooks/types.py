@@ -86,6 +86,17 @@ class LlmConfig:
 
 
 @dataclass(frozen=True)
+class RunnerProfile:
+    type: str
+    name: str = ""
+    model: str | None = None
+    variant: str | None = None
+    project_access: str = "artifacts"
+    command: tuple[str, ...] = ()
+    prompt_transport: str = "stdin"
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     level: str = "status"
     jsonl: bool = True
@@ -111,6 +122,7 @@ class StepConfig:
     executor: str | None = None
     assertion: str | None = None
     when_env: str | None = None
+    runner: str | None = None
 
     @property
     def is_read_only(self) -> bool:
@@ -140,6 +152,7 @@ class HookConfig:
     logging: LoggingConfig
     workflow: WorkflowConfig
     modules: dict[str, ModuleConfig]
+    runners: dict[str, RunnerProfile] = field(default_factory=dict)
 
 
 @dataclass

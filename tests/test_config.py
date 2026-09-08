@@ -6,7 +6,7 @@ import re
 import pytest
 
 from ai_push_hooks.artifacts import generate_run_id
-from ai_push_hooks.config import load_config
+from ai_push_hooks.config import load_config, resolve_runner_profile
 from ai_push_hooks.executors import exec as exec_module
 from ai_push_hooks.types import HookError
 
@@ -507,3 +507,174 @@ def test_load_config_rejects_case_variant_protected_apply_paths(
 
     with pytest.raises(HookError, match="Git metadata|AGENTS.md"):
         load_config(repo)
+
+
+def test_runner_profiles_resolve_step_override_and_environment_precedence(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[llm]
+runner = "codex-review"
+model = "legacy-model"
+variant = "legacy-variant"
+
+[runners.codex-review]
+type = "codex"
+model = "codex-model"
+project_access = "project"
+
+[runners.pi-apply]
+type = "command"
+model = "pi-model"
+project_access = "project"
+prompt_transport = "stdin"
+command = ["pi", "--print", "--model", "{model}"]
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+
+[[modules.docs.steps]]
+id = "apply"
+type = "apply"
+prompt = "Apply the change"
+allow_paths = ["README.md"]
+runner = "pi-apply"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, _ = load_config(tmp_path)
+    llm_step = config.modules["docs"].steps[0]
+    apply_step = config.modules["docs"].steps[1]
+
+    default = resolve_runner_profile(config, llm_step, {"AI_PUSH_HOOKS_MODEL": "env-model"})
+    selected = resolve_runner_profile(
+        config,
+        apply_step,
+        {"AI_PUSH_HOOKS_MODEL": "env-model", "AI_PUSH_HOOKS_VARIANT": "ignored"},
+    )
+
+    assert (default.name, default.type, default.model, default.project_access) == (
+        "codex-review",
+        "codex",
+        "env-model",
+        "project",
+    )
+    assert (selected.name, selected.type, selected.model, selected.command) == (
+        "pi-apply",
+        "command",
+        "env-model",
+        ("pi", "--print", "--model", "{model}"),
+    )
+    assert selected.variant is None
+
+
+def test_legacy_opencode_runner_resolves_implicit_artifact_profile(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[llm]
+runner = "opencode"
+model = "legacy-model"
+variant = ""
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "query"
+type = "llm"
+prompt = "Return JSON"
+output = "query.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, _ = load_config(tmp_path)
+    profile = resolve_runner_profile(config, config.modules["docs"].steps[0], {})
+
+    assert profile.name == "opencode"
+    assert profile.type == "opencode"
+    assert profile.model == "legacy-model"
+    assert profile.variant == ""
+    assert profile.project_access == "artifacts"
+
+
+@pytest.mark.parametrize(
+    ("profile", "message"),
+    [
+        ('type = "codex"\nvariant = "sonnet"', "runners.bad.variant"),
+        (
+            'type = "command"\ncommand = ["agent", "--prompt={prompt}"]',
+            "whole argv elements",
+        ),
+        (
+            'type = "command"\nprompt_transport = "argv"\ncommand = ["agent"]',
+            "exactly one",
+        ),
+        ('type = "command"\ncommand = ["agent", "{unknown}"]', "Unknown placeholder"),
+    ],
+)
+def test_runner_profile_validation_is_strict(
+    tmp_path: pathlib.Path, profile: str, message: str
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        f"""
+[runners.bad]
+{profile}
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match=message):
+        load_config(tmp_path)
+
+
+def test_runner_selection_is_rejected_on_non_promptable_step(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+runner = "opencode"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match=r"modules.docs.steps\[1\].runner"):
+        load_config(tmp_path)
