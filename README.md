@@ -249,21 +249,23 @@ wheel and packed npm installed-hook tests use disposable repositories, full
 40-character Git object IDs, a local bare remote, and a minimal PATH. The
 Lefthook **2.1.9** was also run in a disposable repository to install a
 pre-push hook and verify argument/stdin forwarding. The real OpenCode contract
-is separately documented as a Linux Docker check; Docker was unavailable in
-the macOS validation environment, so that gate was not rerun here. Python
-3.10, 3.11, and 3.13 and Node 18 were not available in this validation
-environment and are not claimed as locally run.
+also passed in a Linux arm64 Docker container launched from this macOS host.
+Python 3.10, 3.11, and 3.13 and Node 18 were not available in this validation
+environment and are not claimed as locally run; their jobs remain part of the
+GitHub Actions matrix.
 
 Prior recorded BR evidence also covers the real OpenCode 1.18.29 CLI with a
 loopback mock provider inside a Linux Docker runtime with networking disabled.
 That is mock-provider permission/workspace evidence, not live-provider or
 operating-system-sandbox evidence.
 
-Validation results for this snapshot are **255 passed** for the full Python
-suite, **8 passed** for install-unit coverage, **2 passed** for installed wheel
-and npm hook coverage, a passing `npm run test:npm-pack`, and a passing
-Lefthook 2.1.9 disposable argument/stdin-forwarding check. The Docker contract
-was blocked with exit 2 because no Docker daemon was available.
+Validation results for this snapshot are **273 passed, 1 skipped** for the full
+Python suite, **8 passed** for install-unit coverage, **2 passed** for installed
+wheel and npm hook coverage against the exact release artifacts, a passing
+`npm run test:npm-pack`, and a passing Lefthook 2.1.9 disposable
+argument/stdin-forwarding check. The Docker contract passed against the real
+OpenCode 1.18.29 CLI with runtime networking disabled and a loopback mock
+provider.
 
 Python 3.10–3.13 and Node 18+ remain the declared compatibility ranges, not a
 claim that every patch/platform combination has passed. Windows has no native
