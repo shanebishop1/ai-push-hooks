@@ -4,8 +4,19 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-08
+
+This is a beta patch release. Python and npm both use `0.2.1`, the canonical
+Git tag is `v0.2.1`, npm uses the `beta` dist-tag, and GitHub marks the release
+as a prerelease.
+
 ### Fixed
 
+- Restored OpenCode's built-in plugins, including built-in authentication such as
+  Codex OAuth, during isolated runs. `--pure` still excludes external plugins,
+  and project/global configuration and plugins remain isolated.
+- Restored forwarding of recognized provider environment variables, including
+  `OPENAI_API_KEY`, so OpenCode itself selects the authentication path.
 - Prevented hook-launched Beads alignment updates from inheriting schema and
   remote-migration safety overrides.
 - Made post-publication PyPI verification tolerate bounded 404/partial metadata
@@ -68,6 +79,7 @@ the exact `0.2.0` version rather than a PyPI beta channel.
 - Preserved Git porcelain paths and protected pre-existing dirty allowlisted files during apply steps.
 - Clarified module-local artifact references and standardized the repository hook integration.
 
-[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.1.19...v0.2.0
 [0.1.19]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.1.18...v0.1.19

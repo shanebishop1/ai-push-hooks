@@ -100,7 +100,6 @@ def opencode_isolation_env(
         "OPENCODE_DISABLE_CLAUDE_CODE": "true",
         "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT": "true",
         "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "true",
-        "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
         "OPENCODE_DISABLE_LSP_DOWNLOAD": "true",
         "OPENCODE_DISABLE_SHARE": "true",
         "OPENCODE_DISABLE_AUTOUPDATE": "true",

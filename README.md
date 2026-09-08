@@ -21,7 +21,7 @@ This is the shortest path. It installs the package, writes the exact starter
 configuration filename, and installs a repository-local `pre-push` delegate:
 
 ```bash
-python -m pip install ai-push-hooks==0.2.0
+python -m pip install ai-push-hooks==0.2.1
 ai-push-hooks init --template minimal-docs
 ai-push-hooks install
 ```
@@ -33,9 +33,9 @@ the bare remote. The first command above can instead be `uv tool install
 ai-push-hooks` or `pipx install ai-push-hooks` when using an isolated
 application environment.
 
-These instructions describe the `0.2.0` beta release. npm exposes it through
+These instructions describe the `0.2.1` beta release. npm exposes it through
 the `beta` dist-tag; PyPI has no separate beta channel, so Python installation
-must select the exact `0.2.0` version. Published `0.1.19` artifacts retain
+must select the exact `0.2.1` version. Published `0.1.19` artifacts retain
 historical provenance and must not be assumed to contain this release's
 `install` command.
 
@@ -55,7 +55,7 @@ npx --no-install ai-push-hooks install
 # or: pnpm add -D ai-push-hooks && pnpm exec ai-push-hooks install
 ```
 
-Use `ai-push-hooks@0.2.0` instead of `@beta` when an exact npm version pin is
+Use `ai-push-hooks@0.2.1` instead of `@beta` when an exact npm version pin is
 required.
 
 The npm package does not contain a Python runtime. Ensure the Python
@@ -85,14 +85,14 @@ resolved. The fallback delegate fails clearly with status 127 if
 Pin an approved published release in the consuming repository:
 
 ```bash
-mise use npm:ai-push-hooks@0.2.0
+mise use npm:ai-push-hooks@0.2.1
 ```
 
 This adds the following project-level tool entry to `mise.toml` and installs it:
 
 ```toml
 [tools]
-"npm:ai-push-hooks" = "0.2.0"
+"npm:ai-push-hooks" = "0.2.1"
 ```
 
 After checking in `mise.toml`, other contributors can install the pinned tool with `mise install`.
@@ -101,7 +101,7 @@ After checking in `mise.toml`, other contributors can install the pinned tool wi
 
 OpenCode runs in `--pure` mode with project configuration disabled, isolated home/config/cache/state directories, sharing disabled, and an ai-push-hooks-owned custom agent configuration. Read-only steps run in an empty scratch directory, receive only hook-owned artifacts through `--file`, and have every tool denied. Apply steps run against a private temporary workspace containing only unignored regular files matching `allow_paths`; their agent permits only reads and allowlisted edits in that workspace. Casefolded, Unicode-normalized `.git` and `AGENTS.md` paths are always protected.
 
-Global and repository OpenCode instructions, custom agents, MCP servers, formatters, LSP configuration, sharing, and plugins are not inherited. The existing XDG data directory is retained for OpenCode authentication/session state, and recognized provider environment variables are forwarded. Custom providers defined only in global OpenCode configuration are therefore unsupported; use a built-in provider with OpenCode auth state or environment credentials.
+Built-in OpenCode plugins remain enabled, including built-in authentication plugins such as Codex OAuth. Normal `--pure` execution disables external plugins, while the hook's empty plugin configuration and project-config disablement prevent project and global plugins and configuration from being inherited. The existing XDG data directory is retained for OpenCode authentication/session state, and recognized provider environment variables, including `OPENAI_API_KEY`, are forwarded; OpenCode itself chooses the authentication path using its normal precedence. Custom providers defined only in global OpenCode configuration are therefore unsupported; use a built-in provider with OpenCode auth state or environment credentials.
 
 After OpenCode session finalization, apply verifies that the Git-visible checkout, index, current-worktree control state, and critical shared `HEAD`/config/packed-refs/refs/hooks state still match their baselines. Pre-existing symlinks in monitored Git metadata fail closed before OpenCode runs, and symlinks introduced during execution fail before propagation. Apply then preflights every destination against its exact baseline type, content digest, and mode before propagating anything, performs atomic file replacement, and verifies the resulting checkout and protected Git state again. Safe existing ordinary `rwx` modes are preserved, existing special bits are stripped, new or group/world-writable modes become owner-only, and staged files carrying setuid/setgid/sticky bits are rejected before any propagation. Hook-owned runtime files default to `0600` and runtime directories to `0700`.
 
@@ -178,7 +178,7 @@ Configure modules and steps in the [configuration reference](#configuration-refe
 ## Troubleshooting
 
 - **`opencode is required but not installed`:** install OpenCode and ensure `opencode` (or `opencode-cli`) is on `PATH` for the Git hook process.
-- **Provider/model authentication fails:** run `opencode auth list`, authenticate a built-in provider, and verify `[llm].model`. Project/global custom-provider configuration is intentionally not loaded; see [OpenCode isolation limits](#opencode-isolation-limits).
+- **Provider/model authentication fails:** run `opencode auth list`, authenticate a built-in provider, and verify `[llm].model`. Built-in auth plugins remain available, while project/global custom-provider configuration is intentionally not loaded. Recognized provider environment variables, including `OPENAI_API_KEY`, are forwarded and OpenCode chooses authentication. See [OpenCode isolation limits](#opencode-isolation-limits).
 - **The hook does not run:** rerun `lefthook install`, check `git config --get core.hooksPath`, and verify the pre-push path with the command above.
 - **The push is blocked after docs changed:** this is the expected edit-review-commit flow. Review `git diff`, validate and commit the changes, then push again.
 - **Find logs or transcripts:** inspect `.git/ai-push-hooks/logs`, `.git/ai-push-hooks/summaries`, and (when enabled) `.git/ai-push-hooks/transcripts`.

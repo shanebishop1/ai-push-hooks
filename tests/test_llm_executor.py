@@ -103,7 +103,7 @@ def test_call_opencode_constructs_command_with_explicit_agent(
     assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "true"
     assert env["OPENCODE_DISABLE_EXTERNAL_SKILLS"] == "true"
     assert env["OPENCODE_DISABLE_CLAUDE_CODE"] == "true"
-    assert env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+    assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in env
     assert env["OPENCODE_DISABLE_LSP_DOWNLOAD"] == "true"
     assert env["OPENCODE_DISABLE_SHARE"] == "true"
     assert "OPENCODE_CONFIG" not in env
