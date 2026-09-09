@@ -187,18 +187,30 @@ class OpenCodeRunner:
             raise
 
     @staticmethod
-    def _cleanup_attachments(attachment_dir: pathlib.Path | None) -> None:
+    def _cleanup_attachments(
+        attachment_dir: pathlib.Path | None,
+        *,
+        session_id: str | None = None,
+    ) -> None:
         if attachment_dir is None:
             return
+        # Capture the active exception before entering the cleanup try block;
+        # sys.exc_info() inside ``except OSError`` refers to the cleanup error,
+        # not the invocation error being unwound.
+        unwinding_error = sys.exc_info()[1]
         try:
             shutil.rmtree(attachment_dir)
         except FileNotFoundError:
             return
         except OSError as exc:
-            # Do not hide the invocation failure currently being unwound, but
-            # fail closed when cleanup itself is the only failure.
-            if sys.exc_info()[0] is None:
-                raise RunnerError("OpenCode attachment cleanup failed") from exc
+            if unwinding_error is not None:
+                if session_id and not getattr(unwinding_error, "session_id", None):
+                    setattr(unwinding_error, "session_id", session_id)
+                return
+            error = RunnerError("OpenCode attachment cleanup failed")
+            if session_id:
+                setattr(error, "session_id", session_id)
+            raise error from exc
 
     def _argv(
         self,
@@ -273,6 +285,7 @@ class OpenCodeRunner:
         executable = getattr(context, "opencode_executable", None) or resolve_opencode_executable()
         isolated_env = opencode_isolation_env(context, security_config, request.stage)
         attachment_dir: pathlib.Path | None = None
+        session_id: str | None = None
         try:
             attachments, attachment_dir = self._materialize_attachments(context, request)
             # Every logical artifact is materialized, including pathless
@@ -361,7 +374,14 @@ class OpenCodeRunner:
                 ),
             )
         finally:
-            self._cleanup_attachments(attachment_dir)
+            active_error = sys.exc_info()[1]
+            cleanup_session_id = session_id or getattr(active_error, "session_id", None)
+            self._cleanup_attachments(
+                attachment_dir,
+                session_id=(
+                    cleanup_session_id if isinstance(cleanup_session_id, str) else None
+                ),
+            )
 
     def _lifecycle_process(
         self,

@@ -10,6 +10,7 @@ from ai_push_hooks.executors.runners import (
     RunnerRequest,
     RunnerArtifact,
     RunnerMissingOutputError,
+    RunnerError,
     RunnerProtocolError,
     RunnerResult,
     RunnerTimeoutError,
@@ -339,6 +340,82 @@ def test_timeout_preserves_session_for_lifecycle_cleanup_and_attachment_cleanup(
         ["export", "timeout-session"],
         ["session", "delete"],
     ]
+
+
+def test_successful_run_blocks_on_attachment_cleanup_failure_without_raw_details(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process",
+        lambda *_args, **_kwargs: ProcessResult(
+            0,
+            '{"type":"session.created","sessionID":"cleanup-session"}\n'
+            '{"type":"text","part":{"text":"[]"}}\n',
+            "",
+        ),
+    )
+
+    import shutil
+
+    original_rmtree = shutil.rmtree
+
+    def fail_cleanup(path, *args, **kwargs):
+        if "opencode-attachments-" in str(path):
+            raise OSError("cleanup-secret /private/temporary/path")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.shutil.rmtree", fail_cleanup
+    )
+
+    with pytest.raises(RunnerError) as error:
+        OpenCodeRunner().run(_request(context))
+
+    assert getattr(error.value, "session_id", None) == "cleanup-session"
+    assert "cleanup-secret" not in str(error.value)
+    assert "/private/temporary/path" not in str(error.value)
+    assert "cleanup-secret" not in repr(error.value)
+
+
+def test_invocation_error_survives_attachment_cleanup_failure_with_session_identity(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    invocation_error = RunnerProtocolError("invocation failed")
+    invocation_error.session_id = "invocation-session"  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(invocation_error),
+    )
+
+    import shutil
+
+    original_rmtree = shutil.rmtree
+
+    def fail_cleanup(path, *args, **kwargs):
+        if "opencode-attachments-" in str(path):
+            raise OSError("cleanup-secret /private/temporary/path")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.shutil.rmtree", fail_cleanup
+    )
+
+    with pytest.raises(RunnerProtocolError) as error:
+        OpenCodeRunner().run(_request(context))
+
+    assert error.value is invocation_error
+    assert getattr(error.value, "session_id", None) == "invocation-session"
+    assert "cleanup-secret" not in str(error.value)
+    assert "/private/temporary/path" not in str(error.value)
 
 
 def test_finalize_reports_deleted_session_and_private_transcript(

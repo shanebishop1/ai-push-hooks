@@ -26,9 +26,10 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from ai_push_hooks.executors.apply import run_apply_step
-from ai_push_hooks.executors.llm import run_llm_step
-from ai_push_hooks.types import (
+# These imports intentionally follow the direct-script src-path bootstrap.
+from ai_push_hooks.executors.apply import run_apply_step  # noqa: E402
+from ai_push_hooks.executors.llm import run_llm_step  # noqa: E402
+from ai_push_hooks.types import (  # noqa: E402
     GeneralConfig,
     HookConfig,
     HookLogger,
@@ -46,6 +47,7 @@ from ai_push_hooks.types import (
 
 LIVE_OPT_IN = "AI_PUSH_HOOKS_LIVE_PROBE"
 LIVE_APPLY_OPT_IN = "AI_PUSH_HOOKS_LIVE_APPLY"
+MODEL_OVERRIDE_ENV = "AI_PUSH_HOOKS_MODEL"
 MAX_TIMEOUT_SECONDS = 600
 DEFAULT_TIMEOUT_SECONDS = 180
 NONCE_FILENAME = "runner-live-probe-nonce.txt"
@@ -97,21 +99,25 @@ class ProbeResult:
 
 
 def _env(env: dict[str, str] | None) -> dict[str, str]:
-    if env is not None:
-        return dict(env)
+    source = os.environ if env is None else env
     # Read only the two control variables.  Provider credentials are inherited
     # by the selected production adapter at process-spawn time; this harness
     # never inspects or serializes them.
-    return {
-        LIVE_OPT_IN: os.environ.get(LIVE_OPT_IN, ""),
-        LIVE_APPLY_OPT_IN: os.environ.get(LIVE_APPLY_OPT_IN, ""),
-    }
+    names = (LIVE_OPT_IN, LIVE_APPLY_OPT_IN, MODEL_OVERRIDE_ENV)
+    return {name: source[name] for name in names if name in source}
 
 
 def require_live_opt_in(env: dict[str, str] | None = None) -> None:
     if _env(env).get(LIVE_OPT_IN) != "1":
         raise LiveProbeError(
             f"live probe disabled; set {LIVE_OPT_IN}=1 and choose a profile/model explicitly"
+        )
+
+
+def reject_model_override(env: dict[str, str] | None = None) -> None:
+    if MODEL_OVERRIDE_ENV in _env(env):
+        raise LiveProbeError(
+            f"{MODEL_OVERRIDE_ENV} must be unset; the probe model is explicitly selected with --model"
         )
 
 
@@ -161,6 +167,13 @@ def _git(argv: Sequence[str], cwd: pathlib.Path) -> str:
     if completed.returncode != 0:
         raise LiveProbeError("disposable Git project setup failed")
     return completed.stdout.strip()
+
+
+def _git_visible_state(project: pathlib.Path) -> str:
+    return _git(
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        project,
+    )
 
 
 def create_disposable_project(root: pathlib.Path) -> tuple[pathlib.Path, str]:
@@ -239,6 +252,7 @@ def run_live_probe(
     """Run a selected live read, then an independently opted-in apply."""
 
     require_live_opt_in(env)
+    reject_model_override(env)
     if timeout_seconds <= 0 or timeout_seconds > MAX_TIMEOUT_SECONDS:
         raise LiveProbeError(f"timeout must be between 1 and {MAX_TIMEOUT_SECONDS} seconds")
     if apply:
@@ -262,6 +276,7 @@ def run_live_probe(
             type="llm",
             runner=read_profile.name,
         )
+        git_state_before_read = _git_visible_state(project)
         response = run_llm_step(
             context,
             read_step,
@@ -269,6 +284,8 @@ def run_live_probe(
             [],
             "runner-live-probe.read",
         )
+        if _git_visible_state(project) != git_state_before_read:
+            raise LiveProbeError("read-only probe modified Git-visible project files")
         if nonce not in str(response).strip():
             raise LiveProbeError("selected runner did not return the disposable project nonce")
 
