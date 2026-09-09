@@ -9,7 +9,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 READ_ONLY_STEP_TYPES = frozenset({"collect", "llm"})
 PROMPTABLE_STEP_TYPES = frozenset({"llm", "apply"})
@@ -128,6 +128,11 @@ class StepConfig:
     allow_paths: tuple[str, ...] = ()
     executor: str | None = None
     assertion: str | None = None
+    python: str | None = None
+    options: dict[str, Any] = field(default_factory=dict)
+    command: tuple[str, ...] = ()
+    stdin: str | None = None
+    timeout_seconds: int | None = None
     when_env: str | None = None
     runner: str | None = None
 
@@ -200,7 +205,7 @@ class RuntimeContext:
     repo_root: pathlib.Path
     git_dir: pathlib.Path
     config: HookConfig
-    logger: "HookLogger"
+    logger: HookLogger
     remote_name: str
     remote_url: str
     stdin_lines: list[str]
@@ -229,7 +234,7 @@ class HookLogger:
         compare=False,
     )
 
-    _verbosity_order = {"status": 0, "info": 1, "debug": 2}
+    _verbosity_order: ClassVar[dict[str, int]] = {"status": 0, "info": 1, "debug": 2}
 
     def _level_is_enabled(self, level: str) -> bool:
         if level in {"warn", "error"}:

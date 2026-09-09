@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import pathlib
 import re
@@ -18,6 +19,7 @@ from .paths import (
 )
 from .prompts_builtin import BUILTIN_PROMPTS
 from .types import (
+    SUPPORTED_STEP_TYPES,
     GeneralConfig,
     HookConfig,
     HookError,
@@ -26,7 +28,6 @@ from .types import (
     ModuleConfig,
     RunnerProfile,
     StepConfig,
-    SUPPORTED_STEP_TYPES,
     WorkflowConfig,
 )
 
@@ -79,6 +80,11 @@ STEP_KEYS = {
     "allow_paths",
     "executor",
     "assertion",
+    "python",
+    "options",
+    "command",
+    "stdin",
+    "timeout_seconds",
     "when_env",
     "runner",
 }
@@ -94,6 +100,13 @@ RUNNER_KEYS = {
     "prompt_transport",
 }
 RUNNER_PLACEHOLDERS = frozenset({"{prompt}", "{model}", "{cwd}", "{stage}"})
+PYTHON_CALLABLE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+COMMAND_PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z0-9_./:-]+)\}\Z")
+EMBEDDED_COMMAND_PLACEHOLDER_PATTERN = re.compile(
+    r"\{(?:repo|python|input:[A-Za-z0-9_./:-]+)\}"
+)
+COMMAND_PLACEHOLDER_NAMES = frozenset({"repo", "python"})
+DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS = 60
 RUNNER_PLACEHOLDER_PATTERN = re.compile(r"\{[^{}]*\}")
 
 
@@ -170,11 +183,10 @@ def _validate_runner_command_placeholders(
         for placeholder in RUNNER_PLACEHOLDER_PATTERN.findall(argument):
             if placeholder not in RUNNER_PLACEHOLDERS:
                 raise HookError(f"Unknown placeholder {placeholder!r} in {argument_label}")
-        if "{" in argument or "}" in argument:
-            if argument not in RUNNER_PLACEHOLDERS:
-                raise HookError(
-                    f"Placeholders in {argument_label} must be whole argv elements"
-                )
+        if ("{" in argument or "}" in argument) and argument not in RUNNER_PLACEHOLDERS:
+            raise HookError(
+                f"Placeholders in {argument_label} must be whole argv elements"
+            )
         if argument == "{prompt}":
             prompt_count += 1
     if transport == "stdin" and prompt_count:
@@ -262,6 +274,190 @@ def _validate_integer(
         raise HookError(f"{label}.{key} must be at least {minimum}")
 
 
+def _validate_json_options(value: Any, label: str, *, path: str = "") -> None:
+    """Validate TOML options as finite, null-free JSON data."""
+
+    location = f"{label}{path}"
+    if value is None:
+        raise HookError(f"{location} must not be null")
+    if isinstance(value, (bool, str, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise HookError(f"{location} must be a finite number")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value, start=1):
+            _validate_json_options(item, label, path=f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise HookError(f"{location} must use string keys")
+            _validate_json_options(item, label, path=f"{path}.{key}")
+        return
+    raise HookError(
+        f"{location} must contain only JSON-compatible null-free values"
+    )
+
+
+def _validate_python_reference(
+    value: str,
+    label: str,
+    repo_root: pathlib.Path | None = None,
+) -> str:
+    """Validate a repository-local callback reference without importing it."""
+
+    if value.count(":") != 1:
+        raise HookError(
+            f"{label} must be a repository-relative .py path followed by :callable"
+        )
+    path_value, callable_name = value.split(":", 1)
+    if not callable_name or not PYTHON_CALLABLE_PATTERN.fullmatch(callable_name):
+        raise HookError(f"{label} callable must be one top-level identifier")
+    try:
+        parts = relative_path_parts(path_value, f"{label} path")
+    except HookError as exc:
+        raise HookError(str(exc)) from exc
+    if not parts[-1].endswith(".py"):
+        raise HookError(f"{label} path must name a .py file")
+    normalized = "/".join(parts) + ":" + callable_name
+
+    if repo_root is None:
+        return normalized
+
+    root = pathlib.Path(repo_root).resolve(strict=False)
+    lexical_path = root.joinpath(*parts)
+    if path_has_symlink(root, lexical_path):
+        raise HookError(f"{label} path must not traverse a symlink or reparse point")
+    try:
+        callback_path = resolve_contained_path(
+            root, "/".join(parts), f"{label} path"
+        )
+    except HookError as exc:
+        raise HookError(str(exc)) from exc
+    try:
+        metadata = callback_path.lstat()
+    except FileNotFoundError as exc:
+        raise HookError(f"{label} path must reference an existing regular file") from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & reparse_flag
+    ):
+        raise HookError(f"{label} path must not be a symlink or reparse point")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise HookError(f"{label} path must reference an ordinary regular file")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(callback_path, flags)
+    except OSError as exc:
+        raise HookError(f"{label} path could not be opened safely") from exc
+    try:
+        descriptor_metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(descriptor_metadata.st_mode):
+            raise HookError(f"{label} path must reference an ordinary regular file")
+    finally:
+        os.close(descriptor)
+    return normalized
+
+
+def _validate_step_extensions(
+    step: dict[str, Any],
+    label: str,
+    *,
+    repo_root: pathlib.Path | None = None,
+) -> None:
+    """Validate the implementation seams shared by config type checking/building."""
+
+    step_type = step.get("type")
+    if not isinstance(step_type, str):
+        return
+
+    implementation_keys = {
+        "collect": ("collector", "python"),
+        "exec": ("executor", "python", "command"),
+        "assert": ("assertion", "python", "command"),
+    }
+    implementations = implementation_keys.get(step_type)
+    if implementations is not None:
+        for key in implementations:
+            if key in {"collector", "executor", "assertion", "python"}:
+                value = step.get(key)
+                if isinstance(value, str) and not value.strip():
+                    raise HookError(f"{label}.{key} must be a non-empty string")
+        if "command" in step and not step["command"]:
+            raise HookError(f"{label}.command must be a non-empty array")
+        selected = [key for key in implementations if step.get(key) not in (None, "")]
+        if len(selected) != 1:
+            choices = ", ".join(implementations)
+            raise HookError(
+                f"{label} requires exactly one implementation field: {choices}"
+            )
+
+    applicable = {
+        "collector": {"collect"},
+        "executor": {"exec"},
+        "assertion": {"assert"},
+        "python": {"collect", "exec", "assert"},
+        "command": {"exec", "assert"},
+        "stdin": {"exec", "assert"},
+        "timeout_seconds": {"exec", "assert"},
+        "options": {"collect", "exec", "assert"},
+    }
+    for key, allowed_types in applicable.items():
+        if key in step and step_type not in allowed_types:
+            raise HookError(f"{label}.{key} is not valid for {step_type} steps")
+
+    has_python = step.get("python") not in (None, "")
+    has_command = bool(step.get("command"))
+    if "options" in step:
+        if not has_python:
+            raise HookError(f"{label}.options requires {label}.python")
+        _validate_json_options(step["options"], f"{label}.options")
+    if "stdin" in step and not has_command:
+        raise HookError(f"{label}.stdin is only valid with {label}.command")
+    if "timeout_seconds" in step and not has_command:
+        raise HookError(f"{label}.timeout_seconds is only valid with {label}.command")
+
+    if has_python:
+        inputs = step.get("inputs", [])
+        if len(inputs) != len(set(inputs)):
+            raise HookError(
+                f"{label}.inputs must not contain duplicate references for Python steps"
+            )
+        _validate_python_reference(step["python"], f"{label}.python", repo_root)
+
+    if has_command:
+        command = step["command"]
+        declared_inputs = set(step.get("inputs", []))
+        for index, argument in enumerate(command, start=1):
+            match = COMMAND_PLACEHOLDER_PATTERN.fullmatch(argument)
+            if match is not None:
+                token = match.group(1)
+                if token in COMMAND_PLACEHOLDER_NAMES:
+                    continue
+                if token.startswith("input:"):
+                    logical_ref = token.removeprefix("input:")
+                    if logical_ref not in declared_inputs:
+                        raise HookError(
+                            f"{label}.command[{index}] references undeclared input "
+                            f"`{logical_ref}`"
+                        )
+                    continue
+                raise HookError(
+                    f"Unknown command placeholder {{{token}}} in {label}.command[{index}]"
+                )
+            if EMBEDDED_COMMAND_PLACEHOLDER_PATTERN.search(argument):
+                raise HookError(
+                    f"Recognized command placeholders in {label}.command[{index}] "
+                    "must be whole argv elements"
+                )
+
+    if "stdin" in step and step.get("stdin") not in step.get("inputs", []):
+        raise HookError(f"{label}.stdin must exactly match a declared input")
+
+
 def _validate_config_types(raw: dict[str, Any]) -> None:
     unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
     if unknown:
@@ -330,6 +526,7 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     "collector",
                     "executor",
                     "assertion",
+                    "python",
                     "output",
                     "schema",
                     "prompt",
@@ -339,8 +536,12 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     "runner",
                 ):
                     _validate_string(step, key, label, allow_none=True)
-                for key in ("inputs", "allow_paths"):
+                for key in ("inputs", "allow_paths", "command"):
                     _validate_string_list(step, key, label)
+                if "options" in step and not isinstance(step["options"], dict):
+                    raise HookError(f"{label}.options must be a table")
+                _validate_string(step, "stdin", label, allow_none=True)
+                _validate_integer(step, "timeout_seconds", label, minimum=1)
                 if "runner" in step and step["runner"] is not None and not step["runner"].strip():
                     raise HookError(f"{label}.runner must be a non-empty string")
                 if "runner" in step and step["runner"] is not None:
@@ -351,6 +552,7 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     and step["type"] in {"collect", "exec", "assert"}
                 ):
                     raise HookError(f"{label}.runner is only valid on llm and apply steps")
+                _validate_step_extensions(step, label)
 
 def _normalize_runner_profile(name: str, raw: dict[str, Any]) -> RunnerProfile:
     runner_type = str(raw["type"]).strip()
@@ -370,10 +572,13 @@ def _normalize_runner_profile(name: str, raw: dict[str, Any]) -> RunnerProfile:
     )
 
 
-def _normalize_step(raw: dict[str, Any]) -> StepConfig:
+def _normalize_step(
+    raw: dict[str, Any], label: str, *, repo_root: pathlib.Path | None = None
+) -> StepConfig:
     step_type = str(raw.get("type", "")).strip()
     if step_type not in SUPPORTED_STEP_TYPES:
-        raise HookError(f"Unknown step type: {step_type}")
+        raise HookError(f"Unknown step type at {label}.type: {step_type}")
+    _validate_step_extensions(raw, label, repo_root=repo_root)
     step = StepConfig(
         id=str(raw.get("id", "")).strip(),
         type=step_type,
@@ -391,6 +596,15 @@ def _normalize_step(raw: dict[str, Any]) -> StepConfig:
         allow_paths=tuple(str(item) for item in raw.get("allow_paths", []) or []),
         executor=str(raw.get("executor")).strip() if raw.get("executor") is not None else None,
         assertion=str(raw.get("assertion")).strip() if raw.get("assertion") is not None else None,
+        python=str(raw.get("python")).strip() if raw.get("python") is not None else None,
+        options=dict(raw.get("options", {}) or {}),
+        command=tuple(str(item) for item in raw.get("command", []) or []),
+        stdin=str(raw.get("stdin")).strip() if raw.get("stdin") is not None else None,
+        timeout_seconds=(
+            int(raw["timeout_seconds"])
+            if raw.get("timeout_seconds") is not None
+            else (DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS if raw.get("command") else None)
+        ),
         when_env=str(raw.get("when_env")).strip() if raw.get("when_env") is not None else None,
         runner=str(raw.get("runner")).strip() if raw.get("runner") is not None else None,
     )
@@ -407,21 +621,22 @@ def _normalize_step(raw: dict[str, Any]) -> StepConfig:
             raise HookError(f"Apply step `{step.id}` may not allow AGENTS.md")
     if step.is_promptable and not any([step.prompt, step.prompt_file, step.fallback_prompt_id]):
         raise HookError(f"Promptable step `{step.id}` requires prompt, prompt_file, or fallback_prompt_id")
-    if step.type == "collect" and not step.collector:
-        raise HookError(f"Collect step `{step.id}` requires collector")
+    if step.type == "collect" and not (step.collector or step.python):
+        raise HookError(f"Collect step `{step.id}` requires collector or python")
     if step.type == "llm" and not step.output:
         raise HookError(f"LLM step `{step.id}` requires output")
     if step.type == "apply" and not step.allow_paths:
         raise HookError(f"Apply step `{step.id}` requires allow_paths")
-    if step.type == "exec" and not step.executor:
-        raise HookError(f"Exec step `{step.id}` requires executor")
-    if step.type == "assert" and not step.assertion:
-        raise HookError(f"Assert step `{step.id}` requires assertion")
+    if step.type == "exec" and not (step.executor or step.python or step.command):
+        raise HookError(f"Exec step `{step.id}` requires executor, python, or command")
+    if step.type == "assert" and not (step.assertion or step.python or step.command):
+        raise HookError(f"Assert step `{step.id}` requires assertion, python, or command")
     return step
 
 
 def _build_config(
-    raw: dict[str, Any], *, effective_model: str | None = None
+    raw: dict[str, Any], *, effective_model: str | None = None,
+    repo_root: pathlib.Path | None = None,
 ) -> HookConfig:
     if not isinstance(raw, dict):
         raise HookError("Config document must contain a top-level table")
@@ -453,8 +668,29 @@ def _build_config(
         modules[module_id] = ModuleConfig(
             id=module_id,
             enabled=bool(module_raw.get("enabled", True)),
-            steps=tuple(_normalize_step(step) for step in steps_raw),
+            steps=tuple(
+                _normalize_step(
+                    step,
+                    f"modules.{module_id}.steps[{index}]",
+                    repo_root=repo_root,
+                )
+                for index, step in enumerate(steps_raw, start=1)
+            ),
         )
+
+    # Validate repository-local callback paths in disabled/unselected modules too,
+    # while preserving the existing runtime model that only workflow modules are
+    # materialized in HookConfig.modules.
+    if repo_root is not None:
+        for module_id, module_raw in module_payload.items():
+            for index, step_raw in enumerate(module_raw.get("steps", []) or [], start=1):
+                python_ref = step_raw.get("python")
+                if python_ref is not None:
+                    _validate_python_reference(
+                        python_ref,
+                        f"modules.{module_id}.steps[{index}].python",
+                        repo_root,
+                    )
 
     general = GeneralConfig(**raw.get("general", {}))
     llm = LlmConfig(**raw.get("llm", {}))
@@ -541,7 +777,9 @@ def resolve_runner_profile(
     )
 
 
-def _apply_env_overrides(config: HookConfig) -> HookConfig:
+def _apply_env_overrides(
+    config: HookConfig, *, repo_root: pathlib.Path | None = None
+) -> HookConfig:
     raw = {
         "general": {
             "enabled": config.general.enabled,
@@ -553,13 +791,33 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
         "llm": config.llm.__dict__.copy(),
         "logging": config.logging.__dict__.copy(),
         "workflow": {"modules": list(config.workflow.modules)},
-        "modules": {},
+    "modules": {},
         "runners": {},
     }
     for module_id, module in config.modules.items():
+        step_payloads: list[dict[str, Any]] = []
+        for step in module.steps:
+            step_payload = step.__dict__.copy()
+            for key in (
+                "collector",
+                "executor",
+                "assertion",
+                "python",
+                "stdin",
+                "timeout_seconds",
+                "when_env",
+                "runner",
+            ):
+                if step_payload[key] is None:
+                    step_payload.pop(key)
+            if not step_payload["options"]:
+                step_payload.pop("options")
+            if not step_payload["command"]:
+                step_payload.pop("command")
+            step_payloads.append(step_payload)
         raw["modules"][module_id] = {
             "enabled": module.enabled,
-            "steps": [step.__dict__.copy() for step in module.steps],
+            "steps": step_payloads,
         }
     for name, profile in config.runners.items():
         runner_raw: dict[str, Any] = {
@@ -631,7 +889,7 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
                 "must be at least 1"
             )
         raw["llm"]["timeout_seconds"] = parsed_timeout
-    return _build_config(raw, effective_model=model)
+    return _build_config(raw, effective_model=model, repo_root=repo_root)
 
 
 def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
@@ -661,7 +919,8 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
     _validate_model_override(model_override)
     _validate_variant_override(variant_override)
     return _apply_env_overrides(
-        _build_config(loaded, effective_model=model_override)
+        _build_config(loaded, effective_model=model_override, repo_root=repo_root),
+        repo_root=repo_root,
     ), config_path
 
 

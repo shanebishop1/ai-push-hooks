@@ -786,3 +786,202 @@ runner = "opencode"
 
     with pytest.raises(HookError, match=r"modules.docs.steps\[1\].runner"):
         load_config(tmp_path)
+
+
+def _write_extension_config(repo: pathlib.Path, step: str) -> None:
+    checks_path = repo / "checks.py"
+    if not checks_path.exists():
+        checks_path.write_text(
+            "# deliberately not imported by config loading\n", encoding="utf-8"
+        )
+    (repo / "ai-push-hooks.toml").write_text(
+        f"""
+[workflow]
+modules = ["quality"]
+
+[modules.quality]
+enabled = true
+
+[[modules.quality.steps]]
+{step}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_extension_steps_normalize_python_and_command_fields(tmp_path: pathlib.Path) -> None:
+    _write_extension_config(
+        tmp_path,
+        """
+id = "collect"
+type = "collect"
+python = "checks.py:collect_context"
+inputs = ["prior/result.json"]
+options = { include_generated = false, limits = [1, 2.5] }
+
+[[modules.quality.steps]]
+id = "lint"
+type = "exec"
+command = ["{python}", "script.py", "{input:collect/result.json}"]
+inputs = ["collect/result.json"]
+stdin = "collect/result.json"
+""",
+    )
+
+    config, _ = load_config(tmp_path)
+    collect, command = config.modules["quality"].steps
+
+    assert collect.python == "checks.py:collect_context"
+    assert collect.options == {"include_generated": False, "limits": [1, 2.5]}
+    assert command.command == ("{python}", "script.py", "{input:collect/result.json}")
+    assert command.timeout_seconds == 60
+    assert command.stdin == "collect/result.json"
+
+
+@pytest.mark.parametrize(
+    ("step", "message"),
+    [
+        (
+            'id = "x"\ntype = "collect"\ncollector = "builtin"\npython = "checks.py:hook"',
+            "exactly one implementation",
+        ),
+        (
+            'id = "x"\ntype = "exec"\nexecutor = "builtin"\npython = "checks.py:hook"',
+            "exactly one implementation",
+        ),
+        (
+            'id = "x"\ntype = "assert"\npython = "checks.py:hook"\ntimeout_seconds = 5',
+            "timeout_seconds is only valid with",
+        ),
+        (
+            'id = "x"\ntype = "apply"\nallow_paths = ["README.md"]\npython = "checks.py:hook"',
+            "python is not valid",
+        ),
+        (
+            'id = "x"\ntype = "exec"\nexecutor = "builtin"\noptions = { answer = 1 }',
+            "options requires",
+        ),
+    ],
+)
+def test_extension_implementation_fields_are_strict(
+    tmp_path: pathlib.Path, step: str, message: str
+) -> None:
+    _write_extension_config(tmp_path, step)
+
+    with pytest.raises(HookError, match=message):
+        load_config(tmp_path)
+
+
+def test_python_reference_validation_does_not_import_code(tmp_path: pathlib.Path) -> None:
+    marker = tmp_path / "imported"
+    (tmp_path / "checks.py").write_text(
+        f"{marker!s}.write_text('bad')\n", encoding="utf-8"
+    )
+    _write_extension_config(
+        tmp_path,
+        'id = "collect"\ntype = "collect"\npython = "checks.py:collect_context"',
+    )
+
+    load_config(tmp_path)
+
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("reference", "message"),
+    [
+        ("checks.py", "repository-relative .py path"),
+        ("../checks.py:hook", "must not contain '..'"),
+        ("checks.txt:hook", "must name a .py file"),
+        ("checks.py:obj.hook", "one top-level identifier"),
+        ("missing.py:hook", "existing regular file"),
+    ],
+)
+def test_python_reference_is_safe_and_strict(
+    tmp_path: pathlib.Path, reference: str, message: str
+) -> None:
+    _write_extension_config(
+        tmp_path,
+        f'id = "collect"\ntype = "collect"\npython = "{reference}"',
+    )
+
+    with pytest.raises(HookError, match=message):
+        load_config(tmp_path)
+
+
+def test_python_steps_reject_duplicate_input_references(tmp_path: pathlib.Path) -> None:
+    _write_extension_config(
+        tmp_path,
+        """
+id = "collect"
+type = "collect"
+python = "checks.py:collect_context"
+inputs = ["prior/result.json", "prior/result.json"]
+""",
+    )
+
+    with pytest.raises(HookError, match=r"modules\.quality\.steps\[1\]\.inputs"):
+        load_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (["{repos}"], "Unknown command placeholder"),
+        (["--path={repo}"], "must be whole argv elements"),
+        (["{input:missing/result.json}"], "undeclared input"),
+    ],
+)
+def test_command_placeholder_grammar_is_strict(
+    tmp_path: pathlib.Path, command: list[str], message: str
+) -> None:
+    command_literal = ", ".join(f'"{item}"' for item in command)
+    _write_extension_config(
+        tmp_path,
+        f"""
+id = "exec"
+type = "exec"
+command = [{command_literal}]
+""",
+    )
+
+    with pytest.raises(HookError, match=message):
+        load_config(tmp_path)
+
+
+def test_command_literal_braces_and_stdin_reference_are_preserved(
+    tmp_path: pathlib.Path,
+) -> None:
+    _write_extension_config(
+        tmp_path,
+        """
+id = "exec"
+type = "exec"
+inputs = ["collect/files.json"]
+command = ["bash", "-c", "for x in {a,b}; do printf x; done", "awk '{print $1}'"]
+stdin = "collect/files.json"
+timeout_seconds = 7
+""",
+    )
+
+    config, _ = load_config(tmp_path)
+    step = config.modules["quality"].steps[0]
+    assert step.command[2] == "for x in {a,b}; do printf x; done"
+    assert step.command[3] == "awk '{print $1}'"
+    assert step.timeout_seconds == 7
+
+
+def test_options_are_json_compatible_and_null_free(tmp_path: pathlib.Path) -> None:
+    _write_extension_config(
+        tmp_path,
+        """
+id = "collect"
+type = "collect"
+python = "checks.py:collect_context"
+options = { nested = { value = nan } }
+""",
+    )
+
+    with pytest.raises(HookError, match=r"options\.nested\.value.*finite"):
+        load_config(tmp_path)
