@@ -1,6 +1,6 @@
 # ai-push-hooks
 
-`ai-push-hooks` catches repository drift before it reaches a remote. It turns `git push` into a configurable workflow that can inspect the exact outgoing diff, ask an LLM for structured findings, apply narrowly allowlisted documentation fixes, run deterministic actions, and block the push until changes are reviewed and committed.
+`ai-push-hooks` catches repository drift before it reaches a remote. It turns `git push` into a configurable workflow that can inspect the exact outgoing diff, ask a selected local runner for structured findings, apply narrowly allowlisted documentation fixes, run deterministic actions, and block the push until changes are reviewed and committed.
 
 Use it to keep docs aligned with code, check branch/task consistency, or prepare pull requests without replacing your project's ordinary lint, test, and build checks. Workflows are assembled from `collect`, `llm`, `apply`, `exec`, and `assert` steps and default to failing closed.
 
@@ -10,7 +10,7 @@ Use it to keep docs aligned with code, check branch/task consistency, or prepare
 
 - [Git](https://git-scm.com/downloads) and a POSIX shell for the generated hook.
 - [Python 3.10–3.13](https://www.python.org/downloads/). Python is required even when installing the npm wrapper. The wrapper probes Python 3.14, 3.13, 3.12, 3.11, 3.10, then `python`; the 3.14 probe is not a beta support claim. Python 3.10 additionally needs the `tomli` package available to that interpreter.
-- [OpenCode](https://opencode.ai/docs/#install) is optional for workflows that use only deterministic steps, but the `minimal-docs` starter uses `llm` and `apply`. Those steps also need a provider/model and authentication; check with `opencode auth list`.
+- A runner CLI is optional for workflows that use only deterministic steps, but the `minimal-docs` starter uses OpenCode for `llm` and `apply`. The selected runner still needs its normal provider/model authentication: for OpenCode, `opencode auth list` is a useful check; Codex, Claude, and custom commands use their own user-managed setup.
 - [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is optional and needed only for `gh_pr_create`.
 - [Beads (`bd`)](https://github.com/steveyegge/beads) is optional and needed only for Beads alignment steps. The integration requires the native `bd` CLI; Beads-Rust (`br`) is not a supported substitute.
 - [Lefthook](https://lefthook.dev/installation/) and [Mise](https://mise.jdx.dev/getting-started.html) are optional hook-manager/tool-version alternatives described below.
@@ -40,11 +40,12 @@ historical provenance and must not be assumed to contain this release's
 `install` command.
 
 The starter config currently writes `openai/gpt-5.6-terra` as its model value;
-availability and authentication are provider-dependent. To use a free OpenCode
-Zen model, run `opencode models opencode`, choose a model currently marked
-free, and set `[llm].model` to that full identifier. Free-model availability
-changes over time, so do not treat the model used in the recorded preview below
-as a permanent recommendation or default.
+availability, pricing, and authentication are provider-dependent. Model strings
+are opaque runner-specific identifiers; ai-push-hooks does not maintain a model
+allowlist. To use a free OpenCode Zen model, run `opencode models opencode`,
+choose a model currently marked free, and set `[llm].model` to that full
+identifier. Free-model availability changes over time, so do not treat the model
+used in the recorded preview below as a permanent recommendation or default.
 
 For npm or pnpm, install and invoke the wrapper locally:
 
@@ -97,15 +98,201 @@ This adds the following project-level tool entry to `mise.toml` and installs it:
 
 After checking in `mise.toml`, other contributors can install the pinned tool with `mise install`.
 
+### Runner profiles and access modes
+
+> **Unreleased source note:** The selectable runner profiles described here are
+> source-tree behavior and are not included in the published `0.2.1` wheel or
+> npm artifacts. Do not assume `pip install ai-push-hooks==0.2.1` or
+> `ai-push-hooks@beta` provides this feature until a release explicitly includes
+> it.
+
+`llm` and `apply` steps select a strict named profile. `[llm].runner` is the
+workflow default; a `runner` on an individual `llm` or `apply` step overrides it.
+`runner` is rejected on `collect`, `exec`, and `assert`. Every referenced name
+must exist under `[runners.<name>]`, except `opencode`, which has an implicit
+compatibility profile. Unknown profile fields, missing names, invalid
+placeholders, and type-inapplicable fields fail during config loading rather
+than being ignored.
+
+The four static profile types are `opencode`, `codex`, `claude`, and `command`.
+`model` is an opaque identifier passed to the selected runner. A profile's
+`project_access` is either `artifacts` or `project`; it defaults to `artifacts`
+for OpenCode and `project` for the other three types. The existing flat
+`[llm]` form remains the shipped default:
+
+```toml
+[llm]
+runner = "opencode"
+model = "openai/gpt-5.6-terra"
+variant = ""
+```
+
+It is equivalent to an OpenCode profile with `project_access = "artifacts"`.
+That means read-only analysis uses an empty scratch directory with only
+validated hook artifacts attached, with OpenCode tools denied, and compatibility
+apply uses a private staging projection limited to eligible files matching its
+allowlist. It does **not** silently become project-aware. In explicit OpenCode
+project mode, read/list/glob/grep can inspect the real checkout for analysis;
+edits, shell, tasks, web, sharing, plugins, MCP, and project/global config remain
+restricted.
+Opt into OpenCode project reads explicitly:
+
+```toml
+[llm]
+runner = "opencode-project"
+
+[runners.opencode-project]
+type = "opencode"
+model = "openai/gpt-5.6-terra"
+project_access = "project"
+```
+
+The other built-in examples are:
+
+```toml
+[llm]
+runner = "codex-review"
+
+[runners.codex-review]
+type = "codex"
+model = "gpt-5.6-codex"
+project_access = "project"
+
+[runners.claude-review]
+type = "claude"
+model = "sonnet"
+project_access = "project"
+
+[[modules.docs.steps]]
+id = "analyze"
+type = "llm"
+runner = "claude-review" # per-step override
+fallback_prompt_id = "docs-analysis-basic"
+inputs = ["collect/push.diff"]
+output = "issues.json"
+schema = "docs_issue_array"
+```
+
+The generic command profile is the supported way to describe a Pi invocation;
+Pi is not a fourth built-in adapter:
+
+```toml
+[runners.pi-apply]
+type = "command"
+model = "provider/exact-model-id"
+project_access = "project"
+prompt_transport = "stdin"
+command = [
+  "pi", "--print", "--no-session", "--no-extensions", "--no-skills",
+  "--no-prompt-templates", "--no-themes", "--no-context-files",
+  "--tools", "read,grep,find,ls,edit,write", "--model", "{model}"
+]
+
+[[modules.docs.steps]]
+id = "apply"
+type = "apply"
+runner = "pi-apply"
+fallback_prompt_id = "docs-apply-basic"
+allow_paths = ["README.md", "docs/**/*.md"]
+```
+
+Command profiles are argv vectors, never shell command strings. The executable
+is launched with no implicit shell, shell expansion, pipes, redirection,
+globbing, or command substitution. `stdin` (the default) sends the complete
+instruction/artifact packet and then EOF. `argv` requires exactly one whole
+argument `{prompt}`. The other whole-argument placeholders are `{model}`,
+`{cwd}`, and `{stage}`; substring forms such as `--prompt={prompt}` are
+rejected. An argv prompt can be visible in process listings, so stdin is the
+safer default. Custom commands inherit the hook environment and have no
+ai-push-hooks lifecycle or permission enforcement; stdout is the final result,
+and stderr is diagnostic only.
+
+### Project visibility and apply boundary
+
+For `project_access = "project"`, an analysis runner receives the real
+repository root as its cwd. For `apply`, it receives a point-in-time temporary
+projection, never the real checkout. Project apply copies eligible tracked or
+unignored ordinary files, including the current dirty baseline, then allows
+propagation only for paths matching that step's `allow_paths`. Ignored files are
+excluded even when tracked-but-ignored (the `--no-index` ignore check is
+intentional). Git metadata, casefolded/Unicode-normalized `AGENTS.md` paths,
+symlinks/reparse points, and special files are excluded or rejected.
+
+Staging and propagation are bounded: at most 10,000 staged entries and 256 MiB
+of staging content, with Git metadata snapshots bounded at 20,000 entries and
+64 MiB. Runner input artifacts are capped at an aggregate 16 MiB, and each
+captured child stdout/stderr stream is capped at 16 MiB. Changes outside the
+allowlist, unsafe modes (setuid/setgid/sticky), destination type/content/mode
+conflicts, or protected Git-state changes fail closed. Existing baseline checks
+and atomic file replacement reduce lost updates; they are not an atomic
+compare-and-swap against an arbitrary external writer. No rollback is attempted
+over pre-existing user changes.
+
 ### OpenCode isolation limits
 
-OpenCode runs in `--pure` mode with project configuration disabled, isolated home/config/cache/state directories, sharing disabled, and an ai-push-hooks-owned custom agent configuration. Read-only steps run in an empty scratch directory, receive only hook-owned artifacts through `--file`, and have every tool denied. Apply steps run against a private temporary workspace containing only unignored regular files matching `allow_paths`; their agent permits only reads and allowlisted edits in that workspace. Casefolded, Unicode-normalized `.git` and `AGENTS.md` paths are always protected.
+OpenCode uses `--pure`, isolated home/config/cache/state directories, disabled
+sharing, and an ai-push-hooks-owned agent configuration. External plugins,
+project/global configuration, MCP servers, instructions, and custom providers
+from inherited global configuration are not loaded. Built-in plugins remain
+available, including built-in authentication such as Codex OAuth. The existing
+OpenCode data directory and recognized provider environment variables (including
+`OPENAI_API_KEY`) are retained/forwarded, and OpenCode chooses authentication
+using its own normal precedence.
 
-Built-in OpenCode plugins remain enabled, including built-in authentication plugins such as Codex OAuth. Normal `--pure` execution disables external plugins, while the hook's empty plugin configuration and project-config disablement prevent project and global plugins and configuration from being inherited. The existing XDG data directory is retained for OpenCode authentication/session state, and recognized provider environment variables, including `OPENAI_API_KEY`, are forwarded; OpenCode itself chooses the authentication path using its normal precedence. Custom providers defined only in global OpenCode configuration are therefore unsupported; use a built-in provider with OpenCode auth state or environment credentials.
+These are permission and temporary-workspace controls, not an operating-system
+sandbox. Every runner is a local program with the invoking user's OS identity;
+same-user code can access other host paths. There is no mandatory command
+allowlist, shell parser, container, credential broker, or trust prompt. Use an
+external sandbox, container, VM, or low-privilege account when that boundary is
+required. The scheduler may overlap `collect`/`llm` work up to `max_parallel`,
+so a trusted custom `llm` command must really be safe for concurrent access;
+`apply` remains globally serialized but custom command behavior is not enforced.
 
-After OpenCode session finalization, apply verifies that the Git-visible checkout, index, current-worktree control state, and critical shared `HEAD`/config/packed-refs/refs/hooks state still match their baselines. Pre-existing symlinks in monitored Git metadata fail closed before OpenCode runs, and symlinks introduced during execution fail before propagation. Apply then preflights every destination against its exact baseline type, content digest, and mode before propagating anything, performs atomic file replacement, and verifies the resulting checkout and protected Git state again. Safe existing ordinary `rwx` modes are preserved, existing special bits are stripped, new or group/world-writable modes become owner-only, and staged files carrying setuid/setgid/sticky bits are rejected before any propagation. Hook-owned runtime files default to `0600` and runtime directories to `0700`.
+### Invocation, lifecycle, and output
 
-These controls are OpenCode permission and workspace isolation, not an operating-system sandbox. Compare-and-swap preflight minimizes lost updates but cannot make the interval between preflight and filesystem replacement atomic against an independent local process. Ignored worktree trees, Git object/LFS stores, shared reflogs, and metadata belonging only to other linked worktrees are intentionally excluded from bounded snapshots; direct changes there may not be detected. Critical shared refs/config/hooks remain monitored. Automatic rollback is avoided so pre-existing user changes are not overwritten.
+All adapters use direct argv execution, explicit cwd, separate stdout/stderr
+capture, and the configured per-invocation timeout. The built-in mappings are:
+
+| Profile | Analysis | Apply |
+| --- | --- | --- |
+| OpenCode | `opencode run --agent ... --pure --format json --model ...` with native attachments | same isolated agent in the selected staging projection |
+| Codex | `codex exec --json --color never --sandbox read-only --ephemeral --cd <project> [--model <model>] -` | same with `--sandbox workspace-write` and `--skip-git-repo-check` |
+| Claude | `claude -p --output-format json --no-session-persistence [--model <model>]` plus tested read-only flags | same with tested edit/write flags |
+| Command/Pi | configured argv, prompt on stdin by default | configured argv in staging; host-side propagation checks still apply |
+
+Codex and Claude require their advertised capability flags; a missing required
+flag fails instead of silently weakening the policy. A successful built-in call
+must have a successful terminal result and final text. The workflow still owns
+JSON extraction, schema validation, bounded feedback, and retries.
+
+After every call, the completion event identifies the module, step, purpose,
+profile, adapter type, and success/failure. It reports a returned session ID and
+session state when available, plus a local transcript path when one was really
+created; unavailable lifecycle data is not invented. OpenCode retains its
+existing export-to-private-storage and cleanup behavior: transcript capture is
+on by default and `delete_session_after_run` is on by default. To inspect an
+exported JSON transcript, use a truthful local view such as:
+
+```bash
+python -m json.tool "path/to/exported-transcript.json"
+```
+
+An OpenCode session retained by setting `delete_session_after_run = false`
+does not cause ai-push-hooks to print a resume command. In particular, ordinary
+`opencode -s ...` is not a valid way to resume a session created from an
+arbitrary repository/temp-project context; the mock contract test confirms this
+case. Codex is ephemeral and Claude disables session persistence, so neither
+claims a resumable/provider transcript. A command profile has no lifecycle
+inference at all; wrappers own any files or resume behavior they implement.
+
+Console status lines have an `[ai-push-hooks]` prefix. LLM lines include
+`module.step` and purpose, and completion lines include profile/type and a
+success or failure label. `NO_COLOR` disables colors; otherwise non-empty
+`FORCE_COLOR` (except `0`) enables them, while `TERM=dumb` disables them when
+not forced. `logging.jsonl = true` writes plain JSONL records to the private
+runtime log; console records remain one line. `print_llm_output` is a sensitive,
+explicit opt-in: it prints normalized final text after redaction, not raw event
+streams or child diagnostics.
 
 ### Beads maintenance boundary
 
@@ -178,7 +365,11 @@ Configure modules and steps in the [configuration reference](#configuration-refe
 ## Troubleshooting
 
 - **`opencode is required but not installed`:** install OpenCode and ensure `opencode` (or `opencode-cli`) is on `PATH` for the Git hook process.
-- **Provider/model authentication fails:** run `opencode auth list`, authenticate a built-in provider, and verify `[llm].model`. Built-in auth plugins remain available, while project/global custom-provider configuration is intentionally not loaded. Recognized provider environment variables, including `OPENAI_API_KEY`, are forwarded and OpenCode chooses authentication. See [OpenCode isolation limits](#opencode-isolation-limits).
+- **`Runner profile ... does not exist` or a missing-profile config error:** add the exact named profile under `[runners.<name>]`, or change the step/global `runner` to an existing name. Profile names are strict; environment overrides do not create profiles.
+- **Selected runner capability check fails:** install the documented CLI version/flags. Claude's required `--permission-mode`, `--tools`, and `--allowedTools` contract is checked before invocation; it does not silently downgrade. Codex and OpenCode similarly fail when their required adapter contract cannot run.
+- **Provider/model authentication fails:** for OpenCode, run `opencode auth list`, authenticate a built-in provider, and verify the selected profile's model. Built-in auth plugins remain available, while project/global custom-provider configuration is intentionally not loaded. Codex, Claude, and custom commands own their normal login/provider setup; ai-push-hooks never invokes login. See [OpenCode isolation limits](#opencode-isolation-limits).
+- **`no final response`, timeout, signal, or nonzero runner error:** the selected profile, adapter type, and stage are reported with bounded redacted diagnostics. Check that the CLI is usable from the configured cwd and that its final output contract is enabled; do not expect child stderr or raw event streams to be printed.
+- **Invalid JSON after retries:** `json_max_retries` defaults to `2`. The schema retry feedback is bounded by `invalid_json_feedback_max_chars` and, by default, each retry starts a fresh invocation (`json_retry_new_session = true`). If session reuse is requested but unsupported or no session was captured, the run explicitly falls back to a fresh invocation.
 - **The hook does not run:** rerun `lefthook install`, check `git config --get core.hooksPath`, and verify the pre-push path with the command above.
 - **The push is blocked after docs changed:** this is the expected edit-review-commit flow. Review `git diff`, validate and commit the changes, then push again.
 - **Find logs or transcripts:** inspect `.git/ai-push-hooks/logs`, `.git/ai-push-hooks/summaries`, and (when enabled) `.git/ai-push-hooks/transcripts`.
@@ -243,7 +434,23 @@ uninspected `pre-push` path.
 
 ## Security and privacy
 
-Repository diffs, selected context, and prompts may be sent by OpenCode to the configured model provider. Review that provider's data-handling terms and do not include secrets in commits or prompts. Transcripts are stored locally by default under `.git/ai-push-hooks/transcripts`; sharing is disabled and OpenCode sessions are deleted after each run by default. If transcript export fails, the run warns and still follows the configured deletion policy; do not assume an export exists. See [SECURITY.md](SECURITY.md) for reporting, the threat model, data handling, and sandbox limitations.
+Repository diffs, selected context, artifacts, and prompts may be sent by the
+selected runner to its configured model provider. `project_access = "project"`
+can expose substantially more repository content than the artifact-only default;
+review provider data-handling, retention, and billing terms before using a
+sensitive repository. Authentication belongs to the user and the selected CLI:
+OpenCode retains its existing auth state and recognized provider environment
+variables, while Codex, Claude, and custom commands inherit the normal user
+environment/home they require. ai-push-hooks does not log environment values or
+broker credentials.
+
+OpenCode transcripts are exported to private local storage by default under
+`.git/ai-push-hooks/transcripts`, and its sessions are deleted after each run by
+default. Export is best effort: if it fails, the run warns and does not claim a
+transcript exists. Codex and Claude use ephemeral/no-persistence modes and
+command profiles have no inferred transcript. A local transcript never proves
+provider-side deletion. See [SECURITY.md](SECURITY.md) for reporting, the threat
+model, data handling, and sandbox limitations.
 
 ### BR-06 provider evidence (limited preview)
 
@@ -260,36 +467,66 @@ transmission terms before using repository content.
 
 ## Tested matrix and beta boundary
 
-The current candidate was exercised on **macOS Darwin 24.6.0 arm64** with
-Python **3.12.13**, Node **24.19.0**, npm **10.9.2**, Git **2.55.0**, Ruff
-**0.13.3**, OpenCode **1.18.29**, `gh` **2.93.0**, and `bd` **1.2.2**. The
-wheel and packed npm installed-hook tests use disposable repositories, full
-40-character Git object IDs, a local bare remote, and a minimal PATH. The
-Lefthook **2.1.9** was also run in a disposable repository to install a
-pre-push hook and verify argument/stdin forwarding. The real OpenCode contract
-also passed in a Linux arm64 Docker container launched from this macOS host.
-Python 3.10, 3.11, and 3.13 and Node 18 were not available in this validation
-environment and are not claimed as locally run; their jobs remain part of the
-GitHub Actions matrix.
+The recorded environment details are intentionally not used as compatibility
+proof for every platform. Python 3.10–3.13 and Node 18+ remain declared
+compatibility ranges, and the generated hook requires a POSIX shell.
 
-Prior recorded BR evidence also covers the real OpenCode 1.18.29 CLI with a
-loopback mock provider inside a Linux Docker runtime with networking disabled.
-That is mock-provider permission/workspace evidence, not live-provider or
-operating-system-sandbox evidence.
+The current direct smoke command uses a loopback mock provider. Do not read this
+as live-provider evidence or as proof of network or operating-system isolation.
 
-Validation results for this snapshot are **273 passed, 1 skipped** for the full
-Python suite, **8 passed** for install-unit coverage, **2 passed** for installed
-wheel and npm hook coverage against the exact release artifacts, a passing
-`npm run test:npm-pack`, and a passing Lefthook 2.1.9 disposable
-argument/stdin-forwarding check. The Docker contract passed against the real
-OpenCode 1.18.29 CLI with runtime networking disabled and a loopback mock
-provider.
+Final pinned-Lefthook verification passed with no skips:
+
+```bash
+mise exec lefthook@2.1.9 -- python -m pytest tests -q
+```
+
+```text
+407 passed, 0 skipped
+```
+
+Ruff 0.13.3 also passed after the three direct-script `E402` fixes:
+
+```bash
+uv tool run --from ruff==0.13.3 ruff check --isolated .
+```
+
+Wheel, sdist, Twine 6.1.0, and npm packaging checks passed; the npm 10.9.2
+offline smoke used zero LLM calls. The real OpenCode 1.18.29 smoke test passed
+with an in-process loopback mock provider and no external model call; its read
+probe also checks that no Git-visible project files were mutated. It is
+permission/workspace evidence, not live-provider or operating-system-sandbox
+evidence. Installed no-model conformance passed for OpenCode 1.18.29, Codex
+0.148.0, and Claude 2.1.220 using only version/help commands. Python 3.10.18
+and Python 3.12 each passed 407 tests with 0 skips; the Python 3.10.18 run used
+pytest 8.3.5, build 1.2.2.post1, tomli 2.4.1, and Lefthook 2.1.9. Default tests
+make no authenticated or billable model calls. The live probe rejects a
+present `AI_PUSH_HOOKS_MODEL` before any setup or child call; unset it so the
+explicit `--model "provider/model-id"` argument remains deliberate. See the
+[verification report](docs/reports/runner-verification.md) for the full gated
+Codex/Pi read and apply commands.
+
+### Runner references
+
+The invocation contracts were checked against the installed CLIs and their
+authoritative documentation: [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive),
+[Codex CLI reference](https://developers.openai.com/codex/cli/reference),
+[Codex authentication](https://developers.openai.com/codex/auth),
+[Codex approvals and security](https://developers.openai.com/codex/agent-approvals-security),
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference),
+[Claude headless mode](https://code.claude.com/docs/en/headless),
+[Claude permissions](https://code.claude.com/docs/en/permissions),
+[Claude sessions](https://code.claude.com/docs/en/sessions),
+[Claude authentication](https://code.claude.com/docs/en/authentication), and
+[Pi usage/security/providers](https://pi.dev/docs/latest/usage),
+[Pi JSON mode](https://pi.dev/docs/latest/json). CLI flags and model catalogs
+can change; capability checks and additive parsers are intentional.
 
 Python 3.10–3.13 and Node 18+ remain the declared compatibility ranges, not a
-claim that every patch/platform combination has passed. Windows has no native
-beta evidence and is explicitly untested/not supported for this beta. The
-generated hook and documented runner require a POSIX shell; defensive path
-handling is not Windows validation.
+claim that every patch/platform combination has passed. The generated hook
+requires a POSIX shell, and Windows has no native beta evidence. On POSIX,
+timeout cleanup signals a private process group on a best-effort basis; on
+Windows, timeout cleanup can terminate only the direct child. Neither behavior
+is a sandbox.
 
 ## Synthetic demo and evidence
 
@@ -300,12 +537,12 @@ bash scripts/opencode-contract-smoke.sh
 ```
 
 It builds a disposable image, starts only an in-process loopback mock provider,
-and drives real OpenCode 1.18.29 through a synthetic repository. Runtime
-networking is disabled, so no external model call is possible; the initial
-Docker build/setup may need network access to fetch its pinned inputs. It shows
-the allowlisted `README.md` edit, denied outside/protected edits, and unchanged
-protected Git metadata. This is **wiring and permission evidence only**, not a
-live-provider demo or OS-sandbox claim; it exits 2 when Docker is unavailable.
+and drives real OpenCode 1.18.29 through a synthetic repository. The Docker
+runtime uses `--network none`; the image build/setup may use network access to
+fetch its pinned inputs. It shows the allowlisted `README.md` edit, denied
+outside/protected edits, and unchanged protected Git metadata. This is
+**wiring and permission evidence only**, not a live-provider demo or OS-sandbox
+claim; it exits 2 when Docker is unavailable.
 
 For installed hook wiring without any model/provider call:
 
@@ -332,13 +569,12 @@ assertion then blocks the push for human review and commit. `exec` and `assert`
 remain available for deterministic repository actions. This ordering limits
 model scope without pretending to provide an OS sandbox.
 
-**Evidence.** The real OpenCode 1.18.29 mock-provider contract found a
+**Evidence.** The real OpenCode 1.18.29 loopback mock-provider contract found a
 version-specific permission mapping (`write` requests `edit`) and covers
-allowlisted propagation plus protected Git metadata. The BR-06 live synthetic
-preview used `opencode/muse-spark-1.3-contributor-free` for query/analyze at
-zero reported cost; it is not evidence for all providers/models or live apply.
-Installed wheel/npm tests cover hook wiring, a successful local push, and a
-fail-closed rejection. The Docker contract was not rerun in this environment.
+allowlisted propagation plus protected Git metadata without an external model
+call. The final pinned-Lefthook Python suite recorded 407 passed with no skips.
+Installed runner conformance is version/help-only; live Codex and Pi probes were
+intentionally not run, and Claude live verification is pending.
 
 **Limitations.** Provider availability, billing, retention, OS-level access,
 ignored trees, shared metadata, and independent filesystem races remain outside
@@ -375,6 +611,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 | `logging` | table | no | see section defaults |
 | `workflow` | table | yes | n/a |
 | `modules` | table | yes | n/a |
+| `runners` | table | no | Named runner profiles; omitted for the implicit OpenCode compatibility default. |
 
 ### `[general]`
 
@@ -390,17 +627,28 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `runner` | string | `"opencode"` | LLM runner label (currently OpenCode flow). |
-| `model` | string | `"openai/gpt-5.6-terra"` | Model passed to OpenCode. |
-| `variant` | string | `""` | Optional OpenCode variant. |
-| `timeout_seconds` | int | `800` | Timeout per LLM invocation and related OpenCode calls. |
+| `runner` | string | `"opencode"` | Global named runner profile for `llm`/`apply`; the implicit OpenCode compatibility profile is the default. |
+| `model` | string | `"openai/gpt-5.6-terra"` | Compatibility model for implicit OpenCode; explicit profiles use their own model unless overridden by `AI_PUSH_HOOKS_MODEL`. |
+| `variant` | string | `""` | Optional OpenCode compatibility variant. |
+| `timeout_seconds` | int | `800` | Timeout per selected runner invocation and related lifecycle calls. |
 | `max_parallel` | int | `2` | Max concurrent read-only steps (`collect`, `llm`). |
 | `json_max_retries` | int | `2` | Retry count for invalid JSON responses. |
 | `invalid_json_feedback_max_chars` | int | `6000` | Max invalid output included in retry feedback. |
-| `json_retry_new_session` | bool | `true` | Starts a new OpenCode session on JSON retry. |
+| `json_retry_new_session` | bool | `true` | Requests a fresh invocation on JSON retry; unsupported/sessionless runners always fall back fresh. |
 | `delete_session_after_run` | bool | `true` | Deletes OpenCode sessions after completion. |
 | `max_diff_bytes` | int | `180000` | Max bytes of git diff sent into workflow artifacts. |
 | `session_title_prefix` | string | `"ai-push-hooks"` | Prefix for OpenCode session titles. |
+
+### `[runners.<name>]`
+
+| Key | Type | Required/default | Description |
+| --- | --- | --- | --- |
+| `type` | string | required | One of `opencode`, `codex`, `claude`, or `command`. |
+| `model` | string | optional | Opaque runner-specific model identifier; no catalog validation is performed. |
+| `project_access` | string | OpenCode: `artifacts`; others: `project` | `artifacts` or `project`; see [project visibility](#project-visibility-and-apply-boundary). |
+| `variant` | string | optional, OpenCode only | OpenCode variant. |
+| `command` | string array | required for `command` | Direct argv vector; no shell parsing. |
+| `prompt_transport` | `stdin`/`argv` | `stdin` for `command` | `argv` requires one whole-argument `{prompt}` placeholder. |
 
 ### `[logging]`
 
@@ -412,7 +660,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 | `capture_llm_transcript` | bool | `true` | Exports OpenCode session transcripts. |
 | `transcript_dir` | string | `".git/ai-push-hooks/transcripts"` | Transcript export directory. |
 | `summary_dir` | string | `".git/ai-push-hooks/summaries"` | Per-run summary JSON directory. |
-| `print_llm_output` | bool | `false` | Mirrors raw OpenCode JSON stream to stdout. |
+| `print_llm_output` | bool | `false` | Sensitive opt-in; prints normalized, redacted final text, not raw runner events. |
 
 ### `[workflow]`
 
@@ -441,6 +689,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 | `fallback_prompt_id` | string | conditional | `llm`, `apply` | Built-in prompt ID used when no higher source resolves. |
 | `collector` | string | yes | `collect` | Collector handler ID. |
 | `allow_paths` | array of strings | yes | `apply` | File glob allowlist for edits. |
+| `runner` | string | no | `llm`, `apply` | Per-step named profile override; invalid on other step types. |
 | `executor` | string | yes | `exec` | Exec handler ID. |
 | `assertion` | string | yes | `assert` | Assertion handler ID. |
 | `when_env` | string | no | any step | Runs step only when env var parses as true. |
@@ -496,6 +745,15 @@ Artifact references in `inputs` are module-local. Use `<step>/<artifact>` to ref
 
 Boolean env parsing accepts: `1`, `true`, `yes`, `y`, `on` and `0`, `false`, `no`, `n`, `off`.
 
+Runner selection is resolved in this order: the step's `runner`, then
+`[llm].runner`, then the named profile (or implicit `opencode` compatibility
+profile). For the selected profile, `AI_PUSH_HOOKS_MODEL` is the final model
+override. Without it, an explicit profile model wins; only the implicit
+OpenCode profile inherits flat `[llm].model`. `AI_PUSH_HOOKS_VARIANT` applies
+only to OpenCode and is the final override for its variant. These environment
+overrides do not turn a missing profile into a valid one or change
+`project_access`.
+
 | Env var | Effect |
 | --- | --- |
 | `AI_PUSH_HOOKS_SKIP` | If true, sets `general.enabled = false`. |
@@ -504,9 +762,9 @@ Boolean env parsing accepts: `1`, `true`, `yes`, `y`, `on` and `0`, `false`, `no
 | `AI_PUSH_HOOKS_ALLOW_DIRTY` | If true, forces `general.require_clean_worktree = false`. |
 | `AI_PUSH_HOOKS_BASE_BRANCH` | Overrides `general.base_branch`. |
 | `AI_PUSH_HOOKS_LOG_LEVEL` | Overrides `logging.level`. |
-| `AI_PUSH_HOOKS_PRINT_LLM_OUTPUT` | Overrides `logging.print_llm_output`. |
-| `AI_PUSH_HOOKS_MODEL` | Overrides `llm.model`. |
-| `AI_PUSH_HOOKS_VARIANT` | Overrides `llm.variant`. |
+| `AI_PUSH_HOOKS_PRINT_LLM_OUTPUT` | Overrides `logging.print_llm_output`; normalized final text only, redacted, and sensitive. |
+| `AI_PUSH_HOOKS_MODEL` | Final model override for the selected profile; values remain opaque identifiers. |
+| `AI_PUSH_HOOKS_VARIANT` | Final variant override for OpenCode only. |
 | `AI_PUSH_HOOKS_TIMEOUT_SECONDS` | Overrides `llm.timeout_seconds` (integer). |
 
 `when_env` is step-level and can point to any env var. A common example is `AI_PUSH_HOOKS_CREATE_PR` to gate PR creation steps.

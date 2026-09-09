@@ -6,6 +6,9 @@ skip_on_sync_branch = true
 base_branch = "main"
 
 [llm]
+# Compatibility default: OpenCode receives validated hook artifacts only.
+# Define [runners.<name>] and select it with [llm].runner, or override an
+# individual llm/apply step with runner = "<name>". Project access is explicit.
 runner = "opencode"
 model = "openai/gpt-5.6-terra"
 variant = ""
@@ -17,6 +20,8 @@ json_retry_new_session = true
 delete_session_after_run = true
 
 [logging]
+# Transcripts are OpenCode-only lifecycle exports; other runners are ephemeral
+# or command-owned. print_llm_output, when enabled, is normalized/redacted text.
 level = "status"
 jsonl = true
 dir = ".git/ai-push-hooks/logs"

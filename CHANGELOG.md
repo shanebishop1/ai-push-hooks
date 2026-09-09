@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Added strict named runner profiles for OpenCode, Codex, Claude, and direct
+  shell-free command adapters, with global and per-`llm`/`apply` selection.
+- Added explicit project-aware analysis and broad, bounded project apply staging
+  while retaining allowlisted propagation and the artifact-only OpenCode default.
+
+### Changed
+
+- Made model/schema retries runner-neutral and session-optional, with fresh
+  invocation fallback when reuse is unavailable; added truthful session,
+  transcript, colored status, JSONL, and normalized redacted-output reporting.
+- Documented authentication ownership, provider data exposure, custom-command
+  and Pi trust/concurrency, protected and ignored apply inputs, and the
+  no-sandbox boundary.
+
+### Fixed
+
+- Fixed bounded child-process capture and timeout cleanup for descendant process
+  trees on POSIX where possible, while preventing pipe descriptors from being
+  reused and closed by a later invocation.
+
 ## [0.2.1] - 2026-09-08
 
 This is a beta patch release. Python and npm both use `0.2.1`, the canonical
