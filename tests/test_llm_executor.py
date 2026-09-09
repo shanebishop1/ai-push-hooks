@@ -11,14 +11,56 @@ from ai_push_hooks.config import load_config
 from ai_push_hooks.executors.llm import (
     OPENCODE_APPLY_AGENT,
     OPENCODE_READ_ONLY_AGENT,
-    OpenCodeRunResult,
     call_opencode,
     finalize_opencode_session,
     run_llm_step,
 )
+from ai_push_hooks.executors.runners import (
+    RunnerAdapterUnavailableError,
+    RunnerCapabilities,
+    RunnerResult,
+    RunnerTimeoutError,
+    SessionMetadata,
+)
 from ai_push_hooks.types import HookError
 
 from .conftest import build_context, init_repo
+
+
+def _use_runner_boundary_logger(context, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def llm_call(stage, purpose, model, attempt=None, total_attempts=None, **fields):
+        number = len(calls) + 1
+        calls.append(
+            {
+                "call_number": number,
+                "stage": stage,
+                "purpose": purpose,
+                "model": model,
+                "attempt": attempt,
+                "total_attempts": total_attempts,
+                **fields,
+            }
+        )
+        return number
+
+    completions: list[dict[str, object]] = []
+
+    def llm_complete(call_number, stage, profile, runner_type, **fields):
+        completions.append(
+            {
+                "call_number": call_number,
+                "stage": stage,
+                "profile": profile,
+                "runner_type": runner_type,
+                **fields,
+            }
+        )
+
+    monkeypatch.setattr(context.logger, "llm_call", llm_call)
+    monkeypatch.setattr(context.logger, "llm_complete", llm_complete, raising=False)
+    monkeypatch.setattr(context.logger, "completions", completions, raising=False)
 
 
 def test_run_llm_step_accepts_array_for_docs_issue_schema(
@@ -29,18 +71,18 @@ def test_run_llm_step_accepts_array_for_docs_issue_schema(
     config, _ = load_config(repo)
     context = build_context(repo, config)
     analyze_step = next(step for step in config.modules["docs"].steps if step.id == "analyze")
+    analyze_step = replace(analyze_step, inputs=())
 
-    def fake_call_opencode(*args, **kwargs):
-        return OpenCodeRunResult(
-            output_text="[]",
-            session_id=None,
-            stdout="",
-            stderr="",
-            return_code=0,
-        )
+    class FakeRunner:
+        capabilities = RunnerCapabilities()
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.call_opencode", fake_call_opencode)
-    monkeypatch.setattr("ai_push_hooks.executors.llm.finalize_opencode_session", lambda *args, **kwargs: None)
+        def run(self, request):
+            assert request.runner_type == "opencode"
+            assert request.mode == "llm"
+            return RunnerResult("[]", 0, "", "")
+
+    _use_runner_boundary_logger(context, monkeypatch)
+    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
     payload = run_llm_step(context, analyze_step, "prompt", [], "docs.analyze")
 
@@ -447,19 +489,22 @@ def test_run_llm_step_always_selects_read_only_agent_policy(
     config, _ = load_config(repo)
     context = build_context(repo, config)
     query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
-    agents: list[str] = []
+    query_step = replace(query_step, inputs=())
+    requests = []
 
-    def fake_call_opencode(*args, **kwargs):
-        agents.append(kwargs["agent"])
-        return OpenCodeRunResult("[]", None, "", "", 0)
+    class FakeRunner:
+        capabilities = RunnerCapabilities()
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.call_opencode", fake_call_opencode)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.llm.finalize_opencode_session", lambda *args, **kwargs: None
-    )
+        def run(self, request):
+            requests.append(request)
+            return RunnerResult("[]", 0, "", "")
+
+    _use_runner_boundary_logger(context, monkeypatch)
+    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
     assert run_llm_step(context, query_step, "prompt", [], "docs.query") == []
-    assert agents == ["read-only"]
+    assert requests[0].runner_type == "opencode"
+    assert requests[0].mode == "llm"
 
 
 def test_call_opencode_rejects_external_and_symlinked_attachments(
@@ -502,27 +547,28 @@ def test_json_retry_new_session_finalizes_each_attempt(tmp_path, monkeypatch) ->
     config, _ = load_config(repo)
     context = build_context(repo, config)
     query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
-    results = iter(
-        [
-            OpenCodeRunResult("not json", "session-1", "", "", 0),
-            OpenCodeRunResult("[]", "session-2", "", "", 0),
-        ]
-    )
-    reused: list[str | None] = []
+    query_step = replace(query_step, inputs=())
+    results = iter([RunnerResult("not json", 0, "", "", SessionMetadata("session-1", "persisted", True)), RunnerResult("[]", 0, "", "", SessionMetadata("session-2", "persisted", True))])
+    requests = []
     finalized: list[str | None] = []
 
-    def fake_call(*args, **kwargs):
-        reused.append(kwargs["existing_session_id"])
-        return next(results)
+    class FakeRunner:
+        capabilities = RunnerCapabilities(supports_resume=True, supports_finalize=True)
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.llm.finalize_opencode_session",
-        lambda _context, _stage, session_id: finalized.append(session_id),
-    )
+        def run(self, request):
+            requests.append(request)
+            return next(results)
+
+        def finalize(self, _request, result):
+            if result.session:
+                finalized.append(result.session.session_id)
+            return result
+
+    _use_runner_boundary_logger(context, monkeypatch)
+    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
     assert run_llm_step(context, query_step, "prompt", [], "docs.query") == []
-    assert reused == [None, None]
+    assert [request.session_id for request in requests] == [None, None]
     assert finalized == ["session-1", "session-2"]
 
 
@@ -537,25 +583,122 @@ def test_json_retry_reused_session_finalizes_only_after_last_attempt(
     )
     context = build_context(repo, config)
     query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
-    results = iter(
-        [
-            OpenCodeRunResult("not json", "session-1", "", "", 0),
-            OpenCodeRunResult("[]", "session-1", "", "", 0),
-        ]
-    )
-    reused: list[str | None] = []
+    query_step = replace(query_step, inputs=())
+    results = iter([RunnerResult("not json", 0, "", "", SessionMetadata("session-1", "persisted", True)), RunnerResult("[]", 0, "", "", SessionMetadata("session-1", "persisted", True))])
+    requests = []
     finalized: list[str | None] = []
 
-    def fake_call(*args, **kwargs):
-        reused.append(kwargs["existing_session_id"])
-        return next(results)
+    class FakeRunner:
+        capabilities = RunnerCapabilities(supports_resume=True, supports_finalize=True)
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.llm.finalize_opencode_session",
-        lambda _context, _stage, session_id: finalized.append(session_id),
-    )
+        def run(self, request):
+            requests.append(request)
+            return next(results)
+
+        def finalize(self, _request, result):
+            if result.session:
+                finalized.append(result.session.session_id)
+            return result
+
+    _use_runner_boundary_logger(context, monkeypatch)
+    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
     assert run_llm_step(context, query_step, "prompt", [], "docs.query") == []
-    assert reused == [None, "session-1"]
+    assert [request.session_id for request in requests] == [None, "session-1"]
+    assert [request.resume_session for request in requests] == [False, True]
+    assert finalized == ["session-1"]
+
+
+@pytest.mark.parametrize("second_outcome", [RunnerTimeoutError("timed out"), "missing-output"])
+def test_reused_session_is_finalized_when_retry_fails_without_session_metadata(
+    tmp_path: pathlib.Path, monkeypatch, second_outcome
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(config, llm=replace(config.llm, json_retry_new_session=False))
+    context = build_context(repo, config)
+    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = replace(query_step, inputs=())
+    finalized: list[str | None] = []
+    outcomes = iter(
+        [
+            RunnerResult(
+                "not json",
+                0,
+                "",
+                "",
+                SessionMetadata("session-1", "persisted", True),
+            ),
+            second_outcome,
+        ]
+    )
+
+    class FakeRunner:
+        capabilities = RunnerCapabilities(supports_resume=True, supports_finalize=True)
+
+        def run(self, request):
+            outcome = next(outcomes)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            if outcome == "missing-output":
+                return RunnerResult("", 0, "", "")
+            return outcome
+
+        def finalize(self, _request, result):
+            if result.session:
+                finalized.append(result.session.session_id)
+            return result
+
+    _use_runner_boundary_logger(context, monkeypatch)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
+
+    with pytest.raises(HookError, match=r"opencode.*docs\.query"):
+        run_llm_step(context, query_step, "prompt", [], "docs.query")
+    assert finalized == ["session-1"]
+
+
+def test_reused_session_is_finalized_when_next_runner_construction_fails(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    config = replace(config, llm=replace(config.llm, json_retry_new_session=False))
+    context = build_context(repo, config)
+    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = replace(query_step, inputs=())
+    finalized: list[str | None] = []
+
+    class FakeRunner:
+        capabilities = RunnerCapabilities(supports_resume=True, supports_finalize=True)
+
+        def run(self, _request):
+            return RunnerResult(
+                "not json",
+                0,
+                "",
+                "",
+                SessionMetadata("session-1", "persisted", True),
+            )
+
+        def finalize(self, _request, result):
+            if result.session:
+                finalized.append(result.session.session_id)
+            return result
+
+    calls = 0
+
+    def get_runner(_type):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FakeRunner()
+        raise RunnerAdapterUnavailableError("construction failed")
+
+    _use_runner_boundary_logger(context, monkeypatch)
+    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", get_runner)
+
+    with pytest.raises(HookError, match=r"opencode.*docs\.query"):
+        run_llm_step(context, query_step, "prompt", [], "docs.query")
     assert finalized == ["session-1"]

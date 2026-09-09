@@ -9,6 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
+from ..config import resolve_runner_profile
 from ..paths import (
     atomic_write_bytes,
     ensure_private_directory,
@@ -27,7 +28,8 @@ from .exec import (
     resolve_git_dir,
     run_command,
 )
-from .llm import call_opencode, finalize_opencode_session, validate_opencode_attachments
+from .llm import validate_opencode_attachments
+from .runner_workflow import run_runner_once
 
 METADATA_MAX_FILES = 20_000
 METADATA_MAX_BYTES = 64 * 1024 * 1024
@@ -354,6 +356,8 @@ def _copy_checkout_to_staging(
     context: RuntimeContext,
     staging_root: pathlib.Path,
     allow_paths: tuple[str, ...],
+    *,
+    project_access: str = "artifacts",
 ) -> dict[str, DestinationState]:
     repo_root = context.repo_root
     git_roots = (
@@ -364,16 +368,25 @@ def _copy_checkout_to_staging(
     copied_bytes = 0
     baselines: dict[str, DestinationState] = {}
     resolved_repo_root = repo_root.resolve(strict=True)
-    allowed_paths = {
-        relative_path
-        for relative_path in _tracked_and_unignored_paths(repo_root)
-        if not _is_protected_path(relative_path)
-        and any(path_matches(relative_path, pattern) for pattern in allow_paths)
-    }
-    allowed_paths -= _ignored_changed_paths(repo_root, allowed_paths)
-    for relative_path in sorted(allowed_paths):
+    checkout_paths = _tracked_and_unignored_paths(repo_root)
+    if project_access == "project":
+        projection_candidates = checkout_paths
+    else:
+        projection_candidates = {
+            relative_path
+            for relative_path in checkout_paths
+            if not _is_protected_path(relative_path)
+            and any(path_matches(relative_path, pattern) for pattern in allow_paths)
+        }
+    ignored_paths = _ignored_changed_paths(repo_root, projection_candidates)
+    projection_paths = projection_candidates - ignored_paths
+    for relative_path in sorted(projection_paths):
+        if _is_protected_path(relative_path):
+            continue
         source = _repo_path_from_git(repo_root, relative_path)
         if path_has_symlink(repo_root, source):
+            if project_access == "project":
+                continue
             raise HookError(
                 f"Allowed checkout path is or traverses a symlink or reparse point: {relative_path}"
             )
@@ -384,7 +397,9 @@ def _copy_checkout_to_staging(
             continue
         if not source.exists():
             continue
-        if not source.is_file():
+        if not stat.S_ISREG(source.lstat().st_mode):
+            if project_access == "project":
+                continue
             raise HookError(f"Allowed checkout path is not a regular file: {relative_path}")
         copied_files += 1
         if copied_files > STAGING_MAX_FILES:
@@ -449,8 +464,11 @@ def _changed_staging_paths(
     unexpected = sorted(
         path
         for path in all_paths
-        if _is_protected_path(path)
-        or not any(path_matches(path, pattern) for pattern in allow_paths)
+        if before.get(path) != after.get(path)
+        and (
+            _is_protected_path(path)
+            or not any(path_matches(path, pattern) for pattern in allow_paths)
+        )
     )
     if unexpected:
         raise HookError("Apply staging workspace contains paths outside allowlist: " + ", ".join(unexpected))
@@ -798,17 +816,21 @@ def run_apply_step(
     propagated_expected: dict[str, StagedFile | None] = {}
     with tempfile.TemporaryDirectory(prefix="ai-push-hooks-apply-") as temporary_directory:
         staging_root = pathlib.Path(temporary_directory).resolve(strict=True)
-        destination_baselines = _copy_checkout_to_staging(context, staging_root, step.allow_paths)
+        profile = resolve_runner_profile(context.config, step)
+        destination_baselines = _copy_checkout_to_staging(
+            context,
+            staging_root,
+            step.allow_paths,
+            project_access=profile.project_access,
+        )
         staged_before = _inventory_staging(staging_root)
         try:
-            result = call_opencode(
+            result = run_runner_once(
                 context,
-                stage_name=stage_name,
-                purpose=f"{step.type}:{step.id}",
-                prompt=_apply_prompt(prompt, step.allow_paths),
-                files=validated_inputs,
-                agent="apply",
-                allow_paths=step.allow_paths,
+                step,
+                _apply_prompt(prompt, step.allow_paths),
+                validated_inputs,
+                stage_name,
                 working_directory=staging_root,
             )
         except Exception as exc:  # noqa: BLE001
@@ -823,13 +845,6 @@ def run_apply_step(
             if call_error is None:
                 call_error = exc
 
-        if result is not None:
-            try:
-                finalize_opencode_session(context, stage_name, result.session_id)
-            except Exception as exc:  # noqa: BLE001
-                if call_error is None:
-                    call_error = exc
-
         _verify_pre_propagation_security_state(
             context,
             baseline,
@@ -840,9 +855,9 @@ def run_apply_step(
         if call_error is not None:
             raise HookError(f"Apply step failed in isolated staging: {call_error}") from call_error
         if result is None:
-            raise HookError("Apply step failed without an OpenCode result")
-        if result.return_code != 0:
-            details = result.stderr.strip() or result.stdout.strip() or f"exit code {result.return_code}"
+            raise HookError("Apply step failed without a runner result")
+        if result.returncode != 0:
+            details = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
             raise HookError(f"Apply step failed in isolated staging: {details}")
         propagated_expected = _propagate_staging_changes(
             context,

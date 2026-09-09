@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import stat
 import sys
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +16,11 @@ PROMPTABLE_STEP_TYPES = frozenset({"llm", "apply"})
 SUPPORTED_STEP_TYPES = frozenset({"collect", "llm", "apply", "exec", "assert"})
 FEATURE_BRANCH_PREFIXES = ("feat/", "feature/")
 ZERO_OID_LENGTHS = frozenset({40, 64})
+
+_ANSI_ESCAPE_PATTERN = re.compile(
+    r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_])"
+)
+_UNSAFE_TERMINAL_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 class HookError(RuntimeError):
@@ -215,6 +222,12 @@ class HookLogger:
     console_level: str = "status"
     jsonl_write_failed: bool = False
     llm_calls: list[dict[str, Any]] = field(default_factory=list)
+    _lock: threading.RLock = field(
+        default_factory=threading.RLock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     _verbosity_order = {"status": 0, "info": 1, "debug": 2}
 
@@ -225,55 +238,247 @@ class HookLogger:
         required = self._verbosity_order.get(level, 0)
         return configured >= required
 
-    def _emit(self, level: str, event: str, message: str, **fields: Any) -> None:
-        if not self._level_is_enabled(level):
-            return
-        stamp = datetime.now(timezone.utc).isoformat()
-        sys.stderr.write(f"[ai-push-hooks] {message}\n")
-        if self.jsonl_path is None or self.jsonl_write_failed:
-            return
-        record = {"ts": stamp, "level": level, "event": event, "message": message, **fields}
+    @staticmethod
+    def _safe_text(value: object) -> str:
+        """Remove terminal escape sequences without changing ordinary text."""
+
+        return _UNSAFE_TERMINAL_CONTROL_PATTERN.sub(
+            "", _ANSI_ESCAPE_PATTERN.sub("", str(value))
+        )
+
+    @classmethod
+    def _safe_json_value(cls, value: Any) -> Any:
+        """Keep structured log values JSON-compatible and terminal-safe."""
+
+        if isinstance(value, str):
+            return cls._safe_text(value)
+        if isinstance(value, dict):
+            return {
+                cls._safe_text(key): cls._safe_json_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [cls._safe_json_value(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return cls._safe_text(value)
+
+    @staticmethod
+    def _colors_enabled() -> bool:
+        """Resolve color policy at emission time so tests and embedding callers can override it."""
+
+        if "NO_COLOR" in os.environ:
+            return False
+        force_color = os.environ.get("FORCE_COLOR")
+        if force_color == "0":
+            return False
+        if force_color:
+            return True
+        if os.environ.get("TERM") == "dumb":
+            return False
         try:
+            return bool(sys.stderr.isatty())
+        except (AttributeError, OSError):
+            return False
+
+    @classmethod
+    def _style(cls, value: str, code: str, colors_enabled: bool) -> str:
+        if not colors_enabled:
+            return value
+        return f"\x1b[{code}m{value}\x1b[0m"
+
+    @classmethod
+    def _stage_for_console(cls, stage_name: object, colors_enabled: bool) -> str:
+        safe_stage = cls._safe_text(stage_name).replace("\n", "\\n").replace("\t", " ")
+        if not colors_enabled:
+            return safe_stage
+        if "." not in safe_stage:
+            return cls._style(safe_stage, "36", colors_enabled)
+        module, step = safe_stage.split(".", 1)
+        return (
+            cls._style(module, "36", colors_enabled)
+            + cls._style(".", "2", colors_enabled)
+            + cls._style(step, "35", colors_enabled)
+        )
+
+    @classmethod
+    def _semantic_body(
+        cls,
+        event: str,
+        message: str,
+        fields: dict[str, Any],
+        colors_enabled: bool,
+        level: str,
+    ) -> str:
+        safe_message = cls._safe_text(message).replace("\n", "\\n").replace("\t", " ")
+        if not colors_enabled:
+            return safe_message
+
+        if event == "llm.call" and {
+            "call_number",
+            "stage_name",
+            "purpose",
+        }.issubset(fields):
+            call_number = cls._safe_text(fields.get("call_number", ""))
+            stage = cls._stage_for_console(fields.get("stage_name", ""), colors_enabled)
+            purpose = cls._style(
+                cls._safe_text(fields.get("purpose", "")).replace("\n", "\\n").replace("\t", " "),
+                "34",
+                colors_enabled,
+            )
+            return (
+                "LLM call "
+                + cls._style(f"#{call_number}", "1", colors_enabled)
+                + cls._style(":", "2", colors_enabled)
+                + " "
+                + stage
+                + cls._style(" - ", "2", colors_enabled)
+                + purpose
+            )
+
+        if event == "llm.complete" and {
+            "call_number",
+            "stage_name",
+            "runner_profile",
+            "runner_type",
+        }.issubset(fields):
+            call_number = cls._safe_text(fields.get("call_number", ""))
+            stage = cls._stage_for_console(fields.get("stage_name", ""), colors_enabled)
+            profile = cls._style(
+                cls._safe_text(fields.get("runner_profile", "")).replace("\n", "\\n").replace("\t", " "),
+                "34",
+                colors_enabled,
+            )
+            runner_type = cls._style(
+                cls._safe_text(fields.get("runner_type", "")).replace("\n", "\\n").replace("\t", " "),
+                "34",
+                colors_enabled,
+            )
+            failed = bool(fields.get("failed", False)) or level == "error"
+            label = "LLM failed" if failed else "LLM complete"
+            label_color = "31" if failed else "32"
+            body = (
+                cls._style(label, label_color, colors_enabled)
+                + " "
+                + cls._style(f"#{call_number}", "1", colors_enabled)
+                + cls._style(":", "2", colors_enabled)
+                + " "
+                + stage
+                + cls._style(" (", "2", colors_enabled)
+                + profile
+                + cls._style("/", "2", colors_enabled)
+                + runner_type
+                + cls._style(")", "2", colors_enabled)
+            )
+            if "; " in safe_message:
+                body += cls._style("; " + safe_message.split("; ", 1)[1], "2", colors_enabled)
+            return body
+
+        return safe_message
+
+    @classmethod
+    def _console_prefix(cls, level: str, event: str, fields: dict[str, Any]) -> str:
+        prefix = "[ai-push-hooks]"
+        colors_enabled = cls._colors_enabled()
+        if not colors_enabled:
+            return prefix
+        color = {
+            "warn": "\x1b[33m",
+            "error": "\x1b[31m",
+        }.get(level, "\x1b[36m")
+        if event == "llm.complete" and {
+            "call_number",
+            "stage_name",
+            "runner_profile",
+            "runner_type",
+        }.issubset(fields):
+            color = (
+                "\x1b[31m"
+                if level == "error" or fields.get("failed", False)
+                else "\x1b[32m"
+            )
+        return f"{color}{prefix}\x1b[0m"
+
+    @classmethod
+    def _console_message(
+        cls,
+        level: str,
+        message: str,
+        *,
+        event: str = "",
+        fields: dict[str, Any] | None = None,
+    ) -> str:
+        # A log event is deliberately one physical line.  This prevents an
+        # untrusted stage/profile/message from creating a fake prompt or log line.
+        safe_fields = fields or {}
+        colors_enabled = cls._colors_enabled()
+        body = cls._semantic_body(event, message, safe_fields, colors_enabled, level)
+        prefix = cls._console_prefix(level, event, safe_fields)
+        return f"{prefix} {body}\n"
+
+    def _emit(self, level: str, event: str, message: str, **fields: Any) -> None:
+        with self._lock:
+            if not self._level_is_enabled(level):
+                return
+            sys.stderr.write(
+                self._console_message(level, message, event=event, fields=fields)
+            )
+            if self.jsonl_path is None or self.jsonl_write_failed:
+                return
+            stamp = datetime.now(timezone.utc).isoformat()
+            safe_fields = self._safe_json_value(fields)
+            record = {
+                **safe_fields,
+                "ts": stamp,
+                "level": self._safe_text(level),
+                "event": self._safe_text(event),
+                "message": self._safe_text(message),
+            }
             try:
-                initial_metadata = self.jsonl_path.lstat()
-            except FileNotFoundError:
-                initial_metadata = None
-            if initial_metadata is not None:
-                reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                if stat.S_ISLNK(initial_metadata.st_mode) or bool(
-                    getattr(initial_metadata, "st_file_attributes", 0) & reparse_flag
-                ):
-                    raise HookError(
-                        "JSONL log target must not be a symlink or reparse point: "
-                        f"{self.jsonl_path}"
+                try:
+                    initial_metadata = self.jsonl_path.lstat()
+                except FileNotFoundError:
+                    initial_metadata = None
+                if initial_metadata is not None:
+                    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    if stat.S_ISLNK(initial_metadata.st_mode) or bool(
+                        getattr(initial_metadata, "st_file_attributes", 0) & reparse_flag
+                    ):
+                        raise HookError(
+                            "JSONL log target must not be a symlink or reparse point: "
+                            f"{self.jsonl_path}"
+                        )
+                flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(self.jsonl_path, flags, 0o600)
+                try:
+                    descriptor_metadata = os.fstat(descriptor)
+                    path_metadata = self.jsonl_path.lstat()
+                    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    if (
+                        not stat.S_ISREG(descriptor_metadata.st_mode)
+                        or stat.S_ISLNK(path_metadata.st_mode)
+                        or bool(
+                            getattr(path_metadata, "st_file_attributes", 0) & reparse_flag
+                        )
+                        or (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+                        != (path_metadata.st_dev, path_metadata.st_ino)
+                    ):
+                        raise HookError(f"JSONL log target is not a regular file: {self.jsonl_path}")
+                    os.fchmod(descriptor, 0o600)
+                    os.write(
+                        descriptor,
+                        (json.dumps(record, ensure_ascii=True) + "\n").encode("utf-8"),
                     )
-            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(self.jsonl_path, flags, 0o600)
-            try:
-                descriptor_metadata = os.fstat(descriptor)
-                path_metadata = self.jsonl_path.lstat()
-                reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                if (
-                    not stat.S_ISREG(descriptor_metadata.st_mode)
-                    or stat.S_ISLNK(path_metadata.st_mode)
-                    or bool(
-                        getattr(path_metadata, "st_file_attributes", 0) & reparse_flag
+                finally:
+                    os.close(descriptor)
+            except Exception as exc:  # noqa: BLE001
+                self.jsonl_write_failed = True
+                sys.stderr.write(
+                    self._console_message(
+                        "error", f"JSONL logging disabled after write failure: {exc}"
                     )
-                    or (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
-                    != (path_metadata.st_dev, path_metadata.st_ino)
-                ):
-                    raise HookError(f"JSONL log target is not a regular file: {self.jsonl_path}")
-                os.fchmod(descriptor, 0o600)
-                os.write(
-                    descriptor,
-                    (json.dumps(record, ensure_ascii=True) + "\n").encode("utf-8"),
                 )
-            finally:
-                os.close(descriptor)
-        except Exception as exc:  # noqa: BLE001
-            self.jsonl_write_failed = True
-            sys.stderr.write(f"[ai-push-hooks] JSONL logging disabled after write failure: {exc}\n")
 
     def debug(self, event: str, message: str, **fields: Any) -> None:
         self._emit("debug", event, message, **fields)
@@ -297,33 +502,141 @@ class HookLogger:
         model: str,
         attempt: int | None = None,
         total_attempts: int | None = None,
+        *,
+        runner_profile: str | None = None,
+        runner_type: str | None = None,
+    ) -> int:
+        with self._lock:
+            call_number = len(self.llm_calls) + 1
+            safe_stage = self._safe_text(stage_name)
+            safe_purpose = self._safe_text(purpose)
+            record: dict[str, Any] = {
+                "call_number": call_number,
+                "stage_name": safe_stage,
+                "purpose": safe_purpose,
+                "model": self._safe_text(model),
+                "module": safe_stage.split(".", 1)[0],
+                "step": safe_stage.split(".", 1)[1] if "." in safe_stage else safe_stage,
+            }
+            if attempt is not None:
+                record["attempt"] = attempt
+            if total_attempts is not None:
+                record["total_attempts"] = total_attempts
+            if runner_profile is not None:
+                record["runner_profile"] = self._safe_text(runner_profile)
+            if runner_type is not None:
+                record["runner_type"] = self._safe_text(runner_type)
+            self.llm_calls.append(record)
+            self.status(
+                "llm.call",
+                f"LLM call #{call_number}: {safe_stage} - {safe_purpose}",
+                **record,
+            )
+            return call_number
+
+    def llm_complete(
+        self,
+        call_number: int,
+        stage_name: str,
+        runner_profile: str,
+        runner_type: str,
+        *,
+        session_id: str | None = None,
+        session_state: str | None = None,
+        resumable: bool = False,
+        transcript: str | None = None,
+        resume_command: str | None = None,
+        failed: bool = False,
     ) -> None:
-        call_number = len(self.llm_calls) + 1
-        record: dict[str, Any] = {
-            "call_number": call_number,
-            "stage_name": stage_name,
-            "purpose": purpose,
-            "model": model,
-        }
-        if attempt is not None:
-            record["attempt"] = attempt
-        if total_attempts is not None:
-            record["total_attempts"] = total_attempts
-        self.llm_calls.append(record)
-        self.status(
-            "llm.call",
-            f"LLM call #{call_number}: {stage_name} - {purpose}",
-            **record,
+        """Record truthful completion/session details without inventing resume data."""
+
+        safe_stage = self._safe_text(stage_name)
+        safe_profile = self._safe_text(runner_profile)
+        safe_type = self._safe_text(runner_type)
+        safe_state = self._safe_text(session_state) if session_state is not None else None
+        safe_session_id = self._safe_text(session_id) if session_id is not None else None
+        safe_transcript = self._safe_text(transcript) if transcript is not None else None
+        safe_resume_command = (
+            self._safe_text(resume_command) if resume_command is not None else None
         )
+        effective_resume_command = (
+            safe_resume_command
+            if safe_state == "persisted" and resumable
+            else None
+        )
+        session_details: list[str] = []
+        if safe_state == "persisted":
+            if safe_session_id:
+                session_details.append(f"session persisted: {safe_session_id}")
+            else:
+                session_details.append("session persisted")
+            if effective_resume_command:
+                session_details.append(f"resume: {effective_resume_command}")
+            elif not resumable:
+                session_details.append("not resumable")
+            if safe_transcript:
+                session_details.append(f"transcript: {safe_transcript}")
+        elif safe_state == "deleted":
+            if safe_session_id:
+                session_details.append(f"session deleted: {safe_session_id}")
+            else:
+                session_details.append("session deleted")
+            if safe_transcript:
+                session_details.append(f"transcript: {safe_transcript}")
+        elif safe_state == "ephemeral":
+            if safe_session_id:
+                session_details.append(f"session: {safe_session_id}")
+            session_details.append("not resumable")
+        elif safe_state is not None:
+            session_details.append(f"session {safe_state}")
+        elif safe_session_id:
+            session_details.append(f"session: {safe_session_id}")
+
+        message = (
+            f"LLM failed #{call_number}: {safe_stage} ({safe_profile}/{safe_type})"
+            if failed
+            else f"LLM complete #{call_number}: {safe_stage} ({safe_profile}/{safe_type})"
+        )
+        if session_details:
+            message += "; " + "; ".join(session_details)
+        fields: dict[str, Any] = {
+            "call_number": call_number,
+            "stage_name": safe_stage,
+            "module": safe_stage.split(".", 1)[0],
+            "step": safe_stage.split(".", 1)[1] if "." in safe_stage else safe_stage,
+            "runner_profile": safe_profile,
+            "runner_type": safe_type,
+            "failed": failed,
+        }
+        if safe_session_id is not None:
+            fields["session_id"] = safe_session_id
+        if safe_state is not None:
+            fields["session_state"] = safe_state
+        if safe_transcript is not None:
+            fields["transcript"] = safe_transcript
+        if effective_resume_command is not None:
+            fields["resume_command"] = effective_resume_command
+        if any(
+            value is not None
+            for value in (
+                safe_session_id,
+                safe_state,
+                safe_transcript,
+                effective_resume_command,
+            )
+        ) or resumable:
+            fields["resumable"] = resumable
+        self.status("llm.complete", message, **fields)
 
     def llm_summary(self) -> None:
-        stage_counts: dict[str, int] = {}
-        for call in self.llm_calls:
-            stage_name = str(call.get("stage_name", "")).strip() or "<unknown>"
-            stage_counts[stage_name] = stage_counts.get(stage_name, 0) + 1
-        self.status(
-            "llm.calls_total",
-            f"Total LLM calls this run: {len(self.llm_calls)}",
-            total_calls=len(self.llm_calls),
-            stage_counts=stage_counts,
-        )
+        with self._lock:
+            stage_counts: dict[str, int] = {}
+            for call in self.llm_calls:
+                stage_name = str(call.get("stage_name", "")).strip() or "<unknown>"
+                stage_counts[stage_name] = stage_counts.get(stage_name, 0) + 1
+            self.status(
+                "llm.calls_total",
+                f"Total LLM calls this run: {len(self.llm_calls)}",
+                total_calls=len(self.llm_calls),
+                stage_counts=stage_counts,
+            )

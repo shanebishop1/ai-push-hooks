@@ -17,7 +17,7 @@ from ..paths import (
     write_text_no_follow,
 )
 from ..types import HookError, RuntimeContext, StepConfig
-from .exec import ensure_dir, extract_pr_url, resolve_storage_path, run_command
+from .exec import ensure_dir, resolve_storage_path, run_command
 
 OPENCODE_READ_ONLY_AGENT = "ai-push-hooks-readonly"
 OPENCODE_APPLY_AGENT = "ai-push-hooks-apply"
@@ -592,6 +592,27 @@ def call_opencode(
     )
 
 
+def _safe_invalid_output(invocation: Any, output: str) -> str:
+    from .runners import bounded_diagnostic
+
+    request = invocation.request
+    secrets = (
+        request.instruction,
+        request.prompt_packet().render(),
+        *(artifact.content for artifact in request.artifacts),
+        *(
+            value
+            for name, value in os.environ.items()
+            if value
+            and any(
+                marker in name.upper()
+                for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
+            )
+        ),
+    )
+    return bounded_diagnostic(output, max_chars=400, secrets=secrets)
+
+
 def run_llm_step(
     context: RuntimeContext,
     step: StepConfig,
@@ -599,78 +620,142 @@ def run_llm_step(
     input_paths: list[pathlib.Path],
     stage_name: str,
 ) -> Any:
+    from .runner_workflow import _finalize_invocation, _invoke_runner, _named_error
+    from ..config import resolve_runner_profile
+
     total_attempts = context.config.llm.json_max_retries + 1
-    session_id: str | None = None
     prompt_text = prompt
     last_error = ""
     last_output = ""
     wants_json = bool(step.schema)
     expects_json_array = step.schema in {"string_array", "docs_issue_array"}
-    for attempt in range(1, total_attempts + 1):
-        try:
-            result = call_opencode(
+    session_id: str | None = None
+    resume_session = False
+    selected_profile = step.runner or context.config.llm.runner
+    try:
+        profile = resolve_runner_profile(context.config, step)
+    except Exception as exc:  # noqa: BLE001
+        raise _named_error(selected_profile, "unknown", stage_name, exc) from exc
+    retained_invocation = None
+
+    # Artifact-only analysis must retain its historical empty scratch cwd;
+    # project-aware analysis gets the actual checkout root so the adapter can
+    # provide the selected runner's project-read behavior.
+    if profile.project_access == "project":
+        working_directory = context.repo_root.resolve(strict=True)
+        temporary_directory = None
+    else:
+        temporary_directory = tempfile.TemporaryDirectory(prefix="ai-push-hooks-llm-")
+        working_directory = pathlib.Path(temporary_directory.name).resolve(strict=True)
+
+    try:
+        for attempt in range(1, total_attempts + 1):
+            invocation = _invoke_runner(
                 context,
-                stage_name=stage_name,
-                purpose=f"{step.type}:{step.id}",
-                prompt=prompt_text,
-                files=input_paths,
-                agent="read-only",
+                step,
+                prompt_text,
+                input_paths,
+                stage_name,
+                working_directory=working_directory,
+                session_id=session_id,
+                resume_session=resume_session,
                 attempt=attempt,
                 total_attempts=total_attempts,
-                existing_session_id=session_id,
+                prior_invocation=retained_invocation,
             )
-        except Exception:  # noqa: BLE001
-            finalize_opencode_session(context, stage_name, session_id)
-            raise
-        session_id = result.session_id
-        if result.return_code != 0:
-            finalize_opencode_session(context, stage_name, session_id)
-            details = result.stderr.strip() or result.stdout.strip() or f"exit code {result.return_code}"
-            raise HookError(f"OpenCode command failed: {details}")
-        try:
-            if not wants_json:
-                payload = result.output_text
-            else:
-                if expects_json_array:
-                    payload = extract_json_array(result.output_text)
+            retained_invocation = None
+            result = invocation.result
+            try:
+                if not wants_json:
+                    payload = result.final_text
                 else:
-                    payload = extract_json_object(result.output_text)
-                payload = validate_schema(step.schema, payload)
-        except HookError as exc:
-            last_error = str(exc)
-            last_output = result.output_text
-            if attempt >= total_attempts:
-                finalize_opencode_session(context, stage_name, session_id)
-                raise HookError(
-                    f"Model failed to return valid JSON for {stage_name}: "
-                    f"{last_error}. {last_output[:400]}"
-                ) from exc
-            snippet = last_output[: context.config.llm.invalid_json_feedback_max_chars]
-            if expects_json_array:
-                suffix = "Return ONLY valid JSON array."
-            else:
-                suffix = "Return ONLY valid JSON object."
-            prompt_text = (
-                prompt
-                + "\n\nIMPORTANT: Your previous response was invalid JSON and could not be parsed.\n"
-                + f"Parse error: {last_error}\n"
-                + suffix
-                + "\nPrevious invalid output:\n```text\n"
-                + snippet
-                + "\n```"
-            )
-            if context.config.llm.json_retry_new_session:
-                finalize_opencode_session(context, stage_name, session_id)
-                session_id = None
-            pr_url = extract_pr_url(last_output)
-            if pr_url:
-                context.logger.info(
-                    "llm.invalid_json_pr_url_hint",
-                    "Detected PR URL in invalid JSON output",
-                    stage_name=stage_name,
-                    url=pr_url,
+                    if expects_json_array:
+                        payload = extract_json_array(result.final_text)
+                    else:
+                        payload = extract_json_object(result.final_text)
+                    payload = validate_schema(step.schema, payload)
+            except HookError as exc:
+                last_error = str(exc)
+                last_output = result.final_text
+                if attempt >= total_attempts:
+                    _finalize_invocation(context, invocation, failed=True)
+                    safe_error = _safe_invalid_output(invocation, last_error)
+                    raise HookError(
+                        f"Runner profile `{profile.name}` ({profile.type}) failed at stage "
+                        f"`{stage_name}`: invalid JSON: {safe_error}. "
+                        f"{safe_error}. {_safe_invalid_output(invocation, last_output)}"
+                    ) from exc
+
+                snippet = last_output[: context.config.llm.invalid_json_feedback_max_chars]
+                suffix = (
+                    "Return ONLY valid JSON array."
+                    if expects_json_array
+                    else "Return ONLY valid JSON object."
                 )
-            continue
-        finalize_opencode_session(context, stage_name, session_id)
-        return payload
-    raise HookError(f"Model failed to return valid JSON for {stage_name}")  # pragma: no cover
+                prompt_text = (
+                    prompt
+                    + "\n\nIMPORTANT: Your previous response was invalid JSON and could not be parsed.\n"
+                    + f"Parse error: {last_error}\n"
+                    + suffix
+                    + "\nPrevious invalid output:\n```text\n"
+                    + snippet
+                    + "\n```"
+                )
+
+                session = result.session
+                can_resume = bool(
+                    getattr(getattr(invocation.runner, "capabilities", None), "supports_resume", False)
+                    and session is not None
+                    and session.session_id
+                    and session.resumable
+                )
+                if context.config.llm.json_retry_new_session or not can_resume:
+                    if not session or not session.session_id:
+                        retry_reason = "session absent"
+                    elif context.config.llm.json_retry_new_session:
+                        retry_reason = "fresh session configured"
+                    else:
+                        retry_reason = "runner does not support resume"
+                    retry_message = "Retrying with a fresh runner invocation."
+                    if retry_reason == "runner does not support resume":
+                        retry_message = (
+                            "Retrying with a fresh runner invocation; unsupported session reuse."
+                        )
+                    elif retry_reason == "session absent":
+                        retry_message = (
+                            "Retrying with a fresh runner invocation; no reusable session was captured."
+                        )
+                    context.logger.status(
+                        "llm.retry_fresh_session",
+                        retry_message,
+                        stage_name=stage_name,
+                        runner_profile=profile.name,
+                        runner_type=profile.type,
+                        reason=retry_reason,
+                    )
+                    _finalize_invocation(context, invocation, failed=True)
+                    session_id = None
+                    resume_session = False
+                else:
+                    # Keep the exact captured session ID.  Do not invent a
+                    # provider-specific resume command for completion output.
+                    session_id = session.session_id
+                    resume_session = True
+                    retained_invocation = invocation
+                    # The invocation itself completed, although its response
+                    # failed downstream validation; report truthful metadata
+                    # before reusing the retained session.
+                    from .runner_workflow import _completion
+
+                    _completion(context, invocation, failed=True)
+                continue
+
+            _finalize_invocation(context, invocation, failed=False)
+            return payload
+        raise HookError(
+            f"Runner profile `{profile.name}` ({profile.type}) failed at stage `{stage_name}`: "
+            "model did not return a valid result"
+        )  # pragma: no cover
+    finally:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()

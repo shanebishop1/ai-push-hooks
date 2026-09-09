@@ -19,7 +19,7 @@ from .conftest import build_context, init_repo
 
 
 class ApplyResult:
-    return_code = 0
+    returncode = 0
     stderr = ""
     stdout = ""
     session_id = None
@@ -35,6 +35,9 @@ def _issues_artifact(context, payload: str | None = None) -> pathlib.Path:
 
 
 def _run_apply(context, step, input_path):
+    # Direct executor tests supply one synthetic artifact instead of the full
+    # engine-resolved input list.
+    step = replace(step, inputs=("issues.json",))
     return run_apply_step(
         context,
         ModuleRuntimeState(module=context.config.modules["docs"]),
@@ -110,16 +113,12 @@ def test_apply_runs_in_minimal_staging_and_propagates_allowed_changes(
         assert not (staging / "src" / "app.py").exists()
         assert not (staging / "secret.env").exists()
         assert not (staging / ".git").exists()
-        assert kwargs["files"] == [input_path.resolve()]
+        assert args[3] == [input_path.resolve()]
         (staging / "README.md").write_text("# Updated\n", encoding="utf-8")
         (staging / "docs" / "NEW.md").write_text("# New\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     result = _run_apply(context, step, input_path)
 
     assert result["changed_files"] == ["README.md", "docs/NEW.md"]
@@ -139,11 +138,7 @@ def test_apply_propagates_allowed_deletion(tmp_path: pathlib.Path, monkeypatch) 
         (kwargs["working_directory"] / "docs" / "INDEX.md").unlink()
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     result = _run_apply(context, step, input_path)
 
     assert result["changed_files"] == ["docs/INDEX.md"]
@@ -166,11 +161,7 @@ def test_apply_preserves_dirty_allowed_content_as_staging_baseline(
         staged_readme.write_text("# Dirty user content\n\nAgent addition.\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     result = _run_apply(context, step, input_path)
 
     assert result["changed_files"] == ["README.md"]
@@ -188,7 +179,7 @@ def test_apply_rejects_non_allowlisted_staging_output_before_copy(tmp_path, monk
         (kwargs["working_directory"] / "escape.txt").write_text("bad\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="outside allowlist"):
         _run_apply(context, step, input_path)
@@ -209,7 +200,7 @@ def test_apply_rejects_staging_symlink_escape_before_copy(tmp_path, monkeypatch)
         staged.symlink_to(outside)
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="contains symlink"):
         _run_apply(context, step, input_path)
@@ -232,7 +223,7 @@ def test_apply_never_propagates_staged_git_metadata_with_broad_allowlist(
         (staged_git / "config").write_text("malicious\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="outside allowlist|Git metadata"):
         _run_apply(context, step, input_path)
@@ -253,7 +244,7 @@ def test_apply_rejects_outputs_ignored_by_staged_gitignore(tmp_path, monkeypatch
         (staging / "generated.txt").write_text("generated\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="ignored paths"):
         _run_apply(context, step, input_path)
@@ -282,7 +273,7 @@ def test_apply_verifies_real_checkout_matches_validated_staging(tmp_path, monkey
         (repo / "README.md").write_text("# Different real output\n", encoding="utf-8")
         return result
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     monkeypatch.setattr(
         "ai_push_hooks.executors.apply._propagate_staging_changes", corrupt_after_propagation
     )
@@ -302,16 +293,12 @@ def test_apply_does_not_attach_symlinked_agents_file(tmp_path, monkeypatch) -> N
     input_path = _issues_artifact(context)
 
     def fake_call(*args, **kwargs):
-        assert kwargs["files"] == [input_path.resolve()]
-        assert all(path.name != "AGENTS.md" for path in kwargs["files"])
+        assert args[3] == [input_path.resolve()]
+        assert all(path.name != "AGENTS.md" for path in args[3])
         assert not (kwargs["working_directory"] / "AGENTS.md").exists()
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     assert _run_apply(context, step, input_path)["changed"] is False
 
 
@@ -356,11 +343,7 @@ def test_apply_default_logging_succeeds_in_linked_worktree(tmp_path, monkeypatch
         (kwargs["working_directory"] / "README.md").write_text("# Updated\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     result = _run_apply(context, step, input_path)
 
     assert result["changed_files"] == ["README.md"]
@@ -389,11 +372,7 @@ def test_apply_detects_linked_worktree_common_control_metadata_change(tmp_path, 
         )
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     with pytest.raises(HookError, match="shared:config"):
         _run_apply(context, step, input_path)
     assert (linked / "README.md").read_text(encoding="utf-8") == "# Example\n"
@@ -426,7 +405,7 @@ def test_apply_fails_closed_on_symlinked_shared_git_config_before_opencode(
     shared_config.symlink_to(config_target)
     calls: list[str] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.call_opencode",
+        "ai_push_hooks.executors.apply.run_runner_once",
         lambda *args, **kwargs: calls.append("called"),
     )
 
@@ -455,11 +434,7 @@ def test_apply_detects_index_flag_change(tmp_path, monkeypatch) -> None:
         )
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     with pytest.raises(HookError, match="index"):
         _run_apply(context, step, input_path)
     assert (repo / "README.md").read_text(encoding="utf-8") == "# Example\n"
@@ -498,7 +473,7 @@ def test_apply_cas_never_overwrites_concurrent_checkout_changes(
         else:
             target.chmod(0o600)
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     monkeypatch.setattr(
         "ai_push_hooks.executors.apply._verify_pre_propagation_security_state",
         verify_then_change,
@@ -545,7 +520,7 @@ def test_apply_uses_safe_propagation_modes(
         (staging / "docs" / "NEW.md").write_text("new\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     _run_apply(context, step, input_path)
 
@@ -574,7 +549,7 @@ def test_apply_rejects_staged_special_modes_before_any_propagation(
         assert special.stat().st_mode & special_mode
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="setuid, setgid, or sticky"):
         _run_apply(context, step, input_path)
@@ -604,7 +579,7 @@ def test_apply_rejects_case_variant_protected_staging_paths(
         target.write_text("malicious\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="outside allowlist"):
         _run_apply(context, step, input_path)
@@ -626,7 +601,7 @@ def test_apply_rejects_destination_inside_actual_nonstandard_git_dir(tmp_path, m
         target.write_text("malicious\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="resolves inside Git metadata"):
         _run_apply(context, step, input_path)
@@ -645,18 +620,15 @@ def test_session_finalization_tamper_is_detected_before_propagation(tmp_path, mo
         session_id = "session-1"
 
     def fake_call(*args, **kwargs):
+        finalized.append((args[4], "session-1"))
         (kwargs["working_directory"] / "README.md").write_text(
             "staged output\n", encoding="utf-8"
         )
-        return SessionResult()
-
-    def fake_finalize(_context, finalized_stage, session_id):
-        finalized.append((finalized_stage, session_id))
         with (repo / ".git" / "config").open("a", encoding="utf-8") as handle:
             handle.write("\n# tampered during finalization\n")
+        return SessionResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr("ai_push_hooks.executors.apply.finalize_opencode_session", fake_finalize)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="before propagation"):
         _run_apply(context, step, input_path)
@@ -704,7 +676,7 @@ def test_unrelated_linked_worktree_metadata_does_not_block_propagation(tmp_path,
         )
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     result = _run_apply(context, step, input_path)
 
@@ -720,18 +692,14 @@ def test_apply_failure_does_not_copy_staging_changes(tmp_path, monkeypatch) -> N
     input_path = _issues_artifact(context)
 
     class FailedResult(ApplyResult):
-        return_code = 1
+        returncode = 1
         stderr = "failed"
 
     def fake_call(*args, **kwargs):
         (kwargs["working_directory"] / "README.md").write_text("# Must not copy\n", encoding="utf-8")
         return FailedResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
-    monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.finalize_opencode_session", lambda *args, **kwargs: None
-    )
-
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     with pytest.raises(HookError, match="failed in isolated staging"):
         _run_apply(context, step, input_path)
     assert (repo / "README.md").read_text(encoding="utf-8") == "# Example\n"
@@ -781,7 +749,7 @@ def test_apply_requires_single_pushed_branch_at_checked_out_head(tmp_path, monke
     ]
     calls: list[str] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.call_opencode",
+        "ai_push_hooks.executors.apply.run_runner_once",
         lambda *args, **kwargs: calls.append("called"),
     )
 
@@ -800,7 +768,7 @@ def test_apply_skips_empty_issues_without_a_pushed_branch(tmp_path, monkeypatch)
     input_path = _issues_artifact(context, "[]")
     calls: list[str] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.call_opencode",
+        "ai_push_hooks.executors.apply.run_runner_once",
         lambda *args, **kwargs: calls.append("called"),
     )
 
@@ -825,7 +793,7 @@ def test_apply_rejects_push_commit_that_is_not_checked_out_head(tmp_path, monkey
     )
     calls: list[str] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.call_opencode",
+        "ai_push_hooks.executors.apply.run_runner_once",
         lambda *args, **kwargs: calls.append("called"),
     )
 
@@ -844,7 +812,7 @@ def test_apply_rejects_oversized_checkout_file_before_opencode(tmp_path, monkeyp
     calls: list[str] = []
     monkeypatch.setattr(apply_executor, "STAGING_MAX_BYTES", 4)
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.call_opencode",
+        "ai_push_hooks.executors.apply.run_runner_once",
         lambda *args, **kwargs: calls.append("called"),
     )
 
@@ -876,7 +844,7 @@ def test_apply_rejects_oversized_staging_output_before_hashing(tmp_path, monkeyp
 
     monkeypatch.setattr(apply_executor, "STAGING_MAX_BYTES", 4)
     monkeypatch.setattr(apply_executor, "_hash_file", tracking_hash)
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="bounded inventory budget"):
         _run_apply(context, step, input_path)
@@ -923,7 +891,7 @@ def test_apply_propagation_error_reports_already_applied_paths(tmp_path, monkeyp
             raise OSError("simulated write failure")
         return real_atomic_write(path, content, **kwargs)
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     monkeypatch.setattr(apply_executor, "atomic_write_bytes", fail_second_checkout_write)
 
     with pytest.raises(HookError, match="already-applied paths: README.md"):
@@ -954,7 +922,7 @@ def test_apply_monitors_configured_external_hooks_path(tmp_path, monkeypatch) ->
         hook_path.write_text("modified\n", encoding="utf-8")
         return ApplyResult()
 
-    monkeypatch.setattr("ai_push_hooks.executors.apply.call_opencode", fake_call)
+    monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
 
     with pytest.raises(HookError, match="Git control metadata before propagation"):
         _run_apply(context, step, input_path)
@@ -974,7 +942,7 @@ def test_apply_rejects_hooks_path_inside_runtime_metadata(tmp_path, monkeypatch)
     input_path = _issues_artifact(context)
     calls: list[str] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply.call_opencode",
+        "ai_push_hooks.executors.apply.run_runner_once",
         lambda *args, **kwargs: calls.append("called"),
     )
 
