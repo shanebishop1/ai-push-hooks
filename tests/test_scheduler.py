@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 import sys
 import time
 import threading
@@ -233,3 +234,122 @@ def test_module_local_sequencing_is_preserved(tmp_path: pathlib.Path) -> None:
     a_collect_end = next(stamp for module, label, stamp in events if module == "a" and label == "collect-end")
     a_exec_start = next(stamp for module, label, stamp in events if module == "a" and label == "exec-start")
     assert a_exec_start >= a_collect_end
+
+
+def test_local_callbacks_overlap_but_commands_serialize_and_gates_skip_imports(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path / "plugins", branch="feature/plugins")
+    checks = repo / "checks"
+    checks.mkdir()
+    fixture_root = pathlib.Path(__file__).parent / "fixtures"
+    shutil.copyfile(fixture_root / "integration_hooks.py", checks / "hooks.py")
+    shutil.copyfile(fixture_root / "gated_hook.py", checks / "gated.py")
+    shutil.copyfile(fixture_root / "serialized_command.py", checks / "serialized.py")
+
+    marker = tmp_path / "imports.log"
+    barrier = tmp_path / "collect-barrier"
+    events = tmp_path / "commands.log"
+    monkeypatch.setenv("AI_PUSH_HOOKS_PLUGIN_IMPORT_MARKER", str(marker))
+    monkeypatch.setenv("AI_PUSH_HOOKS_COLLECT_BARRIER", str(barrier))
+    monkeypatch.setenv("AI_PUSH_HOOKS_COLLECT_MODULES", "a,b")
+    monkeypatch.setenv("AI_PUSH_HOOKS_SERIAL_COMMAND_LOCK", str(tmp_path / "command.lock"))
+    monkeypatch.setenv("AI_PUSH_HOOKS_SERIAL_COMMAND_EVENTS", str(events))
+    repo.joinpath("ai-push-hooks.toml").write_text(
+        """
+[llm]
+max_parallel = 2
+
+[workflow]
+modules = ["a", "b", "disabled", "gated"]
+
+[modules.a]
+enabled = true
+[[modules.a.steps]]
+id = "collect"
+type = "collect"
+python = "checks/hooks.py:collect_context"
+[[modules.a.steps]]
+id = "exec"
+type = "exec"
+command = ["{python}", "checks/serialized.py", "a-exec", "{input:collect/context.json}"]
+inputs = ["collect/context.json"]
+stdin = "collect/context.json"
+[[modules.a.steps]]
+id = "assert"
+type = "assert"
+command = ["{python}", "checks/serialized.py", "a-assert"]
+inputs = ["exec/result.json"]
+stdin = "exec/result.json"
+
+[modules.b]
+enabled = true
+[[modules.b.steps]]
+id = "collect"
+type = "collect"
+python = "checks/hooks.py:collect_context"
+[[modules.b.steps]]
+id = "exec"
+type = "exec"
+command = ["{python}", "checks/serialized.py", "b-exec", "{input:collect/context.json}"]
+inputs = ["collect/context.json"]
+stdin = "collect/context.json"
+[[modules.b.steps]]
+id = "assert"
+type = "assert"
+command = ["{python}", "checks/serialized.py", "b-assert"]
+inputs = ["exec/result.json"]
+stdin = "exec/result.json"
+
+[modules.disabled]
+enabled = false
+[[modules.disabled.steps]]
+id = "never"
+type = "collect"
+python = "checks/gated.py:should_not_run"
+
+[modules.gated]
+enabled = true
+[[modules.gated.steps]]
+id = "never"
+type = "collect"
+python = "checks/gated.py:should_not_run"
+when_env = "AI_PUSH_HOOKS_THIS_IS_NOT_SET"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, _ = load_config(repo)
+    assert not marker.exists(), "config loading must not import repository callbacks"
+    context = build_context(repo, config)
+    result = WorkflowEngine(context, ArtifactStore(context.run_dir)).run()
+
+    assert context.logger.llm_calls == []
+    assert result.modules == {
+        "a": "completed",
+        "b": "completed",
+        "gated": "completed",
+    }
+    assert marker.read_text(encoding="utf-8") == "imported\n"
+    lines = events.read_text(encoding="utf-8").splitlines()
+    assert not any(line.startswith("overlap:") for line in lines)
+    assert lines == [
+        "start:a-exec",
+        "end:a-exec",
+        "start:a-assert",
+        "end:a-assert",
+        "start:b-exec",
+        "end:b-exec",
+        "start:b-assert",
+        "end:b-assert",
+    ] or lines == [
+        "start:b-exec",
+        "end:b-exec",
+        "start:b-assert",
+        "end:b-assert",
+        "start:a-exec",
+        "end:a-exec",
+        "start:a-assert",
+        "end:a-assert",
+    ]

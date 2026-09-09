@@ -83,8 +83,8 @@ enabled = true
 
 [[modules.gate.steps]]
 id = "reject"
-type = "exec"
-executor = "deliberately-unknown"
+type = "assert"
+python = "checks/hooks.py:reject"
 """
     return """\
 [general]
@@ -103,7 +103,20 @@ enabled = true
 [[modules.docs.steps]]
 id = "collect"
 type = "collect"
-collector = "docs_context"
+python = "checks/hooks.py:collect_context"
+
+[[modules.docs.steps]]
+id = "command"
+type = "exec"
+command = ["{python}", "checks/installed_command.py"]
+inputs = ["collect/context.json"]
+stdin = "collect/context.json"
+
+[[modules.docs.steps]]
+id = "policy"
+type = "assert"
+python = "checks/hooks.py:assert_context"
+inputs = ["command/result.json"]
 """
 
 
@@ -121,7 +134,7 @@ enabled = true
 [[modules.docs.steps]]
 id = "collect"
 type = "collect"
-collector = "docs_context"
+python = "checks/hooks.py:should_not_run"
 """
 
 
@@ -183,7 +196,7 @@ def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, p
     wheel_dir.mkdir()
     npm_dir.mkdir()
     _run(
-        [sys.executable, "-m", "build", "--wheel", "--outdir", str(wheel_dir)],
+        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
         REPO_ROOT,
         _isolated_env(),
         timeout=120,
@@ -202,6 +215,20 @@ def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, p
     return {"wheel": wheels[0], "npm": tarball}
 
 
+def _install_repo_fixtures(repo: pathlib.Path) -> None:
+    checks = repo / "checks"
+    checks.mkdir()
+    fixture_root = pathlib.Path(__file__).parent / "fixtures"
+    shutil.copyfile(fixture_root / "integration_hooks.py", checks / "hooks.py")
+    shutil.copyfile(fixture_root / "installed_command.py", checks / "installed_command.py")
+
+
+def _latest_run(repo: pathlib.Path) -> pathlib.Path:
+    runs = sorted((repo / ".git" / "ai-push-hooks" / "runs").iterdir())
+    assert runs
+    return runs[-1]
+
+
 def _prepare_wheel_command(
     artifact: pathlib.Path, root: pathlib.Path, env: dict[str, str]
 ) -> pathlib.Path:
@@ -211,8 +238,7 @@ def _prepare_wheel_command(
     bin_dir.mkdir()
     _run(
         [
-            sys.executable,
-            "-m",
+            "uv",
             "pip",
             "install",
             "--no-index",
@@ -308,6 +334,7 @@ def test_installed_hook_runs_real_local_push_scenario(
     (repo / "README.md").write_text("# Initial\n", encoding="utf-8")
     (repo / "docs").mkdir()
     (repo / "docs" / "INDEX.md").write_text("# Docs\n", encoding="utf-8")
+    _install_repo_fixtures(repo)
     (repo / "ai-push-hooks.toml").write_text(_scenario_config(), encoding="utf-8")
     if distribution == "npm":
         (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
@@ -348,6 +375,14 @@ def test_installed_hook_runs_real_local_push_scenario(
 
     valid_branch = f"refs/heads/main {baseline_oid} refs/heads/main {remote_baseline_oid}\n"
     invoke("", expected=0)
+    collect_report = json.loads(
+        (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(encoding="utf-8")
+    )
+    assert collect_report["dependency"] == "installed-interpreter"
+    assert pathlib.Path(collect_report["package_origin"]).is_relative_to(
+        (root / ("wheel-install" if distribution == "wheel" else "client repo/node_modules/ai-push-hooks/src")).resolve()
+    )
+    assert (repo / ".git" / "ai-push-hooks" / "runs").is_dir()
     invoke(f"refs/tags/v1 {baseline_oid} refs/tags/v1 {zero_oid}\n", expected=0)
     invoke(valid_branch + f"refs/tags/v1 {baseline_oid} refs/tags/v1 {zero_oid}\n", expected=0)
     invoke(f"refs/tags/v1 {zero_oid} refs/tags/v1 {baseline_oid}\n", expected=0)
@@ -359,6 +394,7 @@ def test_installed_hook_runs_real_local_push_scenario(
     )
 
     (repo / "ai-push-hooks.toml").write_text(_scenario_config(reject=True), encoding="utf-8")
+    invoke(valid_branch, expected=1)
     invoke(valid_branch, expected=0, overrides={"AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR": "1"})
     (repo / "ai-push-hooks.toml").write_text(_scenario_config(), encoding="utf-8")
     invoke("malformed stdin\n", expected=0, overrides={"AI_PUSH_HOOKS_SKIP": "1"})
