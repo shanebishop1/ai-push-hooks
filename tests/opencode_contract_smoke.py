@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -128,6 +129,17 @@ class MockProvider:
     def response_plan(self, payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         text = request_text(payload)
         results = tool_result_messages(payload)
+        if "[smoke_project_read]" in text:
+            if not results:
+                calls = [
+                    tool_call("read", {"filePath": f"{workspace_path(payload)}/README.md"}, 20),
+                ]
+                self.issued_tool_calls.extend(
+                    (call["function"]["name"], json.loads(call["function"]["arguments"]))
+                    for call in calls
+                )
+                return "tools", calls
+            return "text", []
         if "[smoke_readonly]" in text:
             if not results:
                 calls = [
@@ -151,7 +163,7 @@ class MockProvider:
                 )
                 return "tools", calls
             return "text", []
-        if "[smoke_apply]" in text:
+        if "[smoke_project_apply]" in text or "[smoke_apply]" in text:
             if not results:
                 workspace = workspace_path(payload)
                 calls = [
@@ -610,6 +622,115 @@ def assert_provider_contract(provider: MockProvider) -> None:
             raise AssertionError(f"real OpenCode did not deny the {name}")
 
 
+def run_adapter_project_contract(root: pathlib.Path, repo: pathlib.Path, provider: MockProvider) -> None:
+    """Exercise the new runner directly against the same loopback provider.
+
+    The workflow smoke above intentionally preserves the shipped compatibility
+    path.  These two calls prove the opt-in project policy independently until
+    ST-3 wires runner dispatch into workflow orchestration.
+    """
+
+    package_src = pathlib.Path(__file__).resolve().parents[1] / "src"
+    if str(package_src) not in sys.path:
+        sys.path.insert(0, str(package_src))
+
+    from ai_push_hooks.config import load_config
+    from ai_push_hooks.executors.runners import RunnerRequest, get_runner
+    from ai_push_hooks.types import HookLogger, RuntimeContext
+
+    config, _ = load_config(repo)
+    run_dir = root / "adapter-run"
+    run_dir.mkdir()
+    context = RuntimeContext(
+        repo_root=repo,
+        git_dir=repo / ".git",
+        config=config,
+        logger=HookLogger(None),
+        remote_name="origin",
+        remote_url="loopback://synthetic",
+        stdin_lines=[],
+        run_id="adapter-contract",
+        run_dir=run_dir,
+        opencode_executable=shutil.which("opencode"),
+    )
+    runner = get_runner("opencode")
+
+    read_request = RunnerRequest(
+        profile_id="opencode-project",
+        runner_type="opencode",
+        stage="adapter.project-read",
+        purpose="llm:project-read",
+        mode="llm",
+        instruction=f"[SMOKE_PROJECT_READ] Working directory: {repo}",
+        cwd=repo,
+        timeout_seconds=60,
+        model=config.llm.model,
+        project_access="project",
+        integration_context=context,
+    )
+    requests_before_read = len(provider.requests)
+    try:
+        read_result = runner.run(read_request)
+    except Exception as exc:  # pragma: no cover - smoke diagnostics
+        seen = " | ".join(
+            f"{path} marker={'[smoke_project_read]' in request_text(payload)} "
+            f"keys={sorted(payload)} results={len(tool_result_messages(payload))} "
+            f"text={request_text(payload)[:180]}"
+            for path, payload in provider.requests[requests_before_read:]
+        )
+        raise RuntimeError(f"adapter project read failed: {exc}; provider requests: {seen}") from exc
+    if read_result.final_text.strip() != "[]":
+        raise AssertionError("OpenCode project analysis did not return the expected mock response")
+    read_requests = [
+        payload
+        for _path, payload in provider.requests
+        if "[smoke_project_read]" in request_text(payload)
+    ]
+    if not read_requests:
+        raise AssertionError("adapter project analysis did not reach the mock provider")
+    read_results = tool_result_messages(read_requests[-1])
+    if not read_results or any("denied" in request_text(item) for item in read_results):
+        raise AssertionError("adapter project analysis read permission was blocked")
+    read_result = runner.finalize(read_request, read_result)
+    if read_result.session is None or read_result.session.state != "deleted":
+        raise AssertionError("adapter project analysis session was not deleted in its isolated environment")
+
+    staging = root / "adapter-project-staging"
+    staging.mkdir()
+    shutil.copy2(repo / "README.md", staging / "README.md")
+    shutil.copy2(repo / "outside.txt", staging / "outside.txt")
+    apply_request = RunnerRequest(
+        profile_id="opencode-project",
+        runner_type="opencode",
+        stage="adapter.project-apply",
+        purpose="apply:project-apply",
+        mode="apply",
+        instruction=f"[SMOKE_PROJECT_APPLY] Working directory: {staging}",
+        cwd=staging,
+        timeout_seconds=60,
+        model=config.llm.model,
+        project_access="project",
+        allow_paths=("README.md",),
+        integration_context=context,
+    )
+    apply_result = runner.run(apply_request)
+    apply_requests = [
+        payload
+        for _path, payload in provider.requests
+        if "[smoke_project_apply]" in request_text(payload)
+    ]
+    if not apply_requests:
+        raise AssertionError("adapter project apply did not reach the mock provider")
+    apply_results = tool_result_messages(apply_requests[-1])
+    if not apply_results or any("denied" in request_text(item) for item in apply_results[:1]):
+        raise AssertionError("adapter project apply broad read permission was blocked")
+    if (staging / "README.md").read_text(encoding="utf-8") != README_AFTER:
+        raise AssertionError("adapter project apply did not update the allowlisted staging file")
+    apply_result = runner.finalize(apply_request, apply_result)
+    if apply_result.session is None or apply_result.session.state != "deleted":
+        raise AssertionError("adapter project apply session was not deleted in its isolated environment")
+
+
 def main() -> int:
     version = run(["opencode", "--version"]).strip()
     if version != EXPECTED_OPENCODE_VERSION:
@@ -700,6 +821,34 @@ def main() -> int:
                     key for key in sorted(set(before_git) & set(after_git)) if before_git[key] != after_git[key]
                 )
                 raise AssertionError("protected Git metadata changed: " + ", ".join(changed))
+
+            saved_openai_key = os.environ.get("OPENAI_API_KEY")
+            saved_openai_base_url = os.environ.get("OPENAI_BASE_URL")
+            saved_xdg_data_home = os.environ.get("XDG_DATA_HOME")
+            saved_git_config_nosystem = os.environ.get("GIT_CONFIG_NOSYSTEM")
+            os.environ["OPENAI_API_KEY"] = "synthetic-loopback-only"
+            os.environ["OPENAI_BASE_URL"] = f"http://127.0.0.1:{server.server_port}/v1"
+            os.environ["XDG_DATA_HOME"] = str(root / "xdg-data")
+            os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+            try:
+                run_adapter_project_contract(root, repo, provider)
+            finally:
+                if saved_openai_key is None:
+                    os.environ.pop("OPENAI_API_KEY", None)
+                else:
+                    os.environ["OPENAI_API_KEY"] = saved_openai_key
+                if saved_openai_base_url is None:
+                    os.environ.pop("OPENAI_BASE_URL", None)
+                else:
+                    os.environ["OPENAI_BASE_URL"] = saved_openai_base_url
+                if saved_xdg_data_home is None:
+                    os.environ.pop("XDG_DATA_HOME", None)
+                else:
+                    os.environ["XDG_DATA_HOME"] = saved_xdg_data_home
+                if saved_git_config_nosystem is None:
+                    os.environ.pop("GIT_CONFIG_NOSYSTEM", None)
+                else:
+                    os.environ["GIT_CONFIG_NOSYSTEM"] = saved_git_config_nosystem
 
         assert_provider_contract(provider)
     finally:

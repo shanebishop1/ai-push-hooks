@@ -22,6 +22,11 @@ from .exec import ensure_dir, extract_pr_url, resolve_storage_path, run_command
 OPENCODE_READ_ONLY_AGENT = "ai-push-hooks-readonly"
 OPENCODE_APPLY_AGENT = "ai-push-hooks-apply"
 OPENCODE_AGENT_POLICIES = frozenset({"read-only", "apply"})
+# A sentinel keeps the legacy helper's implicit flat-config behavior while
+# allowing the runner boundary to explicitly pass ``None`` and omit optional
+# OpenCode flags.
+_DEFAULT_MODEL = object()
+_DEFAULT_VARIANT = object()
 PROVIDER_ENV_PREFIXES = (
     "ANTHROPIC_",
     "AWS_",
@@ -270,11 +275,11 @@ def export_opencode_session_json(
     return True
 
 
-def delete_opencode_session(context: RuntimeContext, session_id: str) -> None:
+def delete_opencode_session(context: RuntimeContext, session_id: str) -> bool:
     with tempfile.TemporaryDirectory(
         prefix="ai-push-hooks-session-delete-"
     ) as temporary_directory:
-        run_command(
+        completed = run_command(
             [
                 context.opencode_executable or resolve_opencode_executable(),
                 "session",
@@ -288,6 +293,7 @@ def delete_opencode_session(context: RuntimeContext, session_id: str) -> None:
             env=opencode_isolation_env(context, non_agent_opencode_config(), "session-delete"),
             inherit_env=False,
         )
+    return completed.returncode == 0
 
 
 def finalize_opencode_session(context: RuntimeContext, stage_name: str, session_id: str | None) -> None:
@@ -334,6 +340,7 @@ def build_opencode_security_config(
     allow_paths: tuple[str, ...] = (),
     *,
     non_vcs_working_directory: pathlib.Path | None = None,
+    project_read_root: pathlib.Path | None = None,
 ) -> tuple[str, dict[str, Any]]:
     permissions: dict[str, Any] = {
         "*": "deny",
@@ -351,6 +358,7 @@ def build_opencode_security_config(
         "skill": "deny",
         "todowrite": "deny",
         "question": "deny",
+        "doom_loop": "deny",
     }
     if agent_policy == "read-only":
         agent_name = OPENCODE_READ_ONLY_AGENT
@@ -394,6 +402,31 @@ def build_opencode_security_config(
         permissions["edit"] = edit_permissions
     else:
         raise HookError(f"Unsupported OpenCode agent policy: {agent_policy}")
+
+    if project_read_root is not None:
+        # OpenCode's file permission matcher uses paths relative to its
+        # filesystem worktree.  A real Git checkout is already rooted at the
+        # requested worktree, so absolute filesystem-root-relative patterns
+        # would never match README.md-style tool paths.  A non-VCS projection
+        # is treated as a filesystem worktree rooted at `/`, so qualify those
+        # patterns with the projection's absolute prefix.
+        root = project_read_root.resolve(strict=False)
+        if (root / ".git").exists():
+            rooted_permissions: str | dict[str, str] = "allow"
+        else:
+            anchor = pathlib.Path(root.anchor)
+            prefix = root.relative_to(anchor).as_posix()
+            rooted_permissions = {
+                "*": "deny",
+                prefix: "allow",
+                f"{prefix}/**": "allow",
+            }
+        for tool in ("read", "list", "glob", "grep"):
+            permissions[tool] = (
+                dict(rooted_permissions)
+                if isinstance(rooted_permissions, dict)
+                else rooted_permissions
+            )
 
     return agent_name, {
         "$schema": "https://opencode.ai/config.json",
@@ -446,6 +479,9 @@ def call_opencode(
     attempt: int | None = None,
     total_attempts: int | None = None,
     existing_session_id: str | None = None,
+    model: str | None | object = _DEFAULT_MODEL,
+    variant: str | None | object = _DEFAULT_VARIANT,
+    project_access: str = "artifacts",
 ) -> OpenCodeRunResult:
     """Run OpenCode with a policy-specific isolated working directory.
 
@@ -461,6 +497,10 @@ def call_opencode(
         raise HookError("OpenCode apply agent requires an isolated staging directory")
     if agent == "read-only" and allow_paths:
         raise HookError("OpenCode read-only agent does not accept write paths")
+    if project_access not in {"artifacts", "project"}:
+        raise HookError(f"Unsupported OpenCode project access: {project_access}")
+    if project_access == "project" and working_directory is None:
+        raise HookError("OpenCode project access requires an explicit working directory")
 
     validated_files = validate_opencode_attachments(context, files)
     if working_directory is None:
@@ -482,9 +522,18 @@ def call_opencode(
         non_vcs_working_directory=(
             resolved_working_directory if agent == "apply" else None
         ),
+        project_read_root=(
+            resolved_working_directory if project_access == "project" else None
+        ),
     )
     executable = context.opencode_executable or resolve_opencode_executable()
-    context.logger.llm_call(stage_name, purpose, context.config.llm.model, attempt, total_attempts)
+    effective_model = (
+        context.config.llm.model if model is _DEFAULT_MODEL else model
+    )
+    effective_variant = (
+        context.config.llm.variant if variant is _DEFAULT_VARIANT else variant
+    )
+    context.logger.llm_call(stage_name, purpose, effective_model or "", attempt, total_attempts)
     isolated_env = opencode_isolation_env(context, security_config, stage_name)
     cmd = [
         executable,
@@ -494,11 +543,11 @@ def call_opencode(
         "--pure",
         "--format",
         "json",
-        "--model",
-        context.config.llm.model,
     ]
-    if context.config.llm.variant:
-        cmd.extend(["--variant", context.config.llm.variant])
+    if effective_model:
+        cmd.extend(["--model", effective_model])
+    if effective_variant:
+        cmd.extend(["--variant", effective_variant])
     if existing_session_id:
         cmd.extend(["--session", existing_session_id])
     else:
@@ -529,8 +578,11 @@ def call_opencode(
     session_id, text_output = parse_opencode_json_run_output(completed.stdout or "")
     stdout = completed.stdout or ""
     stderr = completed.stderr or ""
-    if context.config.logging.print_llm_output and stdout.strip():
-        print(stdout)
+    if context.config.logging.print_llm_output and text_output:
+        # Print normalized assistant text only.  OpenCode's JSONL stream can
+        # contain provider diagnostics and tool payloads which must not become
+        # an accidental credential/prompt log.
+        print(text_output)
     return OpenCodeRunResult(
         output_text=text_output if text_output else stdout.strip(),
         session_id=session_id or existing_session_id,

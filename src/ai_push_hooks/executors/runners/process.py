@@ -7,6 +7,7 @@ import pathlib
 import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
@@ -20,7 +21,10 @@ from .contracts import (
 
 
 PROCESS_CHUNK_BYTES = 64 * 1024
-DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
+# Agent CLIs commonly emit multi-megabyte JSONL event streams.  This remains a
+# hard per-stream bound; callers with a tighter budget can override it.
+DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+PROCESS_CLEANUP_GRACE_SECONDS = 1.0
 
 
 @dataclass(frozen=True, repr=False)
@@ -41,40 +45,130 @@ class ProcessResult:
         )
 
 
-def _read_bounded(stream: object, limit: int, output: bytearray, truncated: list[bool]) -> None:
+def _read_bounded(
+    stream: object,
+    limit: int,
+    output: bytearray,
+    truncated: list[bool],
+    output_lock: threading.Lock,
+) -> None:
     read = getattr(stream, "read")
     while True:
-        chunk = read(PROCESS_CHUNK_BYTES)
+        try:
+            chunk = read(PROCESS_CHUNK_BYTES)
+        except (OSError, ValueError):
+            return
         if not chunk:
             return
-        remaining = limit - len(output)
-        if remaining > 0:
-            output.extend(chunk[:remaining])
-        if len(chunk) > remaining:
-            truncated[0] = True
+        with output_lock:
+            remaining = limit - len(output)
+            if remaining > 0:
+                output.extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                truncated[0] = True
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "posix":
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            process.terminate()
-    else:
-        process.terminate()
+def _signal_process_group(process_group_id: int, signum: int) -> None:
     try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        if os.name == "posix":
+        os.killpg(process_group_id, signum)
+    except (OSError, ProcessLookupError):
+        return
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except (OSError, ProcessLookupError):
+        return False
+    return True
+
+
+def _wait_process_until(process: subprocess.Popen[bytes], deadline: float) -> None:
+    while process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            process.wait(timeout=min(remaining, 0.05))
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _stop_process(process: subprocess.Popen[bytes], deadline: float) -> None:
+    """Terminate this invocation's process group within one shared deadline."""
+
+    process_group_id = process.pid if os.name == "posix" else None
+    if process_group_id is not None:
+        # start_new_session=True makes the leader's pid the private process
+        # group id.  Do not gate this on leader.poll(): descendants can retain
+        # the pipes after the leader has already exited.
+        _signal_process_group(process_group_id, signal.SIGTERM)
+    elif process.poll() is None:
+        process.terminate()
+
+    _wait_process_until(process, deadline)
+
+    if process_group_id is not None:
+        while _process_group_exists(process_group_id):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _signal_process_group(process_group_id, signal.SIGKILL)
+                try:
+                    process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    pass
+                break
+            time.sleep(min(0.01, remaining))
+    elif process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            except (OSError, ProcessLookupError):
+                process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
                 process.kill()
-        else:
-            process.kill()
-        process.wait(timeout=2)
+                try:
+                    process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    pass
+
+
+def _close_pipe_fd(stream: object) -> None:
+    """Close a pipe fd without calling a potentially blocking buffered close."""
+
+    try:
+        descriptor = getattr(stream, "fileno")()
+    except (OSError, ValueError, AttributeError):
+        return
+    try:
+        os.close(descriptor)
+    except OSError:
+        return
+
+
+def _finish_capture(
+    streams: tuple[object, ...],
+    threads: tuple[threading.Thread, ...],
+    deadline: float,
+) -> None:
+    """Bound all joins and force-close pipe fds if a reader remains blocked."""
+
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=remaining)
+    if any(thread.is_alive() for thread in threads):
+        for stream in streams:
+            _close_pipe_fd(stream)
+        for thread in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
+    # Raw fd closure is bounded and leaves no buffered close operation waiting
+    # on a descendant that escaped the normal EOF path.
+    for stream in streams:
+        _close_pipe_fd(stream)
 
 
 def run_process(
@@ -128,21 +222,23 @@ def run_process(
         raise RunnerError("runner process could not be started", details=type(exc).__name__) from exc
 
     if process.stdout is None or process.stderr is None or process.stdin is None:
-        _stop_process(process)
+        _stop_process(process, time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS)
         raise RunnerError("runner process pipes were not available")
 
     stdout = bytearray()
     stderr = bytearray()
+    stdout_lock = threading.Lock()
+    stderr_lock = threading.Lock()
     stdout_truncated = [False]
     stderr_truncated = [False]
     stdout_thread = threading.Thread(
         target=_read_bounded,
-        args=(process.stdout, max_output_bytes, stdout, stdout_truncated),
+        args=(process.stdout, max_output_bytes, stdout, stdout_truncated, stdout_lock),
         daemon=True,
     )
     stderr_thread = threading.Thread(
         target=_read_bounded,
-        args=(process.stderr, max_output_bytes, stderr, stderr_truncated),
+        args=(process.stderr, max_output_bytes, stderr, stderr_truncated, stderr_lock),
         daemon=True,
     )
     stdout_thread.start()
@@ -151,44 +247,50 @@ def run_process(
     input_bytes = None if input_text is None else input_text.encode("utf-8", errors="surrogateescape")
 
     def write_input() -> None:
-        if input_bytes is None:
-            process.stdin.close()
-            return
         try:
-            process.stdin.write(input_bytes)
-            process.stdin.close()
+            descriptor = process.stdin.fileno()
+            if input_bytes:
+                offset = 0
+                while offset < len(input_bytes):
+                    offset += os.write(descriptor, input_bytes[offset:])
         except (BrokenPipeError, OSError, ValueError):
-            try:
-                process.stdin.close()
-            except OSError:
-                pass
+            pass
+        finally:
+            _close_pipe_fd(process.stdin)
 
     input_thread = threading.Thread(target=write_input, daemon=True)
     input_thread.start()
-    timed_out = False
+    cleanup_done = False
+    returncode: int | None = None
     try:
         returncode = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
-        timed_out = True
-        try:
-            _stop_process(process)
-        except subprocess.TimeoutExpired as stop_error:
-            raise RunnerTimeoutError("runner process did not terminate safely") from stop_error
+        cleanup_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
+        _stop_process(process, cleanup_deadline)
+        _finish_capture(
+            (process.stdin, process.stdout, process.stderr),
+            (input_thread, stdout_thread, stderr_thread),
+            cleanup_deadline,
+        )
+        cleanup_done = True
         raise RunnerTimeoutError("runner process exceeded its timeout") from exc
     finally:
-        if process.poll() is None and not timed_out:
-            _stop_process(process)
-        stdout_thread.join(timeout=2)
-        stderr_thread.join(timeout=2)
-        input_thread.join(timeout=2)
-        for stream in (process.stdin, process.stdout, process.stderr):
-            try:
-                stream.close()
-            except (OSError, ValueError):
-                pass
+        if not cleanup_done:
+            cleanup_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
+            _stop_process(process, cleanup_deadline)
+            _finish_capture(
+                (process.stdin, process.stdout, process.stderr),
+                (input_thread, stdout_thread, stderr_thread),
+                cleanup_deadline,
+            )
+            cleanup_done = True
 
-    stdout_text = bytes(stdout).decode("utf-8", errors="surrogateescape")
-    stderr_text = bytes(stderr).decode("utf-8", errors="surrogateescape")
+    with stdout_lock:
+        stdout_text = bytes(stdout).decode("utf-8", errors="surrogateescape")
+    with stderr_lock:
+        stderr_text = bytes(stderr).decode("utf-8", errors="surrogateescape")
+    if returncode is None:  # pragma: no cover - process.wait either returns or raises
+        raise RunnerError("runner process returned no exit status")
     if returncode < 0:
         raise RunnerSignalError(
             "runner process terminated by signal",

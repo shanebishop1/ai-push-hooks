@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
+import time
 
 import pytest
 
 from ai_push_hooks.executors.runners import (
+    DEFAULT_MAX_OUTPUT_BYTES,
     KNOWN_RUNNER_TYPES,
     LazyRunnerSpec,
     ProcessResult,
@@ -223,6 +226,21 @@ def test_shell_free_process_execution_captures_stdin_and_separate_streams(tmp_pa
     assert result.stderr.strip() == "diagnostic"
 
 
+def test_process_default_capture_is_agent_sized_and_per_call_bound_remains_available(
+    tmp_path: pathlib.Path,
+) -> None:
+    assert DEFAULT_MAX_OUTPUT_BYTES >= 8 * 1024 * 1024
+    result = run_process(
+        [sys.executable, "-c", "print('x' * 1000)"],
+        cwd=tmp_path,
+        timeout_seconds=2,
+        max_output_bytes=32,
+    )
+
+    assert len(result.stdout) <= 32
+    assert result.stdout_truncated is True
+
+
 def test_process_errors_classify_not_found_timeout_and_signal(tmp_path: pathlib.Path) -> None:
     with pytest.raises(RunnerExecutableNotFoundError):
         run_process([str(tmp_path / "missing-executable")], cwd=tmp_path, timeout_seconds=1)
@@ -252,6 +270,79 @@ def test_process_start_errors_do_not_echo_raw_exception_arguments(
     with pytest.raises(RunnerError) as error:
         run_process([sys.executable], cwd=tmp_path, timeout_seconds=1)
     assert "exception-secret" not in str(error.value)
+
+
+def _active_pid(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    if sys.platform.startswith("linux"):
+        stat_path = pathlib.Path(f"/proc/{pid}/stat")
+        try:
+            state = stat_path.read_text(encoding="utf-8").split(") ", 1)[1].split(" ", 1)[0]
+        except (FileNotFoundError, IndexError):
+            return False
+        return state != "Z"
+    return True
+
+
+def _wait_for_pid_exit(pid: int, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while _active_pid(pid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return not _active_pid(pid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group regression requires POSIX semantics")
+def test_cleanup_kills_descendant_holding_pipes_after_leader_exits(
+    tmp_path: pathlib.Path,
+) -> None:
+    pid_file = tmp_path / "descendant.pid"
+    child_code = "import time; time.sleep(30)"
+    parent_code = (
+        "import subprocess, sys; "
+        f"child = subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}]); "
+        f"open({str(pid_file)!r}, 'w', encoding='ascii').write(str(child.pid))"
+    )
+    started = time.monotonic()
+    result = run_process(
+        [sys.executable, "-c", parent_code],
+        cwd=tmp_path,
+        timeout_seconds=1,
+    )
+    elapsed = time.monotonic() - started
+
+    child_pid = int(pid_file.read_text(encoding="ascii"))
+    assert result.returncode == 0
+    assert elapsed < 2.5
+    assert _wait_for_pid_exit(child_pid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group regression requires POSIX semantics")
+def test_cleanup_kills_term_ignoring_grandchild_after_parent_signal_exit(
+    tmp_path: pathlib.Path,
+) -> None:
+    pid_file = tmp_path / "grandchild.pid"
+    child_code = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+    parent_code = (
+        "import os, signal, subprocess, sys; "
+        f"child = subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}]); "
+        f"open({str(pid_file)!r}, 'w', encoding='ascii').write(str(child.pid)); "
+        "os.kill(os.getpid(), signal.SIGTERM)"
+    )
+    started = time.monotonic()
+    with pytest.raises(RunnerSignalError):
+        run_process(
+            [sys.executable, "-c", parent_code],
+            cwd=tmp_path,
+            timeout_seconds=1,
+        )
+    elapsed = time.monotonic() - started
+
+    child_pid = int(pid_file.read_text(encoding="ascii"))
+    assert elapsed < 2.5
+    assert _wait_for_pid_exit(child_pid)
 
 
 def test_nonzero_and_missing_final_output_are_distinct_contract_failures(tmp_path: pathlib.Path) -> None:
