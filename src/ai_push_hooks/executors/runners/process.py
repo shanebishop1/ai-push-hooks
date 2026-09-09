@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import pathlib
 import signal
+import stat
 import subprocess
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Mapping, Sequence
 
+from ...paths import path_is_link_or_reparse
 from .contracts import (
     RunnerError,
     RunnerExecutableNotFoundError,
@@ -36,6 +38,11 @@ class ProcessResult:
     stderr: str
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    # Keep the original bounded bytes for callers that persist process output.
+    # The text fields above intentionally retain the runner's surrogateescape
+    # decoding contract.
+    stdout_bytes: bytes = b""
+    stderr_bytes: bytes = b""
 
     def __repr__(self) -> str:
         return (
@@ -192,6 +199,8 @@ def _captured_result(
         stderr=stderr_text,
         stdout_truncated=stdout_truncated[0],
         stderr_truncated=stderr_truncated[0],
+        stdout_bytes=bytes(stdout),
+        stderr_bytes=bytes(stderr),
     )
 
 
@@ -200,6 +209,7 @@ def run_process(
     *,
     cwd: pathlib.Path,
     input_text: str | None = None,
+    input_path: pathlib.Path | None = None,
     timeout_seconds: float,
     env: Mapping[str, str] | None = None,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
@@ -224,6 +234,36 @@ def run_process(
         raise RunnerError("runner timeout must be greater than zero")
     if max_output_bytes < 0:
         raise RunnerError("runner output bound must not be negative")
+    if input_text is not None and input_path is not None:
+        raise RunnerError("runner input_text and input_path are mutually exclusive")
+    input_file = None
+    if input_path is not None:
+        if not isinstance(input_path, pathlib.Path):
+            input_path = pathlib.Path(input_path)
+        if path_is_link_or_reparse(input_path):
+            raise RunnerError("runner input file must not be a symlink or reparse point")
+        descriptor = -1
+        try:
+            # O_NONBLOCK prevents opening a FIFO from waiting for a writer;
+            # O_NOFOLLOW closes the symlink race between validation and open.
+            flags = (
+                os.O_RDONLY
+                | os.O_NONBLOCK
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(input_path, flags)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RunnerError("runner input file must be an ordinary regular file")
+            input_file = os.fdopen(descriptor, "rb", buffering=0)
+            descriptor = -1
+        except RunnerError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise RunnerError("runner input file could not be opened safely") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
     popen_kwargs: dict[str, object] = {
         "cwd": cwd,
@@ -243,15 +283,21 @@ def run_process(
     try:
         process = subprocess.Popen(list(argv), **popen_kwargs)
     except FileNotFoundError as exc:
+        if input_file is not None:
+            input_file.close()
         raise RunnerExecutableNotFoundError(
             "runner executable was not found",
             details=bounded_diagnostic(argv[0]),
         ) from exc
     except OSError as exc:
+        if input_file is not None:
+            input_file.close()
         raise RunnerError("runner process could not be started", details=type(exc).__name__) from exc
 
     if process.stdout is None or process.stderr is None or process.stdin is None:
         _stop_process(process, time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS)
+        if input_file is not None:
+            input_file.close()
         raise RunnerError("runner process pipes were not available")
 
     stdout = bytearray()
@@ -277,7 +323,18 @@ def run_process(
 
     def write_input() -> None:
         try:
-            if input_bytes:
+            if input_file is not None:
+                while True:
+                    chunk = input_file.read(PROCESS_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    offset = 0
+                    while offset < len(chunk):
+                        written = process.stdin.write(chunk[offset:])
+                        if not written:
+                            return
+                        offset += written
+            elif input_bytes:
                 offset = 0
                 while offset < len(input_bytes):
                     written = process.stdin.write(input_bytes[offset:])
@@ -287,6 +344,8 @@ def run_process(
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
+            if input_file is not None:
+                _close_pipe(input_file)
             _close_pipe(process.stdin)
 
     input_thread = threading.Thread(target=write_input, daemon=True)

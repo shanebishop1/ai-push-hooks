@@ -13,6 +13,7 @@ from .paths import (
     path_is_link_or_reparse,
     resolve_contained_path,
     validate_path_component,
+    atomic_write_bytes,
     write_text_no_follow,
 )
 from .types import HookError, ModuleRuntimeState
@@ -92,6 +93,22 @@ class ArtifactStore:
     ) -> pathlib.Path:
         path = self._artifact_path(state.module.id, step_index, step_id, artifact_name)
         write_text_no_follow(path, content)
+        return self.register(state, step_id, artifact_name, path)
+
+    def write_bytes(
+        self,
+        state: ModuleRuntimeState,
+        step_index: int,
+        step_id: str,
+        artifact_name: str,
+        content: bytes,
+    ) -> pathlib.Path:
+        """Write an exact, private byte artifact and register it."""
+
+        if not isinstance(content, bytes):
+            raise TypeError("Artifact byte content must be bytes")
+        path = self._artifact_path(state.module.id, step_index, step_id, artifact_name)
+        atomic_write_bytes(path, content)
         return self.register(state, step_id, artifact_name, path)
 
     def write_json(
