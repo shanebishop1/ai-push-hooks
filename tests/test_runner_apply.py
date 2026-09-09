@@ -22,6 +22,12 @@ def _issues_artifact(context) -> pathlib.Path:
     return path
 
 
+def _empty_issues_artifact(context) -> pathlib.Path:
+    path = context.run_dir / "issues.json"
+    path.write_text("[]\n", encoding="utf-8")
+    return path
+
+
 def _runner_config(config, *, project_access: str):
     profile = RunnerProfile(
         name="apply-runner",
@@ -91,6 +97,13 @@ def test_project_apply_projection_is_broad_but_propagation_stays_allowlisted(
 
     def fake_runner(*args, **kwargs):
         staging = kwargs["working_directory"]
+        prompt = args[2]
+        assert "eligible readable project projection" in prompt
+        assert "beyond the allowlist" in prompt
+        assert "Only changes to paths matching the allowlist" in prompt
+        assert "Any other staging change fails" in prompt
+        assert "Tool availability is controlled by runner and user policy" in prompt
+        assert "Do not use commands" not in prompt
         observed["staging"] = staging
         assert (staging / "README.md").exists()
         assert (staging / "docs" / "INDEX.md").exists()
@@ -147,6 +160,13 @@ def test_compatibility_apply_projection_remains_minimal(
 
     def fake_runner(*args, **kwargs):
         staging = kwargs["working_directory"]
+        prompt = args[2]
+        assert "only eligible readable files selected by the allowlist" in prompt
+        assert "may include readable repository files beyond the allowlist" not in prompt
+        assert "Only changes to paths matching the allowlist" in prompt
+        assert "Any other staging change fails" in prompt
+        assert "Tool availability is controlled by runner and user policy" in prompt
+        assert "Do not use commands" not in prompt
         assert (staging / "README.md").exists()
         assert (staging / "docs" / "INDEX.md").exists()
         assert not (staging / "src" / "app.py").exists()
@@ -158,3 +178,24 @@ def test_compatibility_apply_projection_remains_minimal(
     monkeypatch.setattr(apply_executor, "run_runner_once", fake_runner)
 
     assert _run(context, step, input_path)["changed_files"] == ["README.md"]
+
+
+def test_legacy_empty_issues_shortcut_is_retained_and_marked(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    step = config.modules["docs"].steps[3]
+    input_path = _empty_issues_artifact(context)
+
+    def unexpected_runner(*args, **kwargs):
+        pytest.fail("legacy empty issues shortcut must not invoke the runner")
+
+    monkeypatch.setattr(apply_executor, "run_runner_once", unexpected_runner)
+
+    assert _run(context, step, input_path) == {
+        "changed": False,
+        "changed_files": [],
+        "skipped": True,
+    }

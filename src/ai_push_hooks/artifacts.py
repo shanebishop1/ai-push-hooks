@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -17,6 +18,10 @@ from .paths import (
     write_text_no_follow,
 )
 from .types import HookError, ModuleRuntimeState
+
+
+PLUGIN_ARTIFACT_MAX_BYTES = 16 * 1024 * 1024
+PLUGIN_COLLECT_ARTIFACTS_MAX_BYTES = 64 * 1024 * 1024
 
 
 def generate_run_id() -> str:
@@ -122,6 +127,51 @@ class ArtifactStore:
         path = self._artifact_path(state.module.id, step_index, step_id, artifact_name)
         write_text_no_follow(path, json.dumps(payload, ensure_ascii=True, indent=2) + "\n")
         return self.register(state, step_id, artifact_name, path)
+
+    def serialize_plugin_artifacts(
+        self,
+        artifacts: Mapping[str, str | dict[str, Any] | list[Any]],
+        *,
+        max_artifact_bytes: int = PLUGIN_ARTIFACT_MAX_BYTES,
+        max_total_bytes: int = PLUGIN_COLLECT_ARTIFACTS_MAX_BYTES,
+    ) -> dict[str, bytes]:
+        """Serialize callback artifacts before any output is written.
+
+        Plugin results are intentionally serialized in the same format as the
+        existing collector path.  Doing the complete serialization and budget
+        check up front prevents a later oversized artifact from leaving an
+        earlier callback artifact registered in the run.
+        """
+
+        if max_artifact_bytes < 0 or max_total_bytes < 0:
+            raise HookError("Plugin artifact budgets must not be negative")
+        serialized: dict[str, bytes] = {}
+        total_bytes = 0
+        for artifact_name, payload in artifacts.items():
+            validate_path_component(artifact_name, "CollectorResult artifact name")
+            try:
+                if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
+                    content = (
+                        json.dumps(payload, ensure_ascii=True, indent=2, allow_nan=False) + "\n"
+                    ).encode("utf-8")
+                elif isinstance(payload, str):
+                    content = payload.encode("utf-8")
+                else:
+                    raise TypeError
+            except (RecursionError, TypeError, ValueError, UnicodeError):
+                raise HookError(
+                    f"CollectorResult artifact {artifact_name!r} could not be serialized"
+                ) from None
+
+            if len(content) > max_artifact_bytes:
+                raise HookError(
+                    f"CollectorResult artifact {artifact_name!r} exceeds the per-artifact size limit"
+                )
+            total_bytes += len(content)
+            if total_bytes > max_total_bytes:
+                raise HookError("CollectorResult artifacts exceed the aggregate size limit")
+            serialized[artifact_name] = content
+        return serialized
 
     def resolve_input(self, state: ModuleRuntimeState, reference: str) -> pathlib.Path:
         if ":" in reference:

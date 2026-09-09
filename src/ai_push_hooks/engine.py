@@ -10,8 +10,23 @@ from .executors.apply import run_apply_step
 from .executors.assertions import ASSERTION_HANDLERS
 from .executors.exec import EXEC_HANDLERS, env_bool
 from .executors.llm import run_llm_step
+from .executors.step_commands import execute_step_command
 from .modules import COLLECTORS
-from .types import CollectorResult, HookError, ModuleRuntimeState, RuntimeContext, StepConfig, StepResult, WorkflowRunResult
+from .plugin_loader import PluginDispatcher
+from .plugins import (
+    validate_assert_result,
+    validate_collector_result,
+    validate_exec_result,
+)
+from .types import (
+    CollectorResult,
+    HookError,
+    ModuleRuntimeState,
+    RuntimeContext,
+    StepConfig,
+    StepResult,
+    WorkflowRunResult,
+)
 
 CollectorHandler = Callable[[RuntimeContext, ModuleRuntimeState], CollectorResult]
 ExecHandler = Callable[[RuntimeContext, ModuleRuntimeState, StepConfig, list[pathlib.Path]], dict[str, Any]]
@@ -36,9 +51,14 @@ class WorkflowEngine:
         self.assertion_handlers = assertion_handlers or ASSERTION_HANDLERS
         self.llm_executor = llm_executor
         self.apply_executor = apply_executor
+        self._plugin_dispatcher: PluginDispatcher | None = None
 
     def run(self) -> WorkflowRunResult:
         self.artifacts.prepare()
+        # A loader/cache is deliberately scoped to one workflow run.  In
+        # particular, a second run must not reuse a module snapshot from the
+        # first run.
+        self._plugin_dispatcher = PluginDispatcher()
         states = [
             ModuleRuntimeState(module=self.context.config.modules[module_id])
             for module_id in self.context.config.workflow.modules
@@ -110,6 +130,12 @@ class WorkflowEngine:
             return StepResult(status="skipped", artifacts={"result.json": path}, metadata={})
 
         if step.type == "collect":
+            if step.python:
+                input_paths = self._resolve_plugin_inputs(state, step)
+                result = validate_collector_result(
+                    self._dispatch_plugin(state, step, input_paths)
+                )
+                return self._persist_plugin_collect(state, step, result)
             return self._run_collect(state, step)
 
         input_paths = [self.artifacts.resolve_input(state, reference) for reference in step.inputs]
@@ -132,6 +158,22 @@ class WorkflowEngine:
             return StepResult(artifacts={"result.json": path})
 
         if step.type == "exec":
+            if step.python:
+                plugin_inputs = dict(zip(step.inputs, input_paths))
+                payload = validate_exec_result(
+                    self._dispatch_plugin(state, step, plugin_inputs)
+                )
+                path = self._persist_plugin_result(state, step, payload)
+                return StepResult(artifacts={"result.json": path})
+            if step.command:
+                persisted = execute_step_command(
+                    self.context,
+                    state,
+                    step,
+                    dict(zip(step.inputs, input_paths)),
+                    artifacts=self.artifacts,
+                )
+                return StepResult(artifacts=dict(persisted.artifacts))
             handler = self.exec_handlers.get(step.executor or "")
             if handler is None:
                 raise HookError(f"Unknown exec handler: {step.executor}")
@@ -140,6 +182,24 @@ class WorkflowEngine:
             return StepResult(artifacts={"result.json": path})
 
         if step.type == "assert":
+            if step.python:
+                plugin_inputs = dict(zip(step.inputs, input_paths))
+                payload = validate_assert_result(
+                    self._dispatch_plugin(state, step, plugin_inputs)
+                )
+                path = self._persist_plugin_result(state, step, payload)
+                if not payload["ok"]:
+                    raise HookError(payload.get("message", "assertion failed"))
+                return StepResult(artifacts={"result.json": path})
+            if step.command:
+                persisted = execute_step_command(
+                    self.context,
+                    state,
+                    step,
+                    dict(zip(step.inputs, input_paths)),
+                    artifacts=self.artifacts,
+                )
+                return StepResult(artifacts=dict(persisted.artifacts))
             handler = self.assertion_handlers.get(step.assertion or "")
             if handler is None:
                 raise HookError(f"Unknown assertion handler: {step.assertion}")
@@ -150,6 +210,54 @@ class WorkflowEngine:
             return StepResult(artifacts={"result.json": path})
 
         raise HookError(f"Unsupported step type: {step.type}")
+
+    def _resolve_plugin_inputs(
+        self, state: ModuleRuntimeState, step: StepConfig
+    ) -> dict[str, pathlib.Path]:
+        """Resolve declared inputs in declaration order for a callback."""
+
+        return {
+            reference: self.artifacts.resolve_input(state, reference)
+            for reference in step.inputs
+        }
+
+    def _dispatch_plugin(
+        self,
+        state: ModuleRuntimeState,
+        step: StepConfig,
+        input_paths: dict[str, pathlib.Path],
+    ) -> Any:
+        dispatcher = self._plugin_dispatcher
+        if dispatcher is None:  # pragma: no cover - only direct private calls
+            dispatcher = PluginDispatcher()
+        return dispatcher.dispatch(self.context, state, step, input_paths)
+
+    def _persist_plugin_collect(
+        self, state: ModuleRuntimeState, step: StepConfig, result: CollectorResult
+    ) -> StepResult:
+        # Serialize and enforce both limits before the first write/register.
+        serialized = self.artifacts.serialize_plugin_artifacts(result.artifacts)
+        artifacts: dict[str, pathlib.Path] = {}
+        for artifact_name, content in serialized.items():
+            artifacts[artifact_name] = self.artifacts.write_bytes(
+                state, state.step_index, step.id, artifact_name, content
+            )
+        metadata = dict(result.metadata)
+        if result.skip_module:
+            metadata["skip_module"] = True
+            metadata["skip_reason"] = result.skip_reason
+        return StepResult(artifacts=artifacts, metadata=metadata)
+
+    def _persist_plugin_result(
+        self, state: ModuleRuntimeState, step: StepConfig, payload: dict[str, Any]
+    ) -> pathlib.Path:
+        # Use the same bounded serializer as collector artifacts.  Validation
+        # happens first, and serialization happens before the result is written
+        # or registered.
+        serialized = self.artifacts.serialize_plugin_artifacts({"result.json": payload})
+        return self.artifacts.write_bytes(
+            state, state.step_index, step.id, "result.json", serialized["result.json"]
+        )
 
     def _run_collect(self, state: ModuleRuntimeState, step: StepConfig) -> StepResult:
         handler = self.collectors.get(step.collector or "")

@@ -73,7 +73,7 @@ class PluginContext:
 def _require_json(value: Any, label: str) -> None:
     try:
         json.dumps(value, allow_nan=False)
-    except (TypeError, ValueError) as exc:
+    except (RecursionError, TypeError, ValueError) as exc:
         raise HookError(f"{label} must be JSON-serializable") from exc
 
 

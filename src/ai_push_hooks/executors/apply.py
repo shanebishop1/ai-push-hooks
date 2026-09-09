@@ -750,14 +750,33 @@ def _verify_post_propagation_security_state(
         )
 
 
-def _apply_prompt(prompt: str, allow_paths: tuple[str, ...]) -> str:
+def _apply_prompt(
+    prompt: str,
+    allow_paths: tuple[str, ...],
+    *,
+    project_access: str = "artifacts",
+) -> str:
     rendered_paths = "\n".join(f"- {pattern}" for pattern in allow_paths)
+    if project_access == "project":
+        projection_text = (
+            "This workspace contains the eligible readable project projection and may "
+            "include readable repository files beyond the allowlist."
+        )
+    else:
+        projection_text = (
+            "This workspace contains only eligible readable files selected by the "
+            "allowlist."
+        )
     return (
         prompt.rstrip()
-        + "\n\nMANDATORY STAGING WRITE BOUNDARY:\n"
-        + "This workspace contains only approved files. Modify only paths matching:\n"
+        + "\n\nMANDATORY STAGING BOUNDARY:\n"
+        + projection_text
+        + "\nOnly changes to paths matching the allowlist below propagate to the real "
+        "checkout. Any other staging change fails the apply step.\n"
+        + "Allowlisted paths:\n"
         + rendered_paths
-        + "\nDo not create symlinks. Do not use commands, tasks, web access, or external paths.\n"
+        + "\nTool availability is controlled by runner and user policy; this instruction "
+        + "does not impose a universal tool ban. Do not create symlinks.\n"
     )
 
 
@@ -801,6 +820,7 @@ def run_apply_step(
         if input_path.name.endswith("issues.json"):
             issues = json.loads(input_path.read_text(encoding="utf-8"))
             if isinstance(issues, list) and not issues:
+                # Legacy compatibility shortcut; keep until an explicit replacement exists.
                 return {"changed": False, "changed_files": [], "skipped": True}
 
     _assert_apply_targets_checked_out_head(context)
@@ -828,7 +848,11 @@ def run_apply_step(
             result = run_runner_once(
                 context,
                 step,
-                _apply_prompt(prompt, step.allow_paths),
+                _apply_prompt(
+                    prompt,
+                    step.allow_paths,
+                    project_access=profile.project_access,
+                ),
                 validated_inputs,
                 stage_name,
                 working_directory=staging_root,
