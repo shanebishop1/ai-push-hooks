@@ -579,6 +579,114 @@ runner = "pi-apply"
     assert selected.variant is None
 
 
+def test_model_environment_override_rejects_whitespace_at_load_and_resolution(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "query"
+type = "llm"
+prompt = "Return JSON"
+output = "query.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_PUSH_HOOKS_MODEL", " \t ")
+
+    with pytest.raises(HookError, match="AI_PUSH_HOOKS_MODEL"):
+        load_config(tmp_path)
+
+    monkeypatch.delenv("AI_PUSH_HOOKS_MODEL")
+    config, _ = load_config(tmp_path)
+    with pytest.raises(HookError, match="AI_PUSH_HOOKS_MODEL"):
+        resolve_runner_profile(
+            config,
+            config.modules["docs"].steps[0],
+            {"AI_PUSH_HOOKS_MODEL": " \t "},
+        )
+
+
+def test_command_model_placeholder_accepts_effective_environment_model(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[llm]
+runner = "env-command"
+
+[runners.env-command]
+type = "command"
+command = ["agent", "--model", "{model}"]
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "query"
+type = "llm"
+prompt = "Return JSON"
+output = "query.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_PUSH_HOOKS_MODEL", "env-model")
+
+    config, _ = load_config(tmp_path)
+    profile = resolve_runner_profile(config, config.modules["docs"].steps[0])
+
+    assert profile.model == "env-model"
+    assert profile.command == ("agent", "--model", "{model}")
+
+
+def test_missing_runner_reference_is_checked_in_unselected_modules(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+
+[modules.unselected]
+enabled = false
+
+[[modules.unselected.steps]]
+id = "query"
+type = "llm"
+prompt = "Return JSON"
+output = "query.json"
+runner = "missing-profile"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        HookError,
+        match=r"modules\.unselected\.steps\[1\]\.runner.*missing-profile",
+    ):
+        load_config(tmp_path)
+
+
 def test_legacy_opencode_runner_resolves_implicit_artifact_profile(
     tmp_path: pathlib.Path,
 ) -> None:

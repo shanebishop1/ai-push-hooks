@@ -593,24 +593,10 @@ def call_opencode(
 
 
 def _safe_invalid_output(invocation: Any, output: str) -> str:
-    from .runners import bounded_diagnostic
+    from .runners.contracts import request_sensitive_diagnostics
 
     request = invocation.request
-    secrets = (
-        request.instruction,
-        request.prompt_packet().render(),
-        *(artifact.content for artifact in request.artifacts),
-        *(
-            value
-            for name, value in os.environ.items()
-            if value
-            and any(
-                marker in name.upper()
-                for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
-            )
-        ),
-    )
-    return bounded_diagnostic(output, max_chars=400, secrets=secrets)
+    return request_sensitive_diagnostics(request, output, max_chars=400, env=os.environ)
 
 
 def run_llm_step(
@@ -683,7 +669,7 @@ def run_llm_step(
                     raise HookError(
                         f"Runner profile `{profile.name}` ({profile.type}) failed at stage "
                         f"`{stage_name}`: invalid JSON: {safe_error}. "
-                        f"{safe_error}. {_safe_invalid_output(invocation, last_output)}"
+                        f"{_safe_invalid_output(invocation, last_output)}"
                     ) from exc
 
                 snippet = last_output[: context.config.llm.invalid_json_feedback_max_chars]

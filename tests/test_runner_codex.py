@@ -210,3 +210,102 @@ def test_missing_final_analysis_message_fails_even_after_terminal_success(
 
     with pytest.raises(RunnerMissingOutputError):
         create_runner().run(make_request(tmp_path))
+
+
+def test_delayed_final_message_after_turn_completed_is_retained(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps({"type": "turn.started", "turn_id": "turn-1"}),
+            json.dumps({"type": "turn.completed", "status": "completed"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "delayed final"},
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.codex.run_process",
+        lambda *_args, **_kwargs: ProcessResult(0, stream, ""),
+    )
+
+    assert create_runner().run(make_request(tmp_path)).final_text == "delayed final"
+
+
+def test_incomplete_turn_after_prior_success_fails_closed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = success_stream("first") + "\n" + json.dumps(
+        {"type": "turn.started", "turn_id": "turn-2"}
+    )
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.codex.run_process",
+        lambda *_args, **_kwargs: ProcessResult(0, stream, ""),
+    )
+
+    with pytest.raises(RunnerProtocolError, match="no successful terminal turn"):
+        create_runner().run(make_request(tmp_path))
+
+
+def test_terminal_error_remains_failure_after_later_success_event(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps({"type": "error", "message": "model-generated-secret"}),
+            json.dumps({"type": "turn.completed", "status": "completed"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "should not pass"},
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.codex.run_process",
+        lambda *_args, **_kwargs: ProcessResult(0, stream, ""),
+    )
+
+    with pytest.raises(RunnerProtocolError, match="terminal turn failed"):
+        create_runner().run(make_request(tmp_path))
+
+
+def test_failed_model_child_command_is_additive_inside_successful_turn(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-123"}),
+            json.dumps({"type": "turn.started", "turn_id": "turn-1"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "status": "failed",
+                        "aggregated_output": "child command failed",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "final after child"},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "status": "success"}),
+            json.dumps({"type": "future.event", "data": {"ignored": True}}),
+        ]
+    )
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.codex.run_process",
+        lambda *_args, **_kwargs: ProcessResult(0, stream, ""),
+    )
+
+    assert create_runner().run(make_request(tmp_path)).final_text == "final after child"

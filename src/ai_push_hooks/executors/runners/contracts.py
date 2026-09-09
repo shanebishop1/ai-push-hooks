@@ -7,6 +7,7 @@ runner adapters only consume that request and return a :class:`RunnerResult`.
 
 from __future__ import annotations
 
+import json
 import math
 import pathlib
 import re
@@ -21,6 +22,9 @@ SessionState = Literal["persisted", "ephemeral", "deleted"]
 
 MAX_DIAGNOSTIC_CHARS = 4_000
 DIAGNOSTIC_TRUNCATION_MARKER = "[truncated]"
+# Request bodies can be much larger than a useful error excerpt.  Do not let
+# redaction turn each word in a diff into another full-stream scan.
+MAX_DIAGNOSTIC_REQUEST_CHARS = MAX_DIAGNOSTIC_CHARS * 2
 
 
 class RunnerContractError(ValueError):
@@ -366,10 +370,14 @@ _ANSI_ESCAPE_PATTERN = re.compile(
     r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_])"
 )
 _UNSAFE_TERMINAL_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_DIAGNOSTIC_FRAGMENT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/+\-]{3,}")
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(bearer\s+)[^\s,;]+"),
     re.compile(
         r"(?i)([\"']?(?:[a-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|auth[_-]?token|authorization|credential|password|secret|token)[a-z0-9_-]*[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}]+"
+    ),
+    re.compile(
+        r"(?i)(?<![a-z0-9])[a-z0-9][a-z0-9_.:/+\-]*(?:secret|api[_-]?key|access[_-]?token|auth[_-]?token|credential|password)[a-z0-9_.:/+\-]*(?![a-z0-9])"
     ),
 )
 
@@ -385,10 +393,39 @@ def redact_diagnostic(value: str, *, secrets: Sequence[str] = ()) -> str:
     """Redact supplied secrets and common credential-shaped values."""
 
     redacted = strip_terminal_controls(value)
-    for secret in sorted((item for item in secrets if item), key=len, reverse=True):
-        redacted = redacted.replace(secret, "[REDACTED]")
     for pattern in _SECRET_PATTERNS:
-        redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
+        redacted = pattern.sub(
+            lambda match: (
+                f"{match.group(1)}[REDACTED]"
+                if match.lastindex
+                else "[REDACTED]"
+            ),
+            redacted,
+        )
+    redaction_values: list[str] = []
+    seen: set[str] = set()
+    fragment_count = 0
+    for secret in secrets:
+        if not isinstance(secret, str) or not secret or secret in seen:
+            continue
+        seen.add(secret)
+        redaction_values.append(secret)
+        # A bounded fragment set catches a child echoing one prompt token,
+        # while skipping a whole large diff avoids the old O(words * stream)
+        # behavior.  The request-sensitive helper additionally suppresses
+        # excerpts for genuinely large request bodies.
+        if len(secret) <= MAX_DIAGNOSTIC_REQUEST_CHARS:
+            for fragment in _DIAGNOSTIC_FRAGMENT_PATTERN.findall(secret):
+                if fragment not in seen:
+                    seen.add(fragment)
+                    redaction_values.append(fragment)
+                    fragment_count += 1
+                    if fragment_count >= 512:
+                        break
+            if fragment_count >= 512:
+                continue
+    for secret in sorted(redaction_values, key=len, reverse=True):
+        redacted = redacted.replace(secret, "[REDACTED]")
     return redacted
 
 
@@ -402,8 +439,14 @@ def bounded_diagnostic(
 
     if max_chars <= 0:
         return ""
-    safe = redact_diagnostic(str(value), secrets=secrets)
-    if len(safe) <= max_chars:
+    raw = str(value)
+    # Redact only the bounded preview.  Anything after this point cannot be
+    # present in the returned diagnostic, and therefore does not need a scan.
+    # Credential-shaped values which reach the preview boundary are still
+    # handled by the regex redactor before the preview is returned.
+    preview = raw[:max_chars]
+    safe = redact_diagnostic(preview, secrets=secrets)
+    if len(raw) <= max_chars and len(safe) <= max_chars:
         return safe
     if max_chars <= len(DIAGNOSTIC_TRUNCATION_MARKER):
         return DIAGNOSTIC_TRUNCATION_MARKER[:max_chars]
@@ -447,17 +490,70 @@ def _request_sensitive_values(
     env: Mapping[str, str] | None = None,
     extra: Sequence[str] = (),
 ) -> tuple[str, ...]:
-    packet = request.prompt_packet().render()
-    return tuple(
-        value
-        for value in (
-            request.instruction,
-            packet,
-            *(artifact.content for artifact in request.artifacts),
-            *_credential_environment_values(env),
-            *extra,
-        )
-        if value
+    """Return a small, deduplicated set of values safe to use for redaction.
+
+    In particular, this must not manufacture one secret per whitespace word
+    in a request.  A large diff would otherwise make every diagnostic scan the
+    full child stream once per word.  JSON-escaped forms cover a child that
+    embeds the packet in a JSON error object without retaining the packet as a
+    second unbounded secret.
+    """
+
+    values = (
+        request.instruction,
+        *(artifact.content for artifact in request.artifacts),
+        request.model or "",
+        request.variant or "",
+        *_credential_environment_values(env),
+        *extra,
+    )
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+        # The encoded form is bounded independently below.  It is useful for
+        # escaped newlines/quotes in JSON diagnostics, but not worth retaining
+        # for a request-sized value.
+        if len(value) <= MAX_DIAGNOSTIC_REQUEST_CHARS:
+            encoded = json.dumps(value, ensure_ascii=True)
+            if encoded not in seen:
+                seen.add(encoded)
+                result.append(encoded)
+
+    return tuple(result)
+
+
+def request_sensitive_diagnostics(
+    request: RunnerRequest,
+    stdout: str = "",
+    stderr: str = "",
+    *,
+    max_chars: int = MAX_DIAGNOSTIC_CHARS,
+    env: Mapping[str, str] | None = None,
+    extra: Sequence[str] = (),
+) -> str:
+    """Build a bounded diagnostic while keeping request/environment data out.
+
+    If a request contains a body larger than the diagnostic budget, suppress
+    child excerpts entirely.  It is not possible to prove that a short model
+    excerpt is unrelated to an arbitrary large prompt without an unbounded
+    substring search; a fixed explanation is safer and cheaper.
+    """
+
+    request_values = (
+        request.instruction,
+        *(artifact.content for artifact in request.artifacts),
+    )
+    if any(len(value) > MAX_DIAGNOSTIC_REQUEST_CHARS for value in request_values):
+        return "diagnostic output suppressed for a large request"
+    return bounded_redacted_diagnostics(
+        stdout,
+        stderr,
+        max_chars=max_chars,
+        secrets=_request_sensitive_values(request, env=env, extra=extra),
     )
 
 
@@ -486,12 +582,13 @@ def require_zero_exit(
     """Raise a bounded non-zero diagnostic while preserving normalized results."""
 
     if result.returncode != 0:
-        sensitive_values = _request_sensitive_values(request, env=env, extra=secrets)
-        details = bounded_redacted_diagnostics(
+        details = request_sensitive_diagnostics(
+            request,
             result.stdout,
             result.stderr,
             max_chars=diagnostic_limit,
-            secrets=sensitive_values,
+            env=env,
+            extra=secrets,
         ) or f"exit code {result.returncode}"
         raise RunnerNonzeroExitError(
             f"runner {request.profile_id!r} ({request.runner_type}) failed at {request.stage!r}",

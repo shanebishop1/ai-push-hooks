@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import concurrent.futures
+import gc
+import json
 import os
 import pathlib
 import sys
+import threading
 import time
 
 import pytest
@@ -208,6 +212,53 @@ def test_failure_diagnostics_redact_echoed_packet_and_credential_formats(
     assert "\x1b" not in message
 
 
+def test_failure_diagnostics_redact_json_escaped_packet_and_credentials(
+    tmp_path: pathlib.Path,
+) -> None:
+    value = request(
+        tmp_path,
+        instruction='line "prompt-secret"\\nnext',
+        artifacts=(RunnerArtifact("input.txt", "artifact-secret\\value"),),
+    )
+    escaped_packet = json.dumps(value.prompt_packet().render())
+    escaped_error = json.dumps(
+        {
+            "message": escaped_packet,
+            "authorization": "Bearer bearer-secret",
+            "OPENAI_API_KEY": "env-secret",
+        }
+    )
+
+    with pytest.raises(RunnerNonzeroExitError) as error:
+        require_zero_exit(
+            value,
+            RunnerResult("", 9, escaped_error, escaped_error),
+            env={"OPENAI_API_KEY": "env-secret"},
+        )
+
+    message = str(error.value)
+    for secret in ("prompt-secret", "artifact-secret", "bearer-secret", "env-secret"):
+        assert secret not in message
+    assert "[REDACTED]" in message
+
+
+def test_large_request_diagnostics_are_suppressed_before_redaction_scans(
+    tmp_path: pathlib.Path,
+) -> None:
+    large_artifact = "diff-line\n" * 20_000
+    value = request(tmp_path, artifacts=(RunnerArtifact("diff", large_artifact),))
+
+    with pytest.raises(RunnerNonzeroExitError) as error:
+        require_zero_exit(
+            value,
+            RunnerResult("", 9, "diff-line\ncredential-secret", ""),
+        )
+
+    message = str(error.value)
+    assert "diagnostic output suppressed for a large request" in message
+    assert "credential-secret" not in message
+
+
 def test_shell_free_process_execution_captures_stdin_and_separate_streams(tmp_path: pathlib.Path) -> None:
     result = run_process(
         [
@@ -241,23 +292,85 @@ def test_process_default_capture_is_agent_sized_and_per_call_bound_remains_avail
     assert result.stdout_truncated is True
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or not pathlib.Path("/bin/echo").is_file(),
+    reason="descriptor reuse regression requires POSIX /bin/echo",
+)
+def test_repeated_concurrent_processes_preserve_output_and_close_pipe_owners(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ai_push_hooks.executors.runners.process as process_module
+
+    real_popen = process_module.subprocess.Popen
+    pipe_streams: list[object] = []
+    pipe_streams_lock = threading.Lock()
+
+    def tracking_popen(*args: object, **kwargs: object) -> object:
+        process = real_popen(*args, **kwargs)
+        with pipe_streams_lock:
+            pipe_streams.extend((process.stdin, process.stdout, process.stderr))
+        return process
+
+    monkeypatch.setattr(process_module.subprocess, "Popen", tracking_popen)
+
+    def invoke(index: int) -> str:
+        expected = f"descriptor-message-{index}\n"
+        result = run_process(
+            ["/bin/echo", f"descriptor-message-{index}"],
+            cwd=tmp_path,
+            timeout_seconds=2,
+        )
+        assert result.stderr == ""
+        assert result.stdout == expected
+        return result.stdout
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        outputs = list(executor.map(invoke, range(64)))
+
+    assert outputs == [f"descriptor-message-{index}\n" for index in range(64)]
+    assert len(pipe_streams) == 64 * 3
+    assert all(getattr(stream, "closed", False) for stream in pipe_streams)
+
+    # Releasing every prior pipe wrapper must not let a destructor close a
+    # descriptor that a subsequent invocation has reused.
+    pipe_streams.clear()
+    gc.collect()
+    assert invoke(64) == "descriptor-message-64\n"
+
+
 def test_process_errors_classify_not_found_timeout_and_signal(tmp_path: pathlib.Path) -> None:
     with pytest.raises(RunnerExecutableNotFoundError):
         run_process([str(tmp_path / "missing-executable")], cwd=tmp_path, timeout_seconds=1)
 
-    with pytest.raises(RunnerTimeoutError):
+    with pytest.raises(RunnerTimeoutError) as timeout_error:
         run_process(
-            [sys.executable, "-c", "import time; time.sleep(10)"],
+            [
+                sys.executable,
+                "-c",
+                "import sys, time; print('{\"sessionID\":\"timeout-session\"}', flush=True); time.sleep(10)",
+            ],
             cwd=tmp_path,
             timeout_seconds=0.05,
         )
+    timeout_result = getattr(timeout_error.value, "_process_result")
+    assert timeout_result.stdout.strip() == '{"sessionID":"timeout-session"}'
+    assert "timeout-session" not in str(timeout_error.value)
+    assert "timeout-session" not in repr(timeout_error.value)
 
-    with pytest.raises(RunnerSignalError):
+    with pytest.raises(RunnerSignalError) as signal_error:
         run_process(
-            [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],
+            [
+                sys.executable,
+                "-c",
+                "import os, signal, sys; print('signal-secret', flush=True); os.kill(os.getpid(), signal.SIGTERM)",
+            ],
             cwd=tmp_path,
             timeout_seconds=2,
         )
+    signal_result = getattr(signal_error.value, "_process_result")
+    assert signal_result.stdout.strip() == "signal-secret"
+    assert "signal-secret" not in str(signal_error.value)
+    assert "signal-secret" not in repr(signal_error.value)
 
 
 def test_process_start_errors_do_not_echo_raw_exception_arguments(

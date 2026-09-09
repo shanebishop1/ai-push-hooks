@@ -12,10 +12,12 @@ from ai_push_hooks.executors.runners import (
     RunnerMissingOutputError,
     RunnerProtocolError,
     RunnerResult,
+    RunnerTimeoutError,
     SessionMetadata,
 )
 from ai_push_hooks.executors.runners.opencode import OpenCodeRunner, create_runner
 from ai_push_hooks.config import load_config
+from ai_push_hooks.types import HookError
 
 from .conftest import build_context, init_repo
 
@@ -130,6 +132,67 @@ def test_malformed_or_incomplete_output_fails_closed(
         OpenCodeRunner().run(_request(context))
 
 
+@pytest.mark.parametrize(
+    "stdout, expected",
+    [
+        (
+            '{"type":"session.created","sessionID":"session-1"}\nnot json\n',
+            RunnerProtocolError,
+        ),
+        (
+            '{"type":"session.created","sessionID":"session-1"}\n'
+            '{"type":"step_start"}\n',
+            RunnerMissingOutputError,
+        ),
+        (
+            '{"type":"session.created","sessionID":"session-1"}\n'
+            '{"type":"error","error":"model-generated-secret"}\n',
+            RunnerProtocolError,
+        ),
+    ],
+)
+def test_protocol_failures_preserve_announced_session_identity(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    expected: type[Exception],
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process",
+        lambda *_args, **_kwargs: ProcessResult(0, stdout, ""),
+    )
+
+    with pytest.raises(expected) as error:
+        OpenCodeRunner().run(_request(context))
+
+    assert getattr(error.value, "session_id", None) == "session-1"
+    assert "model-generated-secret" not in str(error.value)
+
+
+def test_resumed_protocol_failure_uses_the_exact_known_session_fallback(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process",
+        lambda *_args, **_kwargs: ProcessResult(0, '{"type":"step_start"}\n', ""),
+    )
+
+    with pytest.raises(RunnerMissingOutputError) as error:
+        OpenCodeRunner().run(
+            _request(context, session_id="known-session", resume_session=True)
+        )
+
+    assert getattr(error.value, "session_id", None) == "known-session"
+
+
 def test_truncated_process_output_fails_closed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -150,6 +213,132 @@ def test_truncated_process_output_fails_closed(
     with pytest.raises(RunnerProtocolError, match="truncated") as error:
         OpenCodeRunner().run(_request(context))
     assert getattr(error.value, "session_id", None) is None
+
+
+def test_opencode_materializes_exact_artifact_snapshots_and_cleans_them(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    source = context.run_dir / "input.txt"
+    source.write_text("source-before-request\n", encoding="utf-8")
+    request = _request(
+        context,
+        artifacts=(
+            RunnerArtifact("logical/input.txt", "snapshot-one\n", source),
+            RunnerArtifact("../second.txt", "snapshot-two\n"),
+        ),
+    )
+    source.write_text("source-mutated-after-request\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run_process(argv, **kwargs):
+        captured["argv"] = list(argv)
+        attachment_paths = [
+            pathlib.Path(argv[index + 1])
+            for index, value in enumerate(argv)
+            if value == "--file"
+        ]
+        captured["attachment_paths"] = attachment_paths
+        captured["attachment_contents"] = [
+            path.read_text(encoding="utf-8") for path in attachment_paths
+        ]
+        return ProcessResult(
+            0,
+            '{"type":"session.created","sessionID":"snapshot-session"}\n'
+            '{"type":"text","part":{"text":"[]"}}\n',
+            "",
+        )
+
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process", fake_run_process
+    )
+
+    result = OpenCodeRunner().run(request)
+
+    paths = captured["attachment_paths"]
+    assert captured["attachment_contents"] == ["snapshot-one\n", "snapshot-two\n"]
+    assert all(path.is_relative_to(context.run_dir) for path in paths)
+    assert all(not path.exists() for path in paths)
+    assert captured["argv"][-1] == request.instruction
+    assert "snapshot-one" not in captured["argv"][-1]
+    assert result.final_text == "[]"
+
+
+def test_opencode_still_rejects_symlinked_or_escaping_source_artifacts(
+    tmp_path: pathlib.Path,
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    external = tmp_path / "external.txt"
+    external.write_text("outside\n", encoding="utf-8")
+    linked = context.run_dir / "linked.txt"
+    linked.symlink_to(external)
+
+    with pytest.raises(HookError, match="symlink"):
+        OpenCodeRunner().run(
+            _request(context, artifacts=(RunnerArtifact("linked.txt", "snapshot", linked),))
+        )
+    with pytest.raises(HookError, match="not a hook-owned artifact"):
+        OpenCodeRunner().run(
+            _request(context, artifacts=(RunnerArtifact("external.txt", "snapshot", external),))
+        )
+
+
+def test_timeout_preserves_session_for_lifecycle_cleanup_and_attachment_cleanup(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    context.opencode_executable = "/usr/local/bin/opencode"
+    calls: list[list[str]] = []
+    attachment_paths: list[pathlib.Path] = []
+
+    def fake_run_process(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1] == "run":
+            attachment_paths.extend(
+                pathlib.Path(argv[index + 1])
+                for index, value in enumerate(argv)
+                if value == "--file"
+            )
+            error = RunnerTimeoutError("runner process exceeded its timeout")
+            error._process_result = ProcessResult(  # type: ignore[attr-defined]
+                -9,
+                '{"type":"session.created","sessionID":"timeout-session"}\n',
+                "secret=do-not-leak",
+            )
+            raise error
+        return ProcessResult(0, "", "")
+
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process", fake_run_process
+    )
+    request = _request(context)
+
+    with pytest.raises(RunnerTimeoutError) as error:
+        OpenCodeRunner().run(request)
+
+    assert getattr(error.value, "session_id", None) == "timeout-session"
+    assert "do-not-leak" not in str(error.value)
+    assert all(not path.exists() for path in attachment_paths)
+
+    failed = RunnerResult(
+        "", 1, "", "", SessionMetadata("timeout-session", "persisted", True)
+    )
+    finalized = OpenCodeRunner().finalize(request, failed)
+    assert finalized.session is not None
+    assert finalized.session.state == "deleted"
+    assert [call[1:3] for call in calls] == [
+        ["run", "--agent"],
+        ["export", "timeout-session"],
+        ["session", "delete"],
+    ]
 
 
 def test_finalize_reports_deleted_session_and_private_transcript(

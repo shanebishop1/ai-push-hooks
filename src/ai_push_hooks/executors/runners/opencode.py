@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
+import sys
 import tempfile
 from typing import Any
 
@@ -24,6 +26,8 @@ from ..llm import (
     validate_opencode_attachments,
 )
 from ...paths import resolve_contained_path, write_text_no_follow
+from ...paths import ensure_private_directory
+from .process import ProcessResult
 from .contracts import (
     RunnerCapabilities,
     RunnerContractError,
@@ -61,32 +65,46 @@ class OpenCodeRunner:
     def _parse_output(raw: str, request: RunnerRequest) -> tuple[str | None, str]:
         session_id: str | None = None
         text_parts: list[str] = []
+
+        def protocol_failure(message: str, *, missing: bool = False) -> RunnerProtocolError:
+            error: RunnerProtocolError
+            if missing:
+                error = RunnerMissingOutputError(message)
+            else:
+                error = RunnerProtocolError(message)
+            # A session may have been announced before a later malformed or
+            # error event.  Keep that identity on every protocol failure so
+            # the orchestrator can still finalize it.
+            known_session = session_id
+            if known_session is None and request.resume_session:
+                known_session = request.session_id
+            setattr(error, "session_id", known_session)
+            return error
+
         for line in raw.splitlines():
             if not line.strip():
                 continue
             try:
                 event = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise RunnerProtocolError(
-                    "OpenCode emitted malformed JSONL output",
-                    details="invalid event",
-                ) from exc
+                raise protocol_failure("OpenCode emitted malformed JSONL output") from exc
             if not isinstance(event, dict):
-                raise RunnerProtocolError("OpenCode emitted a non-object JSONL event")
+                raise protocol_failure("OpenCode emitted a non-object JSONL event")
 
             event_type = event.get("type")
+
+            for key in ("sessionID", "session_id"):
+                value = event.get(key)
+                if session_id is None and isinstance(value, str) and value.strip():
+                    session_id = value.strip()
+
             if event_type in {"error", "fatal", "session.error"} or (
                 isinstance(event.get("error"), (str, dict, list))
                 and event_type not in {"text", "step_finish"}
             ):
                 # Do not serialize the provider event: OpenCode may echo the
                 # instruction, artifact bodies, or credential-shaped data.
-                raise RunnerProtocolError("OpenCode reported an error event")
-
-            for key in ("sessionID", "session_id"):
-                value = event.get(key)
-                if session_id is None and isinstance(value, str) and value.strip():
-                    session_id = value.strip()
+                raise protocol_failure("OpenCode reported an error event")
 
             if event_type != "text":
                 # New OpenCode event kinds are additive unless they are an
@@ -94,17 +112,15 @@ class OpenCodeRunner:
                 continue
             part = event.get("part")
             if not isinstance(part, dict):
-                raise RunnerProtocolError("OpenCode text event has no text part")
+                raise protocol_failure("OpenCode text event has no text part")
             text = part.get("text")
             if not isinstance(text, str):
-                raise RunnerProtocolError("OpenCode text event has an invalid text value")
+                raise protocol_failure("OpenCode text event has an invalid text value")
             text_parts.append(text)
 
         final_text = "\n".join(text_parts).strip()
         if not final_text:
-            raise RunnerMissingOutputError(
-                f"OpenCode produced no final response for {request.stage!r}"
-            )
+            raise protocol_failure("OpenCode produced no final response", missing=True)
         return session_id, final_text
 
     @staticmethod
@@ -123,6 +139,66 @@ class OpenCodeRunner:
                 if isinstance(value, str) and value.strip():
                     return value.strip()
         return None
+
+    @staticmethod
+    def _attachment_name(index: int, logical_name: str) -> str:
+        # The order prefix prevents collisions after sanitizing path-like
+        # logical names while retaining a useful basename for CLI diagnostics.
+        basename = pathlib.PurePath(logical_name.replace("\\", "/")).name
+        safe_basename = sanitize_filename_component(basename)
+        if safe_basename in {"", ".", ".."}:
+            safe_basename = "artifact"
+        return f"{index:04d}-{safe_basename}"
+
+    def _materialize_attachments(
+        self,
+        context: Any,
+        request: RunnerRequest,
+    ) -> tuple[list[pathlib.Path], pathlib.Path | None]:
+        original_paths = [artifact.path for artifact in request.artifacts]
+        # Validate source ownership and symlink traversal before making any
+        # copy.  The source is then never reopened: its logical snapshot is
+        # the only content sent through OpenCode's native --file transport.
+        validate_opencode_attachments(
+            context,
+            [path for path in original_paths if path is not None],
+        )
+        if not request.artifacts:
+            return [], None
+
+        run_root = ensure_private_directory(context.run_dir.resolve(strict=True))
+        attachment_dir = pathlib.Path(
+            tempfile.mkdtemp(prefix="opencode-attachments-", dir=str(run_root))
+        )
+        try:
+            ensure_private_directory(attachment_dir, private_root=run_root)
+            paths: list[pathlib.Path] = []
+            for index, artifact in enumerate(request.artifacts, start=1):
+                target = resolve_contained_path(
+                    attachment_dir,
+                    self._attachment_name(index, artifact.name),
+                    "OpenCode materialized attachment path",
+                )
+                write_text_no_follow(target, artifact.content)
+                paths.append(target)
+            return paths, attachment_dir
+        except Exception:
+            shutil.rmtree(attachment_dir, ignore_errors=True)
+            raise
+
+    @staticmethod
+    def _cleanup_attachments(attachment_dir: pathlib.Path | None) -> None:
+        if attachment_dir is None:
+            return
+        try:
+            shutil.rmtree(attachment_dir)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            # Do not hide the invocation failure currently being unwound, but
+            # fail closed when cleanup itself is the only failure.
+            if sys.exc_info()[0] is None:
+                raise RunnerError("OpenCode attachment cleanup failed") from exc
 
     def _argv(
         self,
@@ -183,8 +259,6 @@ class OpenCodeRunner:
         if working_directory is not None and not working_directory.is_dir():
             raise RunnerContractError("OpenCode request cwd must be an existing directory")
 
-        raw_paths = [artifact.path for artifact in request.artifacts]
-        attachments = validate_opencode_attachments(context, [path for path in raw_paths if path])
         agent = "apply" if request.mode == "apply" else "read-only"
         _agent_name, security_config = build_opencode_security_config(
             agent,
@@ -198,73 +272,96 @@ class OpenCodeRunner:
         )
         executable = getattr(context, "opencode_executable", None) or resolve_opencode_executable()
         isolated_env = opencode_isolation_env(context, security_config, request.stage)
-        # Normal workflow requests have hook-owned paths and retain the
-        # shipped native --file transport.  A path-less contract request still
-        # receives complete logical artifact content rather than silently
-        # dropping it; this fallback is only used when native attachment paths
-        # are unavailable.
-        prompt = (
-            request.prompt_packet().render()
-            if any(path is None for path in raw_paths)
-            else request.instruction
-        )
-        argv = self._argv(request, context, executable, attachments, prompt=prompt)
-
-        def invoke(cwd: pathlib.Path) -> Any:
-            completed = run_process(
-                argv,
-                cwd=cwd,
-                timeout_seconds=request.timeout_seconds,
-                env=isolated_env,
-            )
-            if getattr(completed, "stdout_truncated", False) or getattr(
-                completed, "stderr_truncated", False
-            ):
-                error = RunnerProtocolError("OpenCode process output was truncated")
-                # The neutral contract currently has no failure envelope.  A
-                # best-effort, non-secret attribute lets ST-3 finalize a
-                # session that was announced before output truncation without
-                # treating the truncated response as valid.
-                setattr(error, "session_id", self._session_id_from_partial_output(completed.stdout))
-                raise error
-            return completed
-
-        if working_directory is None:
-            with tempfile.TemporaryDirectory(prefix="ai-push-hooks-readonly-") as directory:
-                completed = invoke(pathlib.Path(directory).resolve(strict=True))
-        else:
-            completed = invoke(working_directory.resolve(strict=True))
-
-        result = RunnerResult(
-            final_text="",
-            returncode=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
-        )
-        # Check the process status before parsing.  A failed child may emit a
-        # partial or malformed stream; the process failure is the truthful,
-        # normalized terminal diagnosis.
+        attachment_dir: pathlib.Path | None = None
         try:
-            require_zero_exit(request, result, env=isolated_env)
-        except RunnerError as error:
-            # Preserve cleanup identity for a non-zero terminal process while
-            # keeping stdout/stderr out of the exception object/message.
-            setattr(error, "session_id", self._session_id_from_partial_output(completed.stdout))
-            raise
-        session_id, final_text = self._parse_output(completed.stdout, request)
-        if request.resume_session and session_id is None:
-            session_id = request.session_id
-        return RunnerResult(
-            final_text=require_final_text(final_text, mode=request.mode),
-            returncode=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
-            session=(
-                SessionMetadata(session_id=session_id, state="persisted", resumable=True)
-                if session_id
-                else SessionMetadata()
-            ),
-        )
+            attachments, attachment_dir = self._materialize_attachments(context, request)
+            # Every logical artifact is materialized, including pathless
+            # contract artifacts.  Therefore native attachments carry the
+            # complete snapshot and the instruction is never duplicated in a
+            # prompt packet.
+            argv = self._argv(
+                request,
+                context,
+                executable,
+                attachments,
+                prompt=request.instruction,
+            )
+
+            def invoke(cwd: pathlib.Path) -> Any:
+                completed = run_process(
+                    argv,
+                    cwd=cwd,
+                    timeout_seconds=request.timeout_seconds,
+                    env=isolated_env,
+                )
+                if getattr(completed, "stdout_truncated", False) or getattr(
+                    completed, "stderr_truncated", False
+                ):
+                    error = RunnerProtocolError("OpenCode process output was truncated")
+                    setattr(
+                        error,
+                        "session_id",
+                        self._session_id_from_partial_output(completed.stdout)
+                        or (request.session_id if request.resume_session else None),
+                    )
+                    raise error
+                return completed
+
+            try:
+                if working_directory is None:
+                    with tempfile.TemporaryDirectory(prefix="ai-push-hooks-readonly-") as directory:
+                        completed = invoke(pathlib.Path(directory).resolve(strict=True))
+                else:
+                    completed = invoke(working_directory.resolve(strict=True))
+            except (RunnerError,) as error:
+                process_result = getattr(error, "_process_result", None)
+                partial_stdout = (
+                    process_result.stdout if isinstance(process_result, ProcessResult) else ""
+                )
+                setattr(
+                    error,
+                    "session_id",
+                    self._session_id_from_partial_output(partial_stdout)
+                    or getattr(error, "session_id", None)
+                    or (request.session_id if request.resume_session else None),
+                )
+                raise
+
+            result = RunnerResult(
+                final_text="",
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+            # Check the process status before parsing.  A failed child may emit
+            # a partial or malformed stream; the process failure is the
+            # truthful, normalized terminal diagnosis.
+            try:
+                require_zero_exit(request, result, env=isolated_env)
+            except RunnerError as error:
+                setattr(
+                    error,
+                    "session_id",
+                    self._session_id_from_partial_output(completed.stdout)
+                    or (request.session_id if request.resume_session else None),
+                )
+                raise
+            session_id, final_text = self._parse_output(completed.stdout, request)
+            if request.resume_session and session_id is None:
+                session_id = request.session_id
+            return RunnerResult(
+                final_text=require_final_text(final_text, mode=request.mode),
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                session=(
+                    SessionMetadata(session_id=session_id, state="persisted", resumable=True)
+                    if session_id
+                    else SessionMetadata()
+                ),
+            )
+        finally:
+            self._cleanup_attachments(attachment_dir)
 
     def _lifecycle_process(
         self,

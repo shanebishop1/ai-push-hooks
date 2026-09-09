@@ -190,7 +190,11 @@ def test_success_parses_additive_metadata_and_marks_session_ephemeral(
 def test_error_result_subtype_fails_closed_and_redacts_diagnostics(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, payload: str
 ) -> None:
-    install_fake_cli(monkeypatch, [help_result(), ProcessResult(0, payload, "artifact-secret")])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-secret")
+    install_fake_cli(
+        monkeypatch,
+        [help_result(), ProcessResult(0, payload, '{"ANTHROPIC_API_KEY":"env-secret"}')],
+    )
 
     with pytest.raises(RunnerProtocolError) as error:
         claude.create_runner().run(request(tmp_path))
@@ -199,7 +203,9 @@ def test_error_result_subtype_fails_closed_and_redacts_diagnostics(
     assert "prompt-secret" not in message
     assert "artifact-secret" not in message
     assert "child-secret" not in message
+    assert "env-secret" not in message
     assert "Claude returned an invalid result" in message
+    assert "error_during_execution" not in message
 
 
 @pytest.mark.parametrize(

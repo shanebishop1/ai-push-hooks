@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import stat
 from dataclasses import dataclass
 
 from ..config import resolve_runner_profile
+from ..paths import is_path_within, path_has_symlink
 from ..types import HookError, RunnerProfile, RuntimeContext, StepConfig
 from .runners import (
     Runner,
@@ -26,7 +28,11 @@ from .runners import (
     require_final_text,
     require_zero_exit,
 )
-from .runners.contracts import RunnerProtocolError
+from .runners.contracts import RunnerProtocolError, request_sensitive_diagnostics
+
+
+RUNNER_INPUT_MAX_BYTES = 16 * 1024 * 1024
+RUNNER_INPUT_READ_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -61,12 +67,64 @@ def _safe_input_artifacts(
         raise HookError(
             f"Runner input count does not match configured inputs for step `{step.id}`"
         )
+    run_root = context.run_dir.resolve(strict=True)
     artifacts: list[RunnerArtifact] = []
+    total_bytes = 0
     for name, path in zip(step.inputs, validated, strict=True):
+        lexical_path = pathlib.Path(os.path.abspath(path))
+        # The first validation happens before this loop.  Recheck the lexical
+        # parents immediately before opening each file; this is a same-user
+        # race defense, not an OS sandbox.  O_NOFOLLOW and descriptor checks
+        # below protect the final open even if the leaf changes concurrently.
+        if (
+            not is_path_within(lexical_path, run_root)
+            or path_has_symlink(run_root, lexical_path)
+        ):
+            raise HookError(f"Runner artifact must not traverse a symlink: {name}")
         try:
-            content = path.read_text(encoding="utf-8")
+            resolved_path = lexical_path.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise HookError(f"Unable to safely resolve runner artifact: {name}") from exc
+        if (
+            resolved_path != lexical_path
+            or not is_path_within(resolved_path, run_root)
+            or not resolved_path.is_file()
+        ):
+            raise HookError(f"Runner artifact must be a regular hook-owned file: {name}")
+
+        descriptor: int | None = None
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(lexical_path, flags)
+            metadata = os.fstat(descriptor)
+            if not os.path.isfile(lexical_path) or not stat.S_ISREG(metadata.st_mode):
+                raise HookError(f"Runner artifact must be a regular hook-owned file: {name}")
+            remaining = RUNNER_INPUT_MAX_BYTES - total_bytes
+            if metadata.st_size > remaining:
+                raise HookError(
+                    f"Runner input artifacts exceed the {RUNNER_INPUT_MAX_BYTES}-byte budget"
+                )
+            content_bytes = bytearray()
+            while True:
+                read_limit = min(
+                    RUNNER_INPUT_READ_CHUNK_BYTES,
+                    remaining - len(content_bytes) + 1,
+                )
+                chunk = os.read(descriptor, max(1, read_limit))
+                if not chunk:
+                    break
+                content_bytes.extend(chunk)
+                if len(content_bytes) > remaining:
+                    raise HookError(
+                        f"Runner input artifacts exceed the {RUNNER_INPUT_MAX_BYTES}-byte budget"
+                    )
+            total_bytes += len(content_bytes)
+            content = bytes(content_bytes).decode("utf-8")
         except (OSError, UnicodeError) as exc:
             raise HookError(f"Unable to read hook-owned runner artifact: {name}") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         artifacts.append(RunnerArtifact(name=name, content=content, path=path))
     return tuple(artifacts)
 
@@ -195,6 +253,8 @@ def _completion(
 def _print_normalized_output(context: RuntimeContext, invocation: _RunnerInvocation) -> None:
     if not context.config.logging.print_llm_output or not invocation.result.final_text:
         return
+    # This is an explicit opt-in.  Only normalized final text is printed and
+    # request/environment values are redacted; raw child streams stay private.
     print(
         redact_diagnostic(
             invocation.result.final_text,
@@ -227,9 +287,35 @@ def _named_error(
     stage_name: str,
     error: BaseException,
     *,
-    secrets: tuple[str, ...] = (),
+    request: RunnerRequest | None = None,
 ) -> HookError:
-    details = bounded_diagnostic(str(error), max_chars=1_200, secrets=secrets)
+    if request is None:
+        details = bounded_diagnostic(str(error), max_chars=1_200)
+    else:
+        process_result = getattr(error, "_process_result", None)
+        stdout = getattr(process_result, "stdout", "")
+        stderr = getattr(process_result, "stderr", "")
+        if not isinstance(stdout, str):
+            stdout = ""
+        if not isinstance(stderr, str):
+            stderr = ""
+        reason = request_sensitive_diagnostics(
+            request,
+            str(error),
+            max_chars=1_200,
+            env=os.environ,
+        )
+        streams = request_sensitive_diagnostics(
+            request,
+            stdout,
+            stderr,
+            max_chars=1_200,
+            env=os.environ,
+        )
+        details = bounded_diagnostic(
+            "\n".join(part for part in (reason, streams) if part),
+            max_chars=1_200,
+        )
     message = (
         f"Runner profile `{profile_name}` ({runner_type}) failed at stage `{stage_name}`"
     )
@@ -255,6 +341,7 @@ def _invoke_runner(
     selected_name = _selected_runner_name(context, step)
     profile_name = selected_name
     runner_type = "unknown"
+    request: RunnerRequest | None = None
     try:
         profile, request = _build_request(
             context,
@@ -292,7 +379,13 @@ def _invoke_runner(
                     runner_type=prior_invocation.request.runner_type,
                     reason=type(finalize_error).__name__,
                 )
-        raise _named_error(profile_name, runner_type, stage_name, exc) from exc
+        raise _named_error(
+            profile_name,
+            runner_type,
+            stage_name,
+            exc,
+            request=request,
+        ) from exc
 
     result: RunnerResult | None = None
     try:
@@ -327,7 +420,7 @@ def _invoke_runner(
             runner_type,
             stage_name,
             exc,
-            secrets=_request_sensitive_values(request),
+            request=request,
         ) from exc
 
     return _RunnerInvocation(request, runner, result, call_number)
@@ -352,7 +445,7 @@ def _finalize_invocation(
             invocation.request.runner_type,
             invocation.request.stage,
             exc,
-            secrets=_request_sensitive_values(invocation.request),
+            request=invocation.request,
         ) from exc
     _completion(context, invocation, failed=failed)
     if not failed:

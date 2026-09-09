@@ -139,10 +139,34 @@ def _validate_non_empty_string(table: dict[str, Any], key: str, label: str) -> N
         raise HookError(f"{label}.{key} must be a non-empty string")
 
 
-def _validate_runner_command_placeholders(command: list[str] | tuple[str, ...], label: str, transport: str, model: Any) -> None:
+def _validate_no_control_chars(value: str, label: str) -> None:
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise HookError(f"{label} must not contain NUL or control characters")
+
+
+def _validate_model_override(value: str | None) -> None:
+    if value is not None and not value.strip():
+        raise HookError("AI_PUSH_HOOKS_MODEL must be a non-empty model identifier")
+    if value is not None:
+        _validate_no_control_chars(value, "AI_PUSH_HOOKS_MODEL")
+
+
+def _validate_variant_override(value: str | None) -> None:
+    if value is not None:
+        _validate_no_control_chars(value, "AI_PUSH_HOOKS_VARIANT")
+
+
+def _validate_runner_command_placeholders(
+    command: list[str] | tuple[str, ...],
+    label: str,
+    transport: str,
+    model: Any,
+    effective_model: str | None = None,
+) -> None:
     prompt_count = 0
     for index, argument in enumerate(command, start=1):
         argument_label = f"{label}.command[{index}]"
+        _validate_no_control_chars(argument, argument_label)
         for placeholder in RUNNER_PLACEHOLDER_PATTERN.findall(argument):
             if placeholder not in RUNNER_PLACEHOLDERS:
                 raise HookError(f"Unknown placeholder {placeholder!r} in {argument_label}")
@@ -159,15 +183,18 @@ def _validate_runner_command_placeholders(command: list[str] | tuple[str, ...], 
         raise HookError(
             f"{label}.command must contain exactly one {{prompt}} with argv transport"
         )
-    if "{model}" in command and not model:
+    if "{model}" in command and not (model or effective_model):
         raise HookError(f"{label}.command uses {{model}} but {label}.model is not configured")
 
 
-def _validate_runner_profiles(raw: dict[str, Any]) -> None:
+def _validate_runner_profiles(
+    raw: dict[str, Any], effective_model: str | None = None
+) -> None:
     runners = _require_table(raw.get("runners", {}), "runners")
     for name, profile_value in runners.items():
         if not isinstance(name, str) or not name.strip():
             raise HookError("runners profile names must be non-empty strings")
+        _validate_no_control_chars(name, f"runners profile name `{name}`")
         label = f"runners.{name}"
         profile = _require_table(profile_value, label)
         _validate_unknown_keys(profile, RUNNER_KEYS, label)
@@ -175,12 +202,17 @@ def _validate_runner_profiles(raw: dict[str, Any]) -> None:
             raise HookError(f"{label}.type is required")
         _validate_non_empty_string(profile, "type", label)
         runner_type = profile["type"].strip()
+        _validate_no_control_chars(profile["type"], f"{label}.type")
         if runner_type not in RUNNER_TYPES:
             raise HookError(f"{label}.type must be one of: {', '.join(sorted(RUNNER_TYPES))}")
         _validate_string(profile, "model", label)
         if "model" in profile and not profile["model"].strip():
             raise HookError(f"{label}.model must be a non-empty string when provided")
+        if "model" in profile:
+            _validate_no_control_chars(profile["model"], f"{label}.model")
         _validate_string(profile, "variant", label)
+        if "variant" in profile:
+            _validate_no_control_chars(profile["variant"], f"{label}.variant")
         _validate_string(profile, "project_access", label)
         _validate_string(profile, "prompt_transport", label)
         if "project_access" in profile and profile["project_access"] not in PROJECT_ACCESS_VALUES:
@@ -209,7 +241,13 @@ def _validate_runner_profiles(raw: dict[str, Any]) -> None:
         transport = profile.get("prompt_transport", "stdin")
         if transport not in PROMPT_TRANSPORT_VALUES:
             raise HookError(f"{label}.prompt_transport must be one of: argv, stdin")
-        _validate_runner_command_placeholders(command, label, transport, profile.get("model"))
+        _validate_runner_command_placeholders(
+            command,
+            label,
+            transport,
+            profile.get("model"),
+            effective_model,
+        )
 
 
 def _validate_integer(
@@ -247,6 +285,11 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
     for key in ("runner", "model", "variant", "session_title_prefix"):
         _validate_string(llm, key, "llm")
     _validate_non_empty_string(llm, "runner", "llm")
+    if "runner" in llm:
+        _validate_no_control_chars(llm["runner"], "llm.runner")
+    for key in ("model", "variant"):
+        if key in llm:
+            _validate_no_control_chars(llm[key], f"llm.{key}")
     for key in ("json_retry_new_session", "delete_session_after_run"):
         _validate_bool(llm, key, "llm")
     _validate_integer(llm, "timeout_seconds", "llm", minimum=1)
@@ -300,15 +343,14 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     _validate_string_list(step, key, label)
                 if "runner" in step and step["runner"] is not None and not step["runner"].strip():
                     raise HookError(f"{label}.runner must be a non-empty string")
+                if "runner" in step and step["runner"] is not None:
+                    _validate_no_control_chars(step["runner"], f"{label}.runner")
                 if (
                     step.get("runner") is not None
                     and isinstance(step.get("type"), str)
                     and step["type"] in {"collect", "exec", "assert"}
                 ):
                     raise HookError(f"{label}.runner is only valid on llm and apply steps")
-
-    _validate_runner_profiles(raw)
-
 
 def _normalize_runner_profile(name: str, raw: dict[str, Any]) -> RunnerProfile:
     runner_type = str(raw["type"]).strip()
@@ -378,10 +420,13 @@ def _normalize_step(raw: dict[str, Any]) -> StepConfig:
     return step
 
 
-def _build_config(raw: dict[str, Any]) -> HookConfig:
+def _build_config(
+    raw: dict[str, Any], *, effective_model: str | None = None
+) -> HookConfig:
     if not isinstance(raw, dict):
         raise HookError("Config document must contain a top-level table")
     _validate_config_types(raw)
+    _validate_runner_profiles(raw, effective_model)
     unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
     if unknown:
         raise HookError(
@@ -421,14 +466,15 @@ def _build_config(raw: dict[str, Any]) -> HookConfig:
     }
     if llm.runner != "opencode" and llm.runner not in runners:
         raise HookError(f"llm.runner references missing runner profile `{llm.runner}`")
-    for module in modules.values():
-        for index, step in enumerate(module.steps, start=1):
-            if step.runner is None:
+    for module_id, module_raw in module_payload.items():
+        for index, step_raw in enumerate(module_raw.get("steps", []) or [], start=1):
+            step_runner = step_raw.get("runner")
+            if step_runner is None or step_runner == "opencode":
                 continue
-            if step.runner != "opencode" and step.runner not in runners:
+            if step_runner not in runners:
                 raise HookError(
-                    f"modules.{module.id}.steps[{index}].runner references missing runner profile "
-                    f"`{step.runner}`"
+                    f"modules.{module_id}.steps[{index}].runner references missing runner profile "
+                    f"`{step_runner}`"
                 )
     for label, storage_path in (
         ("logging.dir", logging.dir),
@@ -473,14 +519,14 @@ def resolve_runner_profile(
     environment = os.environ if env is None else env
     model = profile.model
     model_override = environment.get("AI_PUSH_HOOKS_MODEL")
+    _validate_model_override(model_override)
     if model_override is not None:
-        if not model_override:
-            raise HookError("AI_PUSH_HOOKS_MODEL must be a non-empty model identifier")
         model = model_override
 
     variant = profile.variant
     if profile.type == "opencode":
         variant_override = environment.get("AI_PUSH_HOOKS_VARIANT")
+        _validate_variant_override(variant_override)
         if variant_override is not None:
             variant = variant_override.strip()
 
@@ -563,9 +609,11 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
     if print_output is not None:
         raw["logging"]["print_llm_output"] = print_output
     model = os.getenv("AI_PUSH_HOOKS_MODEL")
-    if model:
+    _validate_model_override(model)
+    if model is not None:
         raw["llm"]["model"] = model
     variant = os.getenv("AI_PUSH_HOOKS_VARIANT")
+    _validate_variant_override(variant)
     if variant is not None:
         raw["llm"]["variant"] = variant.strip()
     timeout = os.getenv("AI_PUSH_HOOKS_TIMEOUT_SECONDS")
@@ -583,7 +631,7 @@ def _apply_env_overrides(config: HookConfig) -> HookConfig:
                 "must be at least 1"
             )
         raw["llm"]["timeout_seconds"] = parsed_timeout
-    return _build_config(raw)
+    return _build_config(raw, effective_model=model)
 
 
 def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
@@ -608,7 +656,13 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
         raise HookError(f"Invalid TOML in {config_path}{location}: {exc}") from exc
     if not isinstance(loaded, dict):
         raise HookError(f"Invalid config format in {config_path}: expected a top-level table")
-    return _apply_env_overrides(_build_config(loaded)), config_path
+    model_override = os.getenv("AI_PUSH_HOOKS_MODEL")
+    variant_override = os.getenv("AI_PUSH_HOOKS_VARIANT")
+    _validate_model_override(model_override)
+    _validate_variant_override(variant_override)
+    return _apply_env_overrides(
+        _build_config(loaded, effective_model=model_override)
+    ), config_path
 
 
 def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:

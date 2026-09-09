@@ -15,7 +15,6 @@ import shutil
 from typing import Any
 
 from .contracts import (
-    MAX_DIAGNOSTIC_CHARS,
     RunnerAdapterUnavailableError,
     RunnerCapabilities,
     RunnerContractError,
@@ -25,6 +24,7 @@ from .contracts import (
     RunnerResult,
     SessionMetadata,
     bounded_redacted_diagnostics,
+    request_sensitive_diagnostics,
     require_final_text,
     require_zero_exit,
 )
@@ -107,39 +107,19 @@ def check_claude_capabilities(
         raise _capability_error("missing required flags or modes", details=", ".join(missing))
 
 
-def _request_secrets(request: RunnerRequest) -> tuple[str, ...]:
-    packet = request.prompt_packet().render()
-    complete_values = tuple(
-        value
-        for value in (
-            request.instruction,
-            packet,
-            *(artifact.content for artifact in request.artifacts),
-        )
-        if value
-    )
-    # A child can echo a line or token rather than the complete prompt or
-    # artifact.  Include useful non-trivial whitespace-delimited fragments in
-    # the redaction set without treating tiny/common words as secrets.
-    fragments = tuple(
-        fragment
-        for value in complete_values
-        for fragment in value.split()
-        if len(fragment) >= 4
-    )
-    return complete_values + fragments
-
-
 def _protocol_failure(
     request: RunnerRequest,
     process_result: ProcessResult,
     reason: str,
+    *,
+    extra_secrets: tuple[str, ...] = (),
 ) -> RunnerProtocolError:
-    details = bounded_redacted_diagnostics(
+    details = request_sensitive_diagnostics(
+        request,
         process_result.stdout,
         process_result.stderr,
-        max_chars=MAX_DIAGNOSTIC_CHARS,
-        secrets=_request_secrets(request),
+        env=os.environ,
+        extra=extra_secrets,
     )
     return RunnerProtocolError(
         f"Claude returned an invalid result for {request.profile_id!r} "
@@ -197,11 +177,14 @@ def parse_claude_result(
     # terminal failures.  Treat every explicit non-success subtype as a
     # failure, including future subtypes, rather than accepting an unknown
     # terminal state as a response.
-    if is_error or (subtype is not None and subtype != "success"):
-        reason = "error result"
-        if subtype:
-            reason = f"error result ({subtype})"
-        raise _protocol_failure(request, process_result, reason)
+    if is_error or subtype != "success":
+        # Never copy provider/model-controlled subtype text into a diagnostic.
+        raise _protocol_failure(
+            request,
+            process_result,
+            "terminal result was not successful",
+            extra_secrets=(subtype,),
+        )
 
     final_text = payload.get("result")
     if not isinstance(final_text, str):
@@ -291,7 +274,6 @@ class ClaudeRunner:
             request,
             normalized,
             env=os.environ,
-            secrets=_request_secrets(request),
         )
         return parse_claude_result(request, process_result)
 

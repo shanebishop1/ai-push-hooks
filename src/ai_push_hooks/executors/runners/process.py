@@ -53,19 +53,22 @@ def _read_bounded(
     output_lock: threading.Lock,
 ) -> None:
     read = getattr(stream, "read")
-    while True:
-        try:
-            chunk = read(PROCESS_CHUNK_BYTES)
-        except (OSError, ValueError):
-            return
-        if not chunk:
-            return
-        with output_lock:
-            remaining = limit - len(output)
-            if remaining > 0:
-                output.extend(chunk[:remaining])
-            if len(chunk) > remaining:
-                truncated[0] = True
+    try:
+        while True:
+            try:
+                chunk = read(PROCESS_CHUNK_BYTES)
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                return
+            with output_lock:
+                remaining = limit - len(output)
+                if remaining > 0:
+                    output.extend(chunk[:remaining])
+                if len(chunk) > remaining:
+                    truncated[0] = True
+    finally:
+        _close_pipe(stream)
 
 
 def _signal_process_group(process_group_id: int, signum: int) -> None:
@@ -132,16 +135,12 @@ def _stop_process(process: subprocess.Popen[bytes], deadline: float) -> None:
                     pass
 
 
-def _close_pipe_fd(stream: object) -> None:
-    """Close a pipe fd without calling a potentially blocking buffered close."""
+def _close_pipe(stream: object) -> None:
+    """Close an unbuffered pipe through its owning stream object."""
 
     try:
-        descriptor = getattr(stream, "fileno")()
+        getattr(stream, "close")()
     except (OSError, ValueError, AttributeError):
-        return
-    try:
-        os.close(descriptor)
-    except OSError:
         return
 
 
@@ -159,16 +158,41 @@ def _finish_capture(
         thread.join(timeout=remaining)
     if any(thread.is_alive() for thread in threads):
         for stream in streams:
-            _close_pipe_fd(stream)
+            _close_pipe(stream)
         for thread in threads:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(timeout=remaining)
-    # Raw fd closure is bounded and leaves no buffered close operation waiting
-    # on a descendant that escaped the normal EOF path.
+    # Popen creates FileIO objects because bufsize=0. FileIO.close() does not
+    # flush buffered data and atomically relinquishes descriptor ownership, so
+    # repeated cleanup cannot later close a descriptor reused by another child.
     for stream in streams:
-        _close_pipe_fd(stream)
+        _close_pipe(stream)
+
+
+def _captured_result(
+    returncode: int,
+    stdout: bytearray,
+    stderr: bytearray,
+    stdout_truncated: list[bool],
+    stderr_truncated: list[bool],
+    stdout_lock: threading.Lock,
+    stderr_lock: threading.Lock,
+) -> ProcessResult:
+    """Snapshot bounded streams for an exception without exposing them in it."""
+
+    with stdout_lock:
+        stdout_text = bytes(stdout).decode("utf-8", errors="surrogateescape")
+    with stderr_lock:
+        stderr_text = bytes(stderr).decode("utf-8", errors="surrogateescape")
+    return ProcessResult(
+        returncode=returncode,
+        stdout=stdout_text,
+        stderr=stderr_text,
+        stdout_truncated=stdout_truncated[0],
+        stderr_truncated=stderr_truncated[0],
+    )
 
 
 def run_process(
@@ -208,6 +232,11 @@ def run_process(
         "stderr": subprocess.PIPE,
         "shell": False,
         "env": dict(env) if env is not None else None,
+        # Buffered pipe wrappers cannot safely be bypassed with os.close(): the
+        # wrapper still owns the descriptor and may close a later reused fd in
+        # its destructor. Unbuffered FileIO makes close bounded and ownership
+        # explicit while the reader threads retain concurrent stream draining.
+        "bufsize": 0,
     }
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
@@ -248,23 +277,27 @@ def run_process(
 
     def write_input() -> None:
         try:
-            descriptor = process.stdin.fileno()
             if input_bytes:
                 offset = 0
                 while offset < len(input_bytes):
-                    offset += os.write(descriptor, input_bytes[offset:])
+                    written = process.stdin.write(input_bytes[offset:])
+                    if not written:
+                        break
+                    offset += written
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
-            _close_pipe_fd(process.stdin)
+            _close_pipe(process.stdin)
 
     input_thread = threading.Thread(target=write_input, daemon=True)
     input_thread.start()
-    cleanup_done = False
     returncode: int | None = None
+    timeout_cause: subprocess.TimeoutExpired | None = None
     try:
         returncode = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
+        timeout_cause = exc
+    finally:
         cleanup_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
         _stop_process(process, cleanup_deadline)
         _finish_capture(
@@ -272,34 +305,40 @@ def run_process(
             (input_thread, stdout_thread, stderr_thread),
             cleanup_deadline,
         )
-        cleanup_done = True
-        raise RunnerTimeoutError("runner process exceeded its timeout") from exc
-    finally:
-        if not cleanup_done:
-            cleanup_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
-            _stop_process(process, cleanup_deadline)
-            _finish_capture(
-                (process.stdin, process.stdout, process.stderr),
-                (input_thread, stdout_thread, stderr_thread),
-                cleanup_deadline,
-            )
-            cleanup_done = True
 
-    with stdout_lock:
-        stdout_text = bytes(stdout).decode("utf-8", errors="surrogateescape")
-    with stderr_lock:
-        stderr_text = bytes(stderr).decode("utf-8", errors="surrogateescape")
+    if returncode is None:
+        returncode = process.poll()
+    if timeout_cause is not None:
+        timeout_returncode = returncode if returncode is not None else -getattr(signal, "SIGKILL", 9)
+        process_result = _captured_result(
+            timeout_returncode,
+            stdout,
+            stderr,
+            stdout_truncated,
+            stderr_truncated,
+            stdout_lock,
+            stderr_lock,
+        )
+        error = RunnerTimeoutError("runner process exceeded its timeout")
+        setattr(error, "_process_result", process_result)
+        raise error from timeout_cause
+
     if returncode is None:  # pragma: no cover - process.wait either returns or raises
         raise RunnerError("runner process returned no exit status")
+    process_result = _captured_result(
+        returncode,
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
+        stdout_lock,
+        stderr_lock,
+    )
     if returncode < 0:
-        raise RunnerSignalError(
+        error = RunnerSignalError(
             "runner process terminated by signal",
             details=str(-returncode),
         )
-    return ProcessResult(
-        returncode=returncode,
-        stdout=stdout_text,
-        stderr=stderr_text,
-        stdout_truncated=stdout_truncated[0],
-        stderr_truncated=stderr_truncated[0],
-    )
+        setattr(error, "_process_result", process_result)
+        raise error
+    return process_result

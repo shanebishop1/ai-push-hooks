@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import pathlib
 from dataclasses import dataclass
 
 from .contracts import (
@@ -20,7 +19,7 @@ from .contracts import (
     RunnerRequest,
     RunnerResult,
     SessionMetadata,
-    bounded_redacted_diagnostics,
+    request_sensitive_diagnostics,
     require_final_text,
     require_zero_exit,
 )
@@ -38,27 +37,6 @@ class _CodexOutput:
     terminal_failure: bool
 
 
-def _request_secrets(request: RunnerRequest) -> tuple[str, ...]:
-    """Return prompt/artifact values and useful fragments for redaction."""
-
-    complete_values = tuple(
-        value
-        for value in (
-            request.instruction,
-            request.prompt_packet().render(),
-            *(artifact.content for artifact in request.artifacts),
-        )
-        if value
-    )
-    fragments = tuple(
-        fragment
-        for value in complete_values
-        for fragment in value.split()
-        if len(fragment) >= 4
-    )
-    return complete_values + fragments
-
-
 def _protocol_error(
     request: RunnerRequest,
     process: ProcessResult,
@@ -66,20 +44,11 @@ def _protocol_error(
 ) -> RunnerProtocolError:
     """Build a bounded diagnostic without echoing prompt or environment data."""
 
-    details = bounded_redacted_diagnostics(
+    details = request_sensitive_diagnostics(
+        request,
         process.stdout,
         process.stderr,
-        secrets=(
-            *_request_secrets(request),
-            *(
-                value
-                for name, value in os.environ.items()
-                if any(
-                    marker in name.upper()
-                    for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
-                )
-            ),
-        ),
+        env=os.environ,
     )
     return RunnerProtocolError(
         f"Codex runner {request.profile_id!r} ({request.runner_type}) "
@@ -100,6 +69,7 @@ def _parse_codex_jsonl(request: RunnerRequest, process: ProcessResult) -> _Codex
     thread_id: str | None = None
     terminal_success = False
     terminal_failure = False
+    turn_open = False
 
     for line_number, line in enumerate(process.stdout.splitlines(), start=1):
         payload = line.strip()
@@ -139,6 +109,12 @@ def _parse_codex_jsonl(request: RunnerRequest, process: ProcessResult) -> _Codex
                     "Codex thread.started event had no thread id",
                 )
             thread_id = value
+        elif event_type == "turn.started":
+            if turn_open:
+                raise _protocol_error(request, process, "Codex JSONL turn order was invalid")
+            turn_open = True
+            if not terminal_failure:
+                terminal_success = False
         elif event_type == "item.completed":
             item = event.get("item")
             if not isinstance(item, dict):
@@ -156,6 +132,7 @@ def _parse_codex_jsonl(request: RunnerRequest, process: ProcessResult) -> _Codex
                 final_text = text
         elif event_type == "turn.completed":
             status = event.get("status")
+            turn_open = False
             if isinstance(status, str) and status.lower() not in {
                 "completed",
                 "success",
@@ -166,37 +143,14 @@ def _parse_codex_jsonl(request: RunnerRequest, process: ProcessResult) -> _Codex
             elif event.get("error"):
                 terminal_failure = True
                 terminal_success = False
-            else:
+            elif not terminal_failure:
                 terminal_success = True
-                terminal_failure = False
         elif event_type in {"turn.failed", "error"}:
             terminal_failure = True
             terminal_success = False
+            turn_open = False
 
     return _CodexOutput(final_text, thread_id, terminal_success, terminal_failure)
-
-
-def parse_codex_jsonl(raw: str) -> tuple[str | None, str]:
-    """Parse a standalone Codex JSONL stream.
-
-    This small compatibility helper returns the captured thread ID and last
-    completed agent message.  ``CodexRunner.run`` additionally enforces the
-    process, truncation, and terminal-turn success conditions.
-    """
-
-    request = RunnerRequest(
-        profile_id="codex-parser",
-        runner_type="codex",
-        stage="parser",
-        purpose="parser",
-        mode="apply",
-        instruction="",
-        cwd=pathlib.Path("."),
-        timeout_seconds=1,
-    )
-    process = ProcessResult(0, raw, "")
-    parsed = _parse_codex_jsonl(request, process)
-    return parsed.thread_id, parsed.final_text
 
 
 @dataclass(frozen=True)
@@ -254,7 +208,6 @@ class CodexRunner:
             request,
             result,
             env=os.environ,
-            secrets=_request_secrets(request),
         )
 
         if process.stdout_truncated or process.stderr_truncated:
@@ -274,10 +227,11 @@ class CodexRunner:
         try:
             final_text = require_final_text(parsed.final_text, mode=request.mode)
         except RunnerMissingOutputError as exc:
-            details = bounded_redacted_diagnostics(
+            details = request_sensitive_diagnostics(
+                request,
                 process.stdout,
                 process.stderr,
-                secrets=_request_secrets(request),
+                env=os.environ,
             )
             raise RunnerMissingOutputError(str(exc), details=details) from exc
 
