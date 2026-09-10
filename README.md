@@ -239,6 +239,12 @@ and atomic file replacement reduce lost updates; they are not an atomic
 compare-and-swap against an arbitrary external writer. No rollback is attempted
 over pre-existing user changes.
 
+Apply intentionally repeats integrity and state scans: it snapshots the checkout
+and Git metadata, inventories staging before and after the runner, checks each
+propagation operation against its baseline, and verifies the propagated result
+and protected state afterward. This defense-in-depth work is intentional; it is
+not a promise of an atomic compare-and-swap or a rollback mechanism.
+
 ## Pluggable workflow steps
 
 The source tree supports two deliberately small extension seams. A deterministic
@@ -256,8 +262,9 @@ after the enabled-module gate, `when_env` gate, and input resolution. A source
 file is loaded once per run (including concurrent collectors), with no `sys.path`,
 cwd, or environment mutation. It may import standard-library or already
 installed dependencies from the interpreter running the hook; the host never
-runs `pip`. There is no hot reload, isolation sandbox, or enforceable hard
-timeout for in-process Python.
+runs `pip`. There is no hot reload, isolation sandbox, or in-process timeout
+for Python callbacks. The configured timeout applies to child runner
+processes, not code executed inside the hook process.
 
 Every callback receives exactly one frozen `PluginContext`. Its `repo_root`,
 `module_id`, and `step_id` identify the call; `inputs` is an insertion-ordered,
@@ -692,39 +699,73 @@ The recorded environment details are intentionally not used as compatibility
 proof for every platform. Python 3.10–3.13 and Node 18+ remain declared
 compatibility ranges, and the generated hook requires a POSIX shell.
 
-The current direct smoke command uses a loopback mock provider. Do not read this
+The repository's smoke command uses a loopback mock provider. Do not read this
 as live-provider evidence or as proof of network or operating-system isolation.
+For the current checkout, run the commands in [Maintainer release and recovery](#maintainer-release-and-recovery);
+results are intentionally not hardcoded here.
 
-Final pinned-Lefthook verification passed with no skips:
+### Historical 0.3.0 verification record
+
+The [0.3.0 release record](CHANGELOG.md#030---2026-09-09) documented a pinned
+Lefthook suite reporting **407 passed, 0 skipped**, Ruff 0.13.3, and wheel,
+sdist, Twine 6.1.0, and npm packaging checks. It also documented an OpenCode
+1.18.29 loopback mock-provider smoke with no external model call, plus
+version/help-only checks for OpenCode 1.18.29, Codex 0.148.0, and Claude
+2.1.220. This is historical release evidence, not a current test result or a
+guarantee for every provider, model, platform, or interpreter.
+
+Default tests make no authenticated or billable model calls. The live probe
+rejects a present `AI_PUSH_HOOKS_MODEL` before setup or any child call; unset it
+so the explicit `--model "provider/model-id"` argument remains deliberate.
+
+## Maintainer release and recovery
+
+### Normal release
+
+Push the canonical tag only after the source version, `release-channel.toml`,
+and full tag commit agree. The release workflow validates the source, runs its
+gates, builds one immutable release set containing the wheel, sdist, and npm
+tarball, and promotes those exact artifacts. It does not rebuild separately for
+each registry.
+
+### Recovery
+
+Start recovery with `workflow_dispatch` from the repository's default branch.
+Use `recover_bookkeeping` only when the npm publication is already complete and
+only deployment bookkeeping is missing. Use `recover_release` with the exact
+tag and full commit, and preferably the immutable Actions artifact ID; leaving
+the ID empty is supported only for a matching draft GitHub release asset set.
+
+`scripts/release_recovery.py` is generic: it takes artifact names and paths
+from the checksum manifest, then binds that set to the source metadata,
+release-channel policy, tag, and full commit before validating sizes, hashes,
+integrity values, and safe paths. Recovery confirms that PyPI is complete
+before it can publish or verify the exact npm tarball. It never republishes
+PyPI, rebuilds artifacts, or changes artifact contents.
+
+Do not rebuild, rerun the full release workflow, blindly retry a non-idempotent
+publication, or move, retag, or repoint the release tag. Stop for manual
+investigation when the source, tag, commit, manifest, or registry state does
+not match.
+
+### Maintainer validation
+
+From the repository root, `npm test` is the package-defined test entry point;
+it uses `uv` to provision pytest, build, pip, and conditional `tomli` for
+Python 3.10 before running the suite. It does not rely on a globally installed
+pytest:
 
 ```bash
-mise exec lefthook@2.1.9 -- python -m pytest tests -q
+npm test
+npm run test:npm-pack
 ```
 
-```text
-407 passed, 0 skipped
-```
-
-Ruff 0.13.3 also passed after the three direct-script `E402` fixes:
+For focused documentation and initialization checks, use the same bootstrap:
 
 ```bash
-uv tool run --from ruff==0.13.3 ruff check --isolated .
+uv run --no-project --with pytest --with build --with pip --with "tomli; python_version < '3.11'" \
+  pytest tests/test_init_command.py tests/test_docs_module.py tests/test_docs_collection.py -q
 ```
-
-Wheel, sdist, Twine 6.1.0, and npm packaging checks passed; the npm 10.9.2
-offline smoke used zero LLM calls. The real OpenCode 1.18.29 smoke test passed
-with an in-process loopback mock provider and no external model call; its read
-probe also checks that no Git-visible project files were mutated. It is
-permission/workspace evidence, not live-provider or operating-system-sandbox
-evidence. Installed no-model conformance passed for OpenCode 1.18.29, Codex
-0.148.0, and Claude 2.1.220 using only version/help commands. Python 3.10.18
-and Python 3.12 each passed 407 tests with 0 skips; the Python 3.10.18 run used
-pytest 8.3.5, build 1.2.2.post1, tomli 2.4.1, and Lefthook 2.1.9. Default tests
-make no authenticated or billable model calls. The live probe rejects a
-present `AI_PUSH_HOOKS_MODEL` before any setup or child call; unset it so the
-explicit `--model "provider/model-id"` argument remains deliberate. See the
-[verification report](docs/reports/runner-verification.md) for the full gated
-Codex/Pi read and apply commands.
 
 ### Runner references
 
@@ -790,12 +831,12 @@ assertion then blocks the push for human review and commit. `exec` and `assert`
 remain available for deterministic repository actions. This ordering limits
 model scope without pretending to provide an OS sandbox.
 
-**Evidence.** The real OpenCode 1.18.29 loopback mock-provider contract found a
-version-specific permission mapping (`write` requests `edit`) and covers
-allowlisted propagation plus protected Git metadata without an external model
-call. The final pinned-Lefthook Python suite recorded 407 passed with no skips.
-Installed runner conformance is version/help-only; live Codex and Pi probes were
-intentionally not run, and Claude live verification is pending.
+**Evidence.** The 0.3.0 historical release record documented the real OpenCode
+1.18.29 loopback mock-provider contract, including a version-specific permission
+mapping (`write` requests `edit`), allowlisted propagation, and protected Git
+metadata without an external model call. Installed runner conformance was
+version/help-only; live Codex and Pi probes were intentionally not run, and
+Claude live verification was pending at that release.
 
 **Limitations.** Provider availability, billing, retention, OS-level access,
 ignored trees, shared metadata, and independent filesystem races remain outside

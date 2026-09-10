@@ -4,7 +4,28 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
-No unreleased changes.
+These notes describe unreleased source changes; they do not announce a newly
+published package.
+
+### Fixed
+
+- Hardened release recovery around source-bound checksum manifests, safe
+  artifact paths, and exact artifact identity; recovery remains npm-only after
+  PyPI is complete and does not rebuild or republish the Python artifacts.
+- Tightened bounded child-process output handling and cleanup when a stream
+  reaches its limit.
+
+### Performance
+
+- Reduced documentation context-search work by reading each candidate document
+  once and bounding retained query-match metadata.
+- Allowed independent runner types and callback sources to initialize in
+  parallel while preserving per-source/per-adapter initialization safety.
+
+### Cleanup
+
+- Consolidated hook-owned artifact validation and shared process handling across
+  runner adapters, removing duplicated OpenCode-specific plumbing.
 
 ## [0.3.0] - 2026-09-09
 

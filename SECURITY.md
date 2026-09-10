@@ -52,8 +52,9 @@ or the environment. A single-file callback may import dependencies already
 installed in the interpreter running the hook, but the host never runs `pip`;
 sibling/package-relative imports and installed-module references are not a
 supported loading mechanism. The callback runs in-process as trusted user code:
-there is no SDK, sandbox, filesystem write prevention, or enforceable hard
-timeout. Its `PluginContext` has frozen mappings/snapshots and validated `Path`
+there is no SDK, sandbox, filesystem write prevention, or in-process timeout.
+The configured timeout applies to child runner processes, not callback code.
+Its `PluginContext` has frozen mappings/snapshots and validated `Path`
 values, but those paths do not make file contents read-only. Callback prints and
 direct writes can disclose or modify host data and are outside host
 sanitization. Use a separately managed low-privilege process/container/VM when
@@ -100,19 +101,23 @@ are not an atomic CAS against arbitrary external writers, and automatic rollback
 is avoided to protect pre-existing user changes. See the README's [runner
 profiles and access modes](README.md#runner-profiles-and-access-modes).
 
+Apply intentionally repeats integrity and state scans: it snapshots the checkout
+and Git metadata, inventories staging before and after the runner, checks each
+propagation operation against its baseline, and verifies the propagated result
+and protected state afterward. These repeated checks are defense in depth, not
+an atomic CAS or an automatic rollback.
+
 Timeout cleanup has platform limits: POSIX uses a private process group on a
 best-effort basis, while Windows can terminate only the direct child. Neither
 is a sandbox; Windows has no native beta evidence.
 
-## Tested security boundary
+## Historical 0.3.0 security evidence
 
-The final pinned-Lefthook suite passed **407 tests with no skips**. The current
-evidence also includes the real OpenCode **1.18.29** contract smoke test with an
-in-process loopback mock provider and no external model call; its read probe
-checks that no Git-visible project files were mutated. It does not cover every
-provider, model, authentication mode, or live `apply` path.
-Installed Codex **0.148.0** and Claude **2.1.220** checks use only version/help
-output. Live Codex/Pi verification was intentionally not run pending separate
-approval; Claude live verification is pending because no subscription is
-available. Treat generated-hook path checks and the Lefthook runner as
-integration safeguards, not isolation boundaries.
+The [0.3.0 release record](CHANGELOG.md#030---2026-09-09) documented a pinned
+Lefthook suite reporting **407 tests with no skips**, an OpenCode **1.18.29**
+contract smoke test with an in-process loopback mock provider and no external
+model call, and version/help-only checks for Codex **0.148.0** and Claude
+**2.1.220**. This is historical evidence, not a current suite result or proof
+for every provider, model, authentication mode, platform, or live `apply` path.
+Treat generated-hook path checks and the Lefthook runner as integration
+safeguards, not isolation boundaries.
