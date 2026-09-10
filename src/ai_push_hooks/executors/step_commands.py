@@ -19,7 +19,13 @@ from typing import Any
 
 from ..artifacts import ArtifactStore
 from ..paths import path_is_link_or_reparse
-from ..types import HookError, ModuleRuntimeState, RuntimeContext, StepConfig
+from ..types import (
+    DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS,
+    HookError,
+    ModuleRuntimeState,
+    RuntimeContext,
+    StepConfig,
+)
 from .runners.contracts import bounded_diagnostic, redact_diagnostic
 from .runners.process import (
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -27,7 +33,6 @@ from .runners.process import (
     run_process,
 )
 
-DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS = 60
 STEP_COMMAND_STDOUT_ARTIFACT = "stdout.txt"
 STEP_COMMAND_STDERR_ARTIFACT = "stderr.txt"
 STEP_COMMAND_RESULT_ARTIFACT = "result.json"

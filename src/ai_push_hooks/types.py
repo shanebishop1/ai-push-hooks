@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 READ_ONLY_STEP_TYPES = frozenset({"collect", "ask"})
 PROMPTABLE_STEP_TYPES = frozenset({"ask", "apply"})
 SUPPORTED_STEP_TYPES = frozenset({"collect", "ask", "apply", "exec", "assert"})
+DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS = 60
 FEATURE_BRANCH_PREFIXES = ("feat/", "feature/")
 ZERO_OID_LENGTHS = frozenset({40, 64})
 

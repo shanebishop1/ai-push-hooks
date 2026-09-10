@@ -106,6 +106,76 @@ def test_registry_has_only_static_known_types_and_loads_lazily(tmp_path: pathlib
         registry.get("not-a-runner")
 
 
+def test_registry_initializes_one_adapter_once_under_concurrency() -> None:
+    calls = 0
+    calls_lock = threading.Lock()
+    entered = threading.Event()
+    release = threading.Event()
+
+    class FakeRunner:
+        capabilities = RunnerCapabilities()
+
+        def run(self, _request: RunnerRequest) -> RunnerResult:
+            return RunnerResult("ok", 0, "", "")
+
+    def factory() -> FakeRunner:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        entered.set()
+        assert release.wait(timeout=2)
+        return FakeRunner()
+
+    specs = {name: LazyRunnerSpec("unused") for name in KNOWN_RUNNER_TYPES}
+    specs["command"] = factory
+    registry = RunnerRegistry(specs)
+
+    first = threading.Thread(target=lambda: registry.get("command"))
+    second = threading.Thread(target=lambda: registry.get("command"))
+    first.start()
+    assert entered.wait(timeout=2)
+    second.start()
+    release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == 1
+
+
+def test_registry_uses_independent_locks_for_different_adapters() -> None:
+    barrier = threading.Barrier(2)
+    runners = {
+        name: type(
+            "FakeRunner",
+            (),
+            {
+                "capabilities": RunnerCapabilities(),
+                "run": lambda self, _request: RunnerResult("ok", 0, "", ""),
+            },
+        )
+        for name in KNOWN_RUNNER_TYPES
+    }
+
+    def factory(runner_type: str):
+        def create() -> object:
+            barrier.wait(timeout=2)
+            return runners[runner_type]()
+
+        return create
+
+    specs = {name: LazyRunnerSpec("unused") for name in KNOWN_RUNNER_TYPES}
+    specs["command"] = factory("command")
+    specs["claude"] = factory("claude")
+    registry = RunnerRegistry(specs)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        loaded = list(pool.map(registry.get, ("command", "claude")))
+
+    assert all(callable(getattr(runner, "run", None)) for runner in loaded)
+
+
 def test_result_and_session_metadata_do_not_claim_ephemeral_transcript_as_persisted() -> None:
     result = RunnerResult(
         final_text="done",
@@ -350,7 +420,9 @@ def test_process_errors_classify_not_found_timeout_and_signal(tmp_path: pathlib.
                 "import sys, time; print('{\"sessionID\":\"timeout-session\"}', flush=True); time.sleep(10)",
             ],
             cwd=tmp_path,
-            timeout_seconds=0.05,
+            # Interpreter startup can exceed 50ms on a loaded CI host;
+            # the child still sleeps far beyond this real timeout.
+            timeout_seconds=2,
         )
     timeout_result = getattr(timeout_error.value, "_process_result")
     assert timeout_result.stdout.strip() == '{"sessionID":"timeout-session"}'

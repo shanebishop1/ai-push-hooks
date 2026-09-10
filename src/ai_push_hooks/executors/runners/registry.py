@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Callable, Mapping
@@ -78,6 +79,9 @@ class RunnerRegistry:
             raise RunnerContractError("runner registry must contain all four known adapter types")
         self._specs = dict(selected)
         self._loaded: dict[str, Runner] = {}
+        self._load_locks = {
+            runner_type: threading.Lock() for runner_type in KNOWN_RUNNER_TYPES
+        }
 
     @property
     def known_types(self) -> tuple[str, ...]:
@@ -86,10 +90,19 @@ class RunnerRegistry:
     def get(self, runner_type: str) -> Runner:
         if runner_type not in self._specs:
             raise RunnerContractError(f"unknown runner type: {runner_type!r}")
-        if runner_type not in self._loaded:
-            spec = self._specs[runner_type]
-            self._loaded[runner_type] = spec.load() if isinstance(spec, LazyRunnerSpec) else spec()
-        return self._loaded[runner_type]
+        runner = self._loaded.get(runner_type)
+        if runner is not None:
+            return runner
+        # Initialization is serialized only for the selected adapter.  Other
+        # runner types may load concurrently, which matters for capability
+        # probes such as Claude's --help check.
+        with self._load_locks[runner_type]:
+            runner = self._loaded.get(runner_type)
+            if runner is None:
+                spec = self._specs[runner_type]
+                runner = spec.load() if isinstance(spec, LazyRunnerSpec) else spec()
+                self._loaded[runner_type] = runner
+            return runner
 
     def __contains__(self, runner_type: object) -> bool:
         return runner_type in self._specs

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import pathlib
 import signal
@@ -58,6 +59,7 @@ def _read_bounded(
     output: bytearray,
     truncated: list[bool],
     output_lock: threading.Lock,
+    output_limit_reached: threading.Event,
 ) -> None:
     read = getattr(stream, "read")
     try:
@@ -74,6 +76,7 @@ def _read_bounded(
                     output.extend(chunk[:remaining])
                 if len(chunk) > remaining:
                     truncated[0] = True
+                    output_limit_reached.set()
     finally:
         _close_pipe(stream)
 
@@ -213,6 +216,7 @@ def run_process(
     timeout_seconds: float,
     env: Mapping[str, str] | None = None,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+    max_stderr_bytes: int | None = None,
 ) -> ProcessResult:
     """Run an argv vector directly, with bounded concurrent stream capture.
 
@@ -230,10 +234,26 @@ def run_process(
         cwd = pathlib.Path(cwd)
     if not cwd.is_dir():
         raise RunnerError("runner cwd must be an existing directory")
-    if timeout_seconds <= 0:
-        raise RunnerError("runner timeout must be greater than zero")
-    if max_output_bytes < 0:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise RunnerError("runner timeout must be a finite number greater than zero")
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or max_output_bytes < 0
+    ):
         raise RunnerError("runner output bound must not be negative")
+    stderr_limit = max_output_bytes if max_stderr_bytes is None else max_stderr_bytes
+    if (
+        isinstance(stderr_limit, bool)
+        or not isinstance(stderr_limit, int)
+        or stderr_limit < 0
+    ):
+        raise RunnerError("runner stderr output bound must not be negative")
     if input_text is not None and input_path is not None:
         raise RunnerError("runner input_text and input_path are mutually exclusive")
     input_file = None
@@ -306,14 +326,29 @@ def run_process(
     stderr_lock = threading.Lock()
     stdout_truncated = [False]
     stderr_truncated = [False]
+    output_limit_reached = threading.Event()
     stdout_thread = threading.Thread(
         target=_read_bounded,
-        args=(process.stdout, max_output_bytes, stdout, stdout_truncated, stdout_lock),
+        args=(
+            process.stdout,
+            max_output_bytes,
+            stdout,
+            stdout_truncated,
+            stdout_lock,
+            output_limit_reached,
+        ),
         daemon=True,
     )
     stderr_thread = threading.Thread(
         target=_read_bounded,
-        args=(process.stderr, max_output_bytes, stderr, stderr_truncated, stderr_lock),
+        args=(
+            process.stderr,
+            stderr_limit,
+            stderr,
+            stderr_truncated,
+            stderr_lock,
+            output_limit_reached,
+        ),
         daemon=True,
     )
     stdout_thread.start()
@@ -350,23 +385,49 @@ def run_process(
 
     input_thread = threading.Thread(target=write_input, daemon=True)
     input_thread.start()
+    process_exited = threading.Event()
+    process_returncode: list[int | None] = [None]
+
+    def wait_for_process_exit() -> None:
+        process_returncode[0] = process.wait()
+        process_exited.set()
+
+    process_wait_thread = threading.Thread(target=wait_for_process_exit, daemon=True)
+    process_wait_thread.start()
     returncode: int | None = None
     timeout_cause: subprocess.TimeoutExpired | None = None
+    output_limit_cause = False
     try:
-        returncode = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        timeout_cause = exc
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timeout_cause = subprocess.TimeoutExpired(list(argv), timeout_seconds)
+                break
+            if output_limit_reached.is_set():
+                # A short grace period preserves the natural exit status for
+                # commands that wrote their final bounded chunk and were
+                # already exiting.  A still-live child is stopped below
+                # rather than allowed to drain discarded output until timeout.
+                if process_exited.wait(timeout=min(remaining, 0.05)):
+                    returncode = process_returncode[0]
+                else:
+                    output_limit_cause = True
+                break
+            if process_exited.wait(timeout=min(remaining, 0.05)):
+                returncode = process_returncode[0]
+                break
     finally:
         cleanup_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
         _stop_process(process, cleanup_deadline)
         _finish_capture(
             (process.stdin, process.stdout, process.stderr),
-            (input_thread, stdout_thread, stderr_thread),
+            (input_thread, stdout_thread, stderr_thread, process_wait_thread),
             cleanup_deadline,
         )
 
     if returncode is None:
-        returncode = process.poll()
+        returncode = process_returncode[0] if process_returncode[0] is not None else process.poll()
     if timeout_cause is not None:
         timeout_returncode = returncode if returncode is not None else -getattr(signal, "SIGKILL", 9)
         process_result = _captured_result(
@@ -393,7 +454,7 @@ def run_process(
         stdout_lock,
         stderr_lock,
     )
-    if returncode < 0:
+    if returncode < 0 and not output_limit_cause:
         error = RunnerSignalError(
             "runner process terminated by signal",
             details=str(-returncode),

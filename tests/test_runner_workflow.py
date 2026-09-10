@@ -276,7 +276,9 @@ def test_runner_error_redacts_attached_partial_process_output(
     [
         (
             "import sys, time; print('Authorization: Bearer timeout-secret', file=sys.stderr, flush=True); time.sleep(10)",
-            0.1,
+            # Allow interpreter startup under CI load; the child sleeps for
+            # ten seconds, so this remains a genuine timeout regression.
+            2.0,
             "timeout-secret",
         ),
         (
