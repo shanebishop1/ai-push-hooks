@@ -171,24 +171,16 @@ jobs:
           npm --version
           git --version
 
-      - name: Verify Python 3.10 parser fallback with and without tomli
+      - name: Verify Python 3.10 uses the bundled parser without pip
         shell: bash
         run: |
           set -euo pipefail
           node_bin="$(command -v node)"
           parser_env="$(mktemp -d "${RUNNER_TEMP}/ai-push-hooks-parser.XXXXXX")"
           trap 'rm -rf "$parser_env"' EXIT
-          python -m venv "$parser_env/venv"
-
-          if PATH="$parser_env/venv/bin" "$node_bin" bin/ai-push-hooks.js --help \
-              >"$parser_env/without-parser.out" 2>"$parser_env/without-parser.err"; then
-            printf 'wrapper unexpectedly succeeded without tomli\n' >&2
-            exit 1
-          fi
-          grep -F 'Python 3.11+ is required for npm installs. Python 3.10 can be used if tomli is installed.' \
-            "$parser_env/without-parser.err"
-
-          "$parser_env/venv/bin/python" -m pip install --constraint constraints-ci.txt .
+          python -m venv --without-pip "$parser_env/venv"
+          "$parser_env/venv/bin/python" -c \
+            'import importlib.util; assert importlib.util.find_spec("tomli") is None'
           PATH="$parser_env/venv/bin" "$node_bin" bin/ai-push-hooks.js --help
 
       - name: Smoke-test packed npm install

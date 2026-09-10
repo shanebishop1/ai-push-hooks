@@ -6,16 +6,16 @@ const path = require('node:path');
 
 const packageRoot = path.resolve(__dirname, '..');
 const srcDir = path.join(packageRoot, 'src');
+const tomliWheel = path.join(packageRoot, 'vendor', 'tomli-2.4.0-py3-none-any.whl');
 const args = ['-m', 'ai_push_hooks', ...process.argv.slice(2)];
-const pythonCommands = ['python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3', 'python'];
+const pythonCommands = ['python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3', 'python'];
 
 function buildEnv() {
   const env = { ...process.env };
   env.AI_PUSH_HOOKS_NODE_EXECUTABLE = process.execPath;
   env.AI_PUSH_HOOKS_NODE_SCRIPT = fs.realpathSync(__filename);
-  env.PYTHONPATH = env.PYTHONPATH
-    ? `${srcDir}${path.delimiter}${env.PYTHONPATH}`
-    : srcDir;
+  // Pure-Python wheels are importable archives; no pip or install scripts needed.
+  env.PYTHONPATH = [srcDir, tomliWheel, env.PYTHONPATH].filter(Boolean).join(path.delimiter);
   return env;
 }
 
@@ -33,7 +33,7 @@ function canRunPackage(command) {
       '-c',
       'import sys; assert sys.version_info >= (3, 10); __import__("tomllib" if sys.version_info >= (3, 11) else "tomli")',
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', env: buildEnv() },
   );
   return check.status === 0;
 }
@@ -41,7 +41,7 @@ function canRunPackage(command) {
 const pythonCommand = pythonCommands.find(canRunPackage);
 if (!pythonCommand) {
   console.error(
-    '[ai-push-hooks] Python 3.11+ is required for npm installs. Python 3.10 can be used if tomli is installed.',
+    '[ai-push-hooks] Python 3.10+ is required and must be available on PATH.',
   );
   process.exit(1);
 }

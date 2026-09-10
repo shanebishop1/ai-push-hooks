@@ -9,6 +9,8 @@ published package.
 
 ### Fixed
 
+- Bundled the Python 3.10 TOML dependency in the npm package, removing the
+  separate `tomli` installation step even for offline, script-disabled installs.
 - Hardened release recovery around source-bound checksum manifests, safe
   artifact paths, and exact artifact identity; recovery remains npm-only after
   PyPI is complete and does not rebuild or republish the Python artifacts.

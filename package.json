@@ -36,6 +36,7 @@
   "files": [
     "bin",
     "src/**/*.py",
+    "vendor",
     "README.md",
     "CHANGELOG.md",
     "SECURITY.md",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -8,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -432,6 +434,57 @@ def _prepare_npm_command(
     command = package_dir / "node_modules" / ".bin" / "ai-push-hooks"
     _run([str(command), "--help"], package_dir, env)
     return command
+
+
+def test_npm_works_without_site_packages(
+    installed_artifacts: dict[str, pathlib.Path], tmp_path: pathlib.Path
+) -> None:
+    env = _isolated_env(tmp_path / "home")
+    repo = tmp_path / "client repo"
+    command = _prepare_npm_command(installed_artifacts["npm"], repo, env)
+    tools = tmp_path / "isolated-tools"
+    tools.mkdir()
+    for name in ("node", "git"):
+        executable = shutil.which(name)
+        assert executable, f"{name} is required for the npm integration test"
+        (tools / name).symlink_to(executable)
+    # Expose only this test's interpreter, with installed/user packages disabled.
+    python = tools / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    python.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n', encoding="utf-8"
+    )
+    python.chmod(0o755)
+    env["PATH"] = str(tools)
+    _run(
+        [str(python), "-c", "import importlib.util; assert importlib.util.find_spec('tomli') is None"],
+        repo, env,
+    )
+    _run([str(command), "init", "--template", "minimal-docs"], repo, env)
+    _git(repo, env, "init", "-b", "main", ".")
+    _install_repo_fixtures(repo)
+    (repo / "README.md").write_text("# Dependency smoke test\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    (repo / "ai-push-hooks.toml").write_text(_scenario_config(), encoding="utf-8")
+    _git(repo, env, "add", ".")
+    _git(repo, env, "commit", "-m", "initial")
+    _run([str(command), "install"], repo, env)
+    _run([str(repo / ".git/hooks/pre-push")], repo, env, input_text="")
+    report = json.loads(
+        (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(encoding="utf-8")
+    )
+    assert report["dependency"] == "installed-interpreter"
+    # The shipped archive is self-contained and retains its upstream license.
+    package_root = repo / "node_modules" / "ai-push-hooks"
+    probe_env = {**env, "PYTHONPATH": str(package_root / "vendor/tomli-2.4.0-py3-none-any.whl")}
+    _run(
+        [str(python), "-c", "import tomli; assert tomli.loads('ok = true')['ok']"],
+        repo, probe_env,
+    )
+    wheel = package_root / "vendor/tomli-2.4.0-py3-none-any.whl"
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    assert f"--hash=sha256:{digest}" in (package_root / "vendor/requirements.txt").read_text()
+    with zipfile.ZipFile(wheel) as archive:
+        assert "MIT License" in archive.read("tomli-2.4.0.dist-info/licenses/LICENSE").decode()
 
 
 @pytest.mark.parametrize("distribution", ["wheel", "npm"])
