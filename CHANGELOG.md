@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - Added strict named runner profiles for OpenCode, Codex, Claude, and direct
-  shell-free command adapters, with global and per-`llm`/`apply` selection.
+  shell-free command adapters, with global and per-`ask`/`apply` selection.
 - Added explicit project-aware analysis and broad, bounded project apply staging
   while retaining allowlisted propagation and the artifact-only OpenCode default.
 

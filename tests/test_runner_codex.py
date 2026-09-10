@@ -21,7 +21,7 @@ from ai_push_hooks.executors.runners.process import ProcessResult
 def make_request(
     tmp_path: pathlib.Path,
     *,
-    mode: str = "llm",
+    mode: str = "ask",
     project_access: str = "project",
     model: str | None = "gpt-5.6-codex",
     instruction: str = "Review the change.",
@@ -30,7 +30,7 @@ def make_request(
         profile_id="codex-review",
         runner_type="codex",
         stage="docs.review",
-        purpose="llm:review",
+        purpose="ask:review",
         mode=mode,  # type: ignore[arg-type]
         instruction=instruction,
         artifacts=(RunnerArtifact("diff.txt", "diff body"),),

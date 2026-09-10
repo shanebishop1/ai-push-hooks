@@ -73,7 +73,7 @@ base_branch = "main"
 [llm]
 # Compatibility default: OpenCode receives validated hook artifacts only.
 # Define [runners.<name>] and select it with [llm].runner, or override an
-# individual llm/apply step with runner = "<name>". Project access is explicit.
+# individual ask/apply step with runner = "<name>". Project access is explicit.
 runner = "opencode"
 model = "openai/gpt-5.6-terra"
 variant = ""
@@ -107,7 +107,7 @@ collector = "docs_context"
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = """
 Given the attached diff and changed file list, output a JSON array of concise
 documentation search queries. Return JSON only.
@@ -118,7 +118,7 @@ schema = "string_array"
 
 [[modules.docs.steps]]
 id = "analyze"
-type = "llm"
+type = "ask"
 prompt = """
 Review the diff and matched docs excerpts. Return JSON issues only for factual
 documentation drift caused by the code changes.

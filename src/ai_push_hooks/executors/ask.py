@@ -599,7 +599,7 @@ def _safe_invalid_output(invocation: Any, output: str) -> str:
     return request_sensitive_diagnostics(request, output, max_chars=400, env=os.environ)
 
 
-def run_llm_step(
+def run_ask_step(
     context: RuntimeContext,
     step: StepConfig,
     prompt: str,
@@ -631,7 +631,7 @@ def run_llm_step(
         working_directory = context.repo_root.resolve(strict=True)
         temporary_directory = None
     else:
-        temporary_directory = tempfile.TemporaryDirectory(prefix="ai-push-hooks-llm-")
+        temporary_directory = tempfile.TemporaryDirectory(prefix="ai-push-hooks-ask-")
         working_directory = pathlib.Path(temporary_directory.name).resolve(strict=True)
 
     try:

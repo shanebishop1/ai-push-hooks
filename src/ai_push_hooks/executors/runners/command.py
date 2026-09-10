@@ -51,8 +51,8 @@ def _validate_request(request: object) -> RunnerRequest:
             raise RunnerContractError(f"{label} must be a non-empty NUL-free string")
     if request.runner_type != "command":
         raise RunnerContractError("command runner requires runner_type 'command'")
-    if request.mode not in {"llm", "apply"}:
-        raise RunnerContractError("mode must be 'llm' or 'apply'")
+    if request.mode not in {"ask", "apply"}:
+        raise RunnerContractError("mode must be 'ask' or 'apply'")
     if not isinstance(request.instruction, str) or "\x00" in request.instruction:
         raise RunnerContractError("instruction must be a NUL-free string")
     if any(

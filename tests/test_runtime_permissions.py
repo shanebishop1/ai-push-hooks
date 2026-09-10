@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from ai_push_hooks import paths as path_utils
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.config import load_config
-from ai_push_hooks.executors.llm import finalize_opencode_session
+from ai_push_hooks.executors.ask import finalize_opencode_session
 from ai_push_hooks.hook import _build_logger, _write_summary
 from ai_push_hooks.types import ModuleRuntimeState
 
@@ -47,7 +47,7 @@ def test_runtime_directories_and_files_are_private_by_default(tmp_path, monkeypa
         assert list(kwargs["cwd"].iterdir()) == []
         return subprocess.CompletedProcess(args, 0, stdout='{"session":"ok"}\n', stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
     finalize_opencode_session(context, "docs.query", "session-1")
 
     transcript_dir = runtime_root / "transcripts"

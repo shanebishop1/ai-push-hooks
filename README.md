@@ -2,7 +2,7 @@
 
 `ai-push-hooks` catches repository drift before it reaches a remote. It turns `git push` into a configurable workflow that can inspect the exact outgoing diff, ask a selected local runner for structured findings, apply narrowly allowlisted documentation fixes, run deterministic actions, and block the push until changes are reviewed and committed.
 
-Use it to keep docs aligned with code, check branch/task consistency, or prepare pull requests without replacing your project's ordinary lint, test, and build checks. Workflows are assembled from `collect`, `llm`, `apply`, `exec`, and `assert` steps and default to failing closed.
+Use it to keep docs aligned with code, check branch/task consistency, or prepare pull requests without replacing your project's ordinary lint, test, and build checks. Workflows are assembled from `collect`, `ask`, `apply`, `exec`, and `assert` steps and default to failing closed.
 
 ## Quick start: repo-local hook
 
@@ -10,7 +10,7 @@ Use it to keep docs aligned with code, check branch/task consistency, or prepare
 
 - [Git](https://git-scm.com/downloads) and a POSIX shell for the generated hook.
 - [Python 3.10–3.13](https://www.python.org/downloads/). Python is required even when installing the npm wrapper. The wrapper probes Python 3.14, 3.13, 3.12, 3.11, 3.10, then `python`; the 3.14 probe is not a beta support claim. Python 3.10 additionally needs the `tomli` package available to that interpreter.
-- A runner CLI is optional for workflows that use only deterministic steps, but the `minimal-docs` starter uses OpenCode for `llm` and `apply`. The selected runner still needs its normal provider/model authentication: for OpenCode, `opencode auth list` is a useful check; Codex, Claude, and custom commands use their own user-managed setup.
+- A runner CLI is optional for workflows that use only deterministic steps, but the `minimal-docs` starter uses OpenCode for `ask` and `apply`. The selected runner still needs its normal provider/model authentication: for OpenCode, `opencode auth list` is a useful check; Codex, Claude, and custom commands use their own user-managed setup.
 - [GitHub CLI (`gh`)](https://cli.github.com/manual/installation) is optional and needed only for `gh_pr_create`.
 - [Beads (`bd`)](https://github.com/steveyegge/beads) is optional and needed only for Beads alignment steps. The integration requires the native `bd` CLI; Beads-Rust (`br`) is not a supported substitute.
 - [Lefthook](https://lefthook.dev/installation/) and [Mise](https://mise.jdx.dev/getting-started.html) are optional hook-manager/tool-version alternatives described below.
@@ -106,8 +106,8 @@ After checking in `mise.toml`, other contributors can install the pinned tool wi
 > `ai-push-hooks@beta` provides this feature until a release explicitly includes
 > it.
 
-`llm` and `apply` steps select a strict named profile. `[llm].runner` is the
-workflow default; a `runner` on an individual `llm` or `apply` step overrides it.
+`ask` and `apply` steps select a strict named profile. `[llm].runner` is the
+workflow default; a `runner` on an individual `ask` or `apply` step overrides it.
 `runner` is rejected on `collect`, `exec`, and `assert`. Every referenced name
 must exist under `[runners.<name>]`, except `opencode`, which has an implicit
 compatibility profile. Unknown profile fields, missing names, invalid
@@ -165,7 +165,7 @@ project_access = "project"
 
 [[modules.docs.steps]]
 id = "analyze"
-type = "llm"
+type = "ask"
 runner = "claude-review" # per-step override
 fallback_prompt_id = "docs-analysis-basic"
 inputs = ["collect/push.diff"]
@@ -244,8 +244,8 @@ sandbox. Every runner is a local program with the invoking user's OS identity;
 same-user code can access other host paths. There is no mandatory command
 allowlist, shell parser, container, credential broker, or trust prompt. Use an
 external sandbox, container, VM, or low-privilege account when that boundary is
-required. The scheduler may overlap `collect`/`llm` work up to `max_parallel`,
-so a trusted custom `llm` command must really be safe for concurrent access;
+required. The scheduler may overlap `collect`/`ask` work up to `max_parallel`,
+so a trusted custom `ask` command must really be safe for concurrent access;
 `apply` remains globally serialized but custom command behavior is not enforced.
 
 ### Invocation, lifecycle, and output
@@ -563,7 +563,7 @@ before review notices it. The hook inspects the outgoing ref range rather than
 the checked-out branch alone.
 
 **Architecture and tradeoffs.** Deterministic `collect` steps establish diff,
-changed-file, and repository context before `llm` query/analyze steps. An
+changed-file, and repository context before `ask` query/analyze steps. An
 `apply` step receives a private workspace and a narrow docs allowlist; the
 assertion then blocks the push for human review and commit. `exec` and `assert`
 remain available for deterministic repository actions. This ordering limits
@@ -595,7 +595,7 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 ## Configuration overview
 
 - Config file: `ai-push-hooks.toml` in repo root (required).
-- Prompt resolution precedence for `llm` and `apply` steps:
+- Prompt resolution precedence for `ask` and `apply` steps:
   1. `prompt`
   2. `prompt_file`
   3. `fallback_prompt_id`
@@ -627,11 +627,11 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `runner` | string | `"opencode"` | Global named runner profile for `llm`/`apply`; the implicit OpenCode compatibility profile is the default. |
+| `runner` | string | `"opencode"` | Global named runner profile for `ask`/`apply`; the implicit OpenCode compatibility profile is the default. |
 | `model` | string | `"openai/gpt-5.6-terra"` | Compatibility model for implicit OpenCode; explicit profiles use their own model unless overridden by `AI_PUSH_HOOKS_MODEL`. |
 | `variant` | string | `""` | Optional OpenCode compatibility variant. |
 | `timeout_seconds` | int | `800` | Timeout per selected runner invocation and related lifecycle calls. |
-| `max_parallel` | int | `2` | Max concurrent read-only steps (`collect`, `llm`). |
+| `max_parallel` | int | `2` | Max concurrent read-only steps (`collect`, `ask`). |
 | `json_max_retries` | int | `2` | Retry count for invalid JSON responses. |
 | `invalid_json_feedback_max_chars` | int | `6000` | Max invalid output included in retry feedback. |
 | `json_retry_new_session` | bool | `true` | Requests a fresh invocation on JSON retry; unsupported/sessionless runners always fall back fresh. |
@@ -680,21 +680,21 @@ If installed as a local npm/pnpm dependency, run commands with `npx --no-install
 | Key | Type | Required | Applies to | Description |
 | --- | --- | --- | --- | --- |
 | `id` | string | yes | all step types | Unique step identifier inside the module. |
-| `type` | string | yes | all step types | One of: `collect`, `llm`, `apply`, `exec`, `assert`. |
+| `type` | string | yes | all step types | One of: `collect`, `ask`, `apply`, `exec`, `assert`. Legacy `llm` and `agent` values are rejected; use `ask`. |
 | `inputs` | array of strings | no | non-`collect` steps | Artifact references from earlier steps. |
-| `output` | string | yes | `llm` | Output artifact filename (often `.json`). |
-| `schema` | string | no | `llm` | Validates parsed model output shape. |
-| `prompt` | string | conditional | `llm`, `apply` | Highest-priority prompt source. |
-| `prompt_file` | string | conditional | `llm`, `apply` | Repo-relative prompt file path; absolute, traversing, and symlinked paths are rejected. |
-| `fallback_prompt_id` | string | conditional | `llm`, `apply` | Built-in prompt ID used when no higher source resolves. |
+| `output` | string | yes | `ask` | Output artifact filename (often `.json`). |
+| `schema` | string | no | `ask` | Validates parsed model output shape. |
+| `prompt` | string | conditional | `ask`, `apply` | Highest-priority prompt source. |
+| `prompt_file` | string | conditional | `ask`, `apply` | Repo-relative prompt file path; absolute, traversing, and symlinked paths are rejected. |
+| `fallback_prompt_id` | string | conditional | `ask`, `apply` | Built-in prompt ID used when no higher source resolves. |
 | `collector` | string | yes | `collect` | Collector handler ID. |
 | `allow_paths` | array of strings | yes | `apply` | File glob allowlist for edits. |
-| `runner` | string | no | `llm`, `apply` | Per-step named profile override; invalid on other step types. |
+| `runner` | string | no | `ask`, `apply` | Per-step named profile override; invalid on other step types. |
 | `executor` | string | yes | `exec` | Exec handler ID. |
 | `assertion` | string | yes | `assert` | Assertion handler ID. |
 | `when_env` | string | no | any step | Runs step only when env var parses as true. |
 
-`llm` and `apply` are promptable step types: at least one of `prompt`, `prompt_file`, or `fallback_prompt_id` must be set.
+`ask` and `apply` are promptable step types: at least one of `prompt`, `prompt_file`, or `fallback_prompt_id` must be set.
 
 Artifact references in `inputs` are module-local. Use `<step>/<artifact>` to reference an artifact produced by an earlier step in the same module (for example, `collect/push.diff` or `analyze/issues.json`). Cross-module references such as `docs:collect/push.diff` are not currently supported.
 
@@ -708,7 +708,7 @@ Artifact references in `inputs` are module-local. Use `<step>/<artifact>` to ref
 | `beads_status_context` | Collects branch/beads alignment context. |
 | `pr_context` | Collects PR composition context. |
 
-#### LLM schemas
+#### Ask schemas
 
 | Value | Expected payload |
 | --- | --- |
@@ -785,7 +785,7 @@ collector = "docs_context"
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 fallback_prompt_id = "docs-query-basic"
 inputs = ["collect/push.diff", "collect/changed-files.txt"]
 output = "queries.json"
@@ -793,7 +793,7 @@ schema = "string_array"
 
 [[modules.docs.steps]]
 id = "analyze"
-type = "llm"
+type = "ask"
 fallback_prompt_id = "docs-analysis-basic"
 inputs = ["collect/push.diff", "collect/docs-context.txt", "query/queries.json", "collect/recent-commits.txt"]
 output = "issues.json"
@@ -822,7 +822,7 @@ collector = "pr_context"
 
 [[modules.pr.steps]]
 id = "compose"
-type = "llm"
+type = "ask"
 fallback_prompt_id = "pr-compose-basic"
 inputs = ["collect/pr-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"]
 output = "pr-draft.json"

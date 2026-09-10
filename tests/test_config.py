@@ -51,6 +51,41 @@ type = "mystery"
         load_config(tmp_path)
 
 
+@pytest.mark.parametrize("legacy_type", ["llm", "agent"])
+def test_load_config_rejects_legacy_step_type_in_unselected_module(
+    tmp_path: pathlib.Path, legacy_type: str
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        f"""
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+
+[modules.unselected]
+enabled = false
+
+[[modules.unselected.steps]]
+id = "legacy"
+type = "{legacy_type}"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        HookError,
+        match=r"modules\.unselected\.steps\[1\]\.type.*use `ask` instead",
+    ):
+        load_config(tmp_path)
+
+
 def test_load_config_supports_standard_toml_inline_tables(tmp_path: pathlib.Path) -> None:
     (tmp_path / "ai-push-hooks.toml").write_text(
         """
@@ -554,10 +589,10 @@ runner = "pi-apply"
     )
 
     config, _ = load_config(tmp_path)
-    llm_step = config.modules["docs"].steps[0]
+    ask_step = config.modules["docs"].steps[0]
     apply_step = config.modules["docs"].steps[1]
 
-    default = resolve_runner_profile(config, llm_step, {"AI_PUSH_HOOKS_MODEL": "env-model"})
+    default = resolve_runner_profile(config, ask_step, {"AI_PUSH_HOOKS_MODEL": "env-model"})
     selected = resolve_runner_profile(
         config,
         apply_step,
@@ -592,7 +627,7 @@ enabled = true
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = "Return JSON"
 output = "query.json"
 """.strip()
@@ -634,7 +669,7 @@ enabled = true
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = "Return JSON"
 output = "query.json"
 """.strip()
@@ -671,7 +706,7 @@ enabled = false
 
 [[modules.unselected.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = "Return JSON"
 output = "query.json"
 runner = "missing-profile"
@@ -705,7 +740,7 @@ enabled = true
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = "Return JSON"
 output = "query.json"
 """.strip()

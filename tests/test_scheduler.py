@@ -15,8 +15,8 @@ from ai_push_hooks.types import CollectorResult, ModuleConfig, StepConfig
 from .conftest import build_context, init_repo, make_config
 
 
-def _write_barrier_llm(tmp_path: pathlib.Path) -> pathlib.Path:
-    script = tmp_path / "barrier-llm.py"
+def _write_barrier_ask(tmp_path: pathlib.Path) -> pathlib.Path:
+    script = tmp_path / "barrier-ask.py"
     script.write_text(
         """
 import os
@@ -60,11 +60,11 @@ print("applied")
     return script
 
 
-def test_trusted_custom_llm_processes_really_overlap_at_a_barrier(
+def test_trusted_custom_ask_processes_really_overlap_at_a_barrier(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     repo = init_repo(tmp_path / "overlap", branch="feature/scheduler")
-    script = _write_barrier_llm(tmp_path)
+    script = _write_barrier_ask(tmp_path)
     barrier = tmp_path / "barrier"
     monkeypatch.setenv("AI_PUSH_HOOKS_TEST_BARRIER", str(barrier))
     monkeypatch.setenv("AI_PUSH_HOOKS_TEST_STAGES", "a.query,b.query")
@@ -89,7 +89,7 @@ modules = ["a", "b"]
 enabled = true
 [[modules.a.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = "a"
 output = "answer.txt"
 
@@ -97,7 +97,7 @@ output = "answer.txt"
 enabled = true
 [[modules.b.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 prompt = "b"
 output = "answer.txt"
 """.strip()

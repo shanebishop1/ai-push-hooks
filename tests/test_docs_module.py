@@ -60,7 +60,7 @@ def test_docs_drift_detection_produces_issue_artifact(tmp_path: pathlib.Path) ->
         diff_text="+print('changed')\n",
     )
 
-    def fake_llm(context, step, prompt, input_paths, stage_name):
+    def fake_ask(context, step, prompt, input_paths, stage_name):
         if step.id == "query":
             return ["README"]
         if step.id == "analyze":
@@ -81,7 +81,7 @@ def test_docs_drift_detection_produces_issue_artifact(tmp_path: pathlib.Path) ->
     result = WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
         apply_executor=fake_apply,
     ).run()
 
@@ -716,7 +716,7 @@ def test_docs_apply_blocks_push_until_manual_commit(tmp_path: pathlib.Path) -> N
         diff_text="+print('changed')\n",
     )
 
-    def fake_llm(context, step, prompt, input_paths, stage_name):
+    def fake_ask(context, step, prompt, input_paths, stage_name):
         if step.id == "query":
             return ["README"]
         if step.id == "analyze":
@@ -729,7 +729,7 @@ def test_docs_apply_blocks_push_until_manual_commit(tmp_path: pathlib.Path) -> N
     engine = WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
         apply_executor=fake_apply,
     )
     with pytest.raises(HookError, match="review and commit"):

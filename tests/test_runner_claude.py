@@ -30,12 +30,12 @@ Usage: claude [options] [prompt]
 """
 
 
-def request(tmp_path: pathlib.Path, *, mode: str = "llm", **overrides: object) -> RunnerRequest:
+def request(tmp_path: pathlib.Path, *, mode: str = "ask", **overrides: object) -> RunnerRequest:
     values: dict[str, object] = {
         "profile_id": "claude-review",
         "runner_type": "claude",
         "stage": "docs.query",
-        "purpose": "llm:query",
+        "purpose": "ask:query",
         "mode": mode,
         "instruction": "Summarize prompt-secret safely.",
         "artifacts": (RunnerArtifact("input.txt", "artifact-secret\nbody"),),

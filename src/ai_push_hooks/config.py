@@ -458,6 +458,14 @@ def _validate_step_extensions(
         raise HookError(f"{label}.stdin must exactly match a declared input")
 
 
+def _reject_legacy_step_type(step_type: str, label: str) -> None:
+    if step_type in {"llm", "agent"}:
+        raise HookError(
+            f"Legacy workflow step type `{step_type}` is not supported at {label}.type; "
+            "use `ask` instead"
+        )
+
+
 def _validate_config_types(raw: dict[str, Any]) -> None:
     unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
     if unknown:
@@ -522,6 +530,8 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                 _validate_unknown_keys(step, STEP_KEYS, label)
                 for key in ("id", "type"):
                     _validate_string(step, key, label)
+                if isinstance(step.get("type"), str):
+                    _reject_legacy_step_type(step["type"].strip(), label)
                 for key in (
                     "collector",
                     "executor",
@@ -551,7 +561,7 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     and isinstance(step.get("type"), str)
                     and step["type"] in {"collect", "exec", "assert"}
                 ):
-                    raise HookError(f"{label}.runner is only valid on llm and apply steps")
+                    raise HookError(f"{label}.runner is only valid on ask and apply steps")
                 _validate_step_extensions(step, label)
 
 def _normalize_runner_profile(name: str, raw: dict[str, Any]) -> RunnerProfile:
@@ -576,6 +586,7 @@ def _normalize_step(
     raw: dict[str, Any], label: str, *, repo_root: pathlib.Path | None = None
 ) -> StepConfig:
     step_type = str(raw.get("type", "")).strip()
+    _reject_legacy_step_type(step_type, label)
     if step_type not in SUPPORTED_STEP_TYPES:
         raise HookError(f"Unknown step type at {label}.type: {step_type}")
     _validate_step_extensions(raw, label, repo_root=repo_root)
@@ -623,8 +634,8 @@ def _normalize_step(
         raise HookError(f"Promptable step `{step.id}` requires prompt, prompt_file, or fallback_prompt_id")
     if step.type == "collect" and not (step.collector or step.python):
         raise HookError(f"Collect step `{step.id}` requires collector or python")
-    if step.type == "llm" and not step.output:
-        raise HookError(f"LLM step `{step.id}` requires output")
+    if step.type == "ask" and not step.output:
+        raise HookError(f"Ask step `{step.id}` requires output")
     if step.type == "apply" and not step.allow_paths:
         raise HookError(f"Apply step `{step.id}` requires allow_paths")
     if step.type == "exec" and not (step.executor or step.python or step.command):
@@ -736,7 +747,7 @@ def resolve_runner_profile(
     env: Mapping[str, str] | None = None,
 ) -> RunnerProfile:
     """Resolve the runner selected by a promptable step and apply final env overrides."""
-    if step.type not in {"llm", "apply"} and step.runner is not None:
+    if step.type not in {"ask", "apply"} and step.runner is not None:
         raise HookError(f"Step `{step.id}` may not select a runner")
 
     selected_name = step.runner or config.llm.runner

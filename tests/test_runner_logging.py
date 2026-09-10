@@ -83,7 +83,7 @@ def test_llm_console_uses_semantic_accents(monkeypatch: pytest.MonkeyPatch) -> N
     logger = HookLogger(None)
     call_number = logger.llm_call(
         "docs.query",
-        "llm:query",
+        "ask:query",
         "model",
         runner_profile="review",
         runner_type="command",
@@ -104,7 +104,7 @@ def test_llm_console_uses_semantic_accents(monkeypatch: pytest.MonkeyPatch) -> N
     output = stream.getvalue()
     assert "\x1b[36mdocs\x1b[0m\x1b[2m.\x1b[0m\x1b[35mquery\x1b[0m" in output
     assert "\x1b[1m#1\x1b[0m" in output
-    assert "\x1b[34mllm:query\x1b[0m" in output
+    assert "\x1b[34mask:query\x1b[0m" in output
     assert "\x1b[32mLLM complete\x1b[0m" in output
     assert "\x1b[31mLLM failed\x1b[0m" in output
     assert "\x1b[2m; session persisted: session-1; resume: runner --resume session-1; transcript: transcript.json\x1b[0m" in output
@@ -192,7 +192,7 @@ def test_llm_calls_are_numbered_and_completion_associated_under_concurrency(tmp_
         stage = f"docs.query{index}"
         call_number = logger.llm_call(
             stage,
-            "llm:query",
+            "ask:query",
             "model",
             runner_profile="review",
             runner_type="command",

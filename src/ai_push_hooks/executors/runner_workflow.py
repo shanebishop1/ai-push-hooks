@@ -60,7 +60,7 @@ def _safe_input_artifacts(
     Codex, Claude, and OpenCode receive the same ordered context.
     """
 
-    from .llm import validate_opencode_attachments
+    from .ask import validate_opencode_attachments
 
     validated = validate_opencode_attachments(context, input_paths)
     if len(validated) != len(step.inputs):

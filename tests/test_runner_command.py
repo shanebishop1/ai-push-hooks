@@ -24,8 +24,8 @@ def _request(tmp_path: pathlib.Path, **overrides: object) -> RunnerRequest:
         "profile_id": "pi-shaped",
         "runner_type": "command",
         "stage": "docs.query",
-        "purpose": "llm:query",
-        "mode": "llm",
+        "purpose": "ask:query",
+        "mode": "ask",
         "instruction": "Return the answer.\nKeep the line break.",
         "artifacts": (RunnerArtifact("context.txt", "artifact body"),),
         "cwd": tmp_path,
@@ -177,7 +177,7 @@ def test_empty_stdout_fails_llm_but_succeeds_for_apply(tmp_path: pathlib.Path) -
     script = "import sys; print('', end='')"
 
     with pytest.raises(RunnerMissingOutputError):
-        create_runner().run(_script_request(tmp_path, script, mode="llm"))
+        create_runner().run(_script_request(tmp_path, script, mode="ask"))
 
     result = create_runner().run(_script_request(tmp_path, script, mode="apply"))
     assert result.final_text == ""

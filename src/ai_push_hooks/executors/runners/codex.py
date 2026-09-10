@@ -166,7 +166,7 @@ class CodexRunner:
                 f"Codex runner cannot handle runner type {request.runner_type!r}"
             )
 
-        sandbox = "read-only" if request.mode == "llm" else "workspace-write"
+        sandbox = "read-only" if request.mode == "ask" else "workspace-write"
         argv = [
             self.executable,
             "exec",
@@ -186,7 +186,7 @@ class CodexRunner:
         # runs in a non-VCS staging projection.  Both need this flag; a
         # project-aware analysis run normally has a Git repository available.
         if request.mode == "apply" or (
-            request.mode == "llm" and request.project_access == "artifacts"
+            request.mode == "ask" and request.project_access == "artifacts"
         ):
             argv.append("--skip-git-repo-check")
         argv.append("-")

@@ -26,7 +26,7 @@ def pr_config():
                     StepConfig(id="collect", type="collect", collector="pr_context"),
                     StepConfig(
                         id="compose",
-                        type="llm",
+                        type="ask",
                         prompt="compose",
                         inputs=["collect/pr-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"],
                         output="pr-draft.json",
@@ -51,14 +51,14 @@ def test_pr_module_skips_when_flag_not_set(tmp_path: pathlib.Path) -> None:
     context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
     calls = {"llm": 0}
 
-    def fake_llm(context, step, prompt, input_paths, stage_name):
+    def fake_ask(context, step, prompt, input_paths, stage_name):
         calls["llm"] += 1
         return {"title": "x", "body": "y", "base_branch": "main", "head_branch": "feature/pr", "draft": False}
 
     WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
     ).run()
     assert calls["llm"] == 0
 
@@ -70,7 +70,7 @@ def test_pr_module_composes_then_invokes_exec_when_enabled(tmp_path: pathlib.Pat
     monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
     calls = {"llm": 0, "exec": 0}
 
-    def fake_llm(context, step, prompt, input_paths, stage_name):
+    def fake_ask(context, step, prompt, input_paths, stage_name):
         calls["llm"] += 1
         return {"title": "My PR", "body": "Body", "base_branch": "main", "head_branch": "feature/pr", "draft": False}
 
@@ -81,7 +81,7 @@ def test_pr_module_composes_then_invokes_exec_when_enabled(tmp_path: pathlib.Pat
     WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
         exec_handlers={"gh_pr_create": fake_exec},
     ).run()
     assert calls == {"llm": 1, "exec": 1}
@@ -273,7 +273,7 @@ def test_initial_push_workflow_defers_before_llm_or_gh(
     monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
     calls = {"llm": 0, "exec": 0}
 
-    def fake_llm(*args, **kwargs):
+    def fake_ask(*args, **kwargs):
         calls["llm"] += 1
         raise AssertionError("initial PR push must defer before LLM composition")
 
@@ -284,7 +284,7 @@ def test_initial_push_workflow_defers_before_llm_or_gh(
     result = WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
         exec_handlers={"gh_pr_create": fake_exec},
     ).run()
 

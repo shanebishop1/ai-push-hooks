@@ -31,7 +31,7 @@ def beads_config(enabled: bool = True):
                     StepConfig(id="collect", type="collect", collector="beads_status_context"),
                     StepConfig(
                         id="plan",
-                        type="llm",
+                        type="ask",
                         inputs=[
                             "collect/branch-context.txt",
                             "collect/changed-files.txt",
@@ -75,7 +75,7 @@ def test_beads_unresolved_writes_actionable_report(tmp_path: pathlib.Path) -> No
         repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n"
     )
 
-    def fake_llm(context, step, prompt, input_paths, stage_name):
+    def fake_ask(context, step, prompt, input_paths, stage_name):
         return {
             "commands": [],
             "unresolved": True,
@@ -85,7 +85,7 @@ def test_beads_unresolved_writes_actionable_report(tmp_path: pathlib.Path) -> No
     engine = WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
     )
     with pytest.raises(HookError, match="manual action"):
         engine.run()
@@ -100,14 +100,14 @@ def test_beads_non_feature_branch_skips(tmp_path: pathlib.Path) -> None:
     )
     calls = {"llm": 0}
 
-    def fake_llm(context, step, prompt, input_paths, stage_name):
+    def fake_ask(context, step, prompt, input_paths, stage_name):
         calls["llm"] += 1
         return {"commands": [], "unresolved": False, "report_markdown": ""}
 
     WorkflowEngine(
         context=context,
         artifacts=ArtifactStore(context.run_dir),
-        llm_executor=fake_llm,
+        ask_executor=fake_ask,
     ).run()
     assert calls["llm"] == 0
 

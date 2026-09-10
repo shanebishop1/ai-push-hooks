@@ -8,12 +8,12 @@ from dataclasses import replace
 import pytest
 
 from ai_push_hooks.config import load_config
-from ai_push_hooks.executors.llm import (
+from ai_push_hooks.executors.ask import (
     OPENCODE_APPLY_AGENT,
     OPENCODE_READ_ONLY_AGENT,
     call_opencode,
     finalize_opencode_session,
-    run_llm_step,
+    run_ask_step,
 )
 from ai_push_hooks.executors.runners import (
     RunnerAdapterUnavailableError,
@@ -63,7 +63,7 @@ def _use_runner_boundary_logger(context, monkeypatch) -> None:
     monkeypatch.setattr(context.logger, "completions", completions, raising=False)
 
 
-def test_run_llm_step_accepts_array_for_docs_issue_schema(
+def test_run_ask_step_accepts_array_for_docs_issue_schema(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
@@ -78,13 +78,13 @@ def test_run_llm_step_accepts_array_for_docs_issue_schema(
 
         def run(self, request):
             assert request.runner_type == "opencode"
-            assert request.mode == "llm"
+            assert request.mode == "ask"
             return RunnerResult("[]", 0, "", "")
 
     _use_runner_boundary_logger(context, monkeypatch)
     monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
-    payload = run_llm_step(context, analyze_step, "prompt", [], "docs.analyze")
+    payload = run_ask_step(context, analyze_step, "prompt", [], "docs.analyze")
 
     assert payload == []
 
@@ -127,9 +127,9 @@ def test_call_opencode_constructs_command_with_explicit_agent(
         captured["cwd_entries"] = list(kwargs["cwd"].iterdir())
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
 
-    call_opencode(context, "docs.query", "llm:query", "prompt", [], agent="read-only")
+    call_opencode(context, "docs.query", "ask:query", "prompt", [], agent="read-only")
 
     assert captured["args"][:7] == [
         "/usr/local/bin/opencode",
@@ -207,7 +207,7 @@ def test_call_opencode_apply_config_uses_edit_permission_for_all_mutating_tools(
         captured["env"] = kwargs["env"]
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
 
     call_opencode(
         context,
@@ -324,7 +324,7 @@ def test_finalize_session_exports_from_private_scratch_and_deletes_same_session(
             )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
 
     finalize_opencode_session(context, "docs.apply", "session-1")
 
@@ -373,7 +373,7 @@ def test_finalize_session_warns_and_deletes_when_export_returns_false(
             return subprocess.CompletedProcess(args, return_code, stdout=stdout, stderr="")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
 
     finalize_opencode_session(context, "docs.query", "session-failed")
 
@@ -405,7 +405,7 @@ def test_finalize_session_warns_and_deletes_when_export_raises(
             raise subprocess.TimeoutExpired(args, 1)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
 
     finalize_opencode_session(context, "docs.query", "session-timeout")
 
@@ -436,9 +436,9 @@ def test_finalize_session_warns_and_deletes_when_transcript_write_raises(
             args, 0, stdout='{"session":"session-write"}\n', stderr=""
         )
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
     monkeypatch.setattr(
-        "ai_push_hooks.executors.llm.write_text_no_follow",
+        "ai_push_hooks.executors.ask.write_text_no_follow",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated transcript failure")),
     )
 
@@ -472,7 +472,7 @@ def test_finalize_session_delete_runs_outside_repository(
         captured["cwd_entries"] = list(kwargs["cwd"].iterdir())
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.llm.run_command", fake_run_command)
+    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
 
     finalize_opencode_session(context, "docs.apply", "session-1")
 
@@ -481,7 +481,7 @@ def test_finalize_session_delete_runs_outside_repository(
     assert captured["cwd_entries"] == []
 
 
-def test_run_llm_step_always_selects_read_only_agent_policy(
+def test_run_ask_step_always_selects_read_only_agent_policy(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
@@ -502,9 +502,9 @@ def test_run_llm_step_always_selects_read_only_agent_policy(
     _use_runner_boundary_logger(context, monkeypatch)
     monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
-    assert run_llm_step(context, query_step, "prompt", [], "docs.query") == []
+    assert run_ask_step(context, query_step, "prompt", [], "docs.query") == []
     assert requests[0].runner_type == "opencode"
-    assert requests[0].mode == "llm"
+    assert requests[0].mode == "ask"
 
 
 def test_call_opencode_rejects_external_and_symlinked_attachments(
@@ -521,7 +521,7 @@ def test_call_opencode_rejects_external_and_symlinked_attachments(
         call_opencode(
             context,
             "docs.query",
-            "llm:query",
+            "ask:query",
             "prompt",
             [external],
             agent="read-only",
@@ -535,7 +535,7 @@ def test_call_opencode_rejects_external_and_symlinked_attachments(
         call_opencode(
             context,
             "docs.query",
-            "llm:query",
+            "ask:query",
             "prompt",
             [symlink],
             agent="read-only",
@@ -567,7 +567,7 @@ def test_json_retry_new_session_finalizes_each_attempt(tmp_path, monkeypatch) ->
     _use_runner_boundary_logger(context, monkeypatch)
     monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
-    assert run_llm_step(context, query_step, "prompt", [], "docs.query") == []
+    assert run_ask_step(context, query_step, "prompt", [], "docs.query") == []
     assert [request.session_id for request in requests] == [None, None]
     assert finalized == ["session-1", "session-2"]
 
@@ -603,7 +603,7 @@ def test_json_retry_reused_session_finalizes_only_after_last_attempt(
     _use_runner_boundary_logger(context, monkeypatch)
     monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
 
-    assert run_llm_step(context, query_step, "prompt", [], "docs.query") == []
+    assert run_ask_step(context, query_step, "prompt", [], "docs.query") == []
     assert [request.session_id for request in requests] == [None, "session-1"]
     assert [request.resume_session for request in requests] == [False, True]
     assert finalized == ["session-1"]
@@ -655,7 +655,7 @@ def test_reused_session_is_finalized_when_retry_fails_without_session_metadata(
     )
 
     with pytest.raises(HookError, match=r"opencode.*docs\.query"):
-        run_llm_step(context, query_step, "prompt", [], "docs.query")
+        run_ask_step(context, query_step, "prompt", [], "docs.query")
     assert finalized == ["session-1"]
 
 
@@ -700,5 +700,5 @@ def test_reused_session_is_finalized_when_next_runner_construction_fails(
     monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", get_runner)
 
     with pytest.raises(HookError, match=r"opencode.*docs\.query"):
-        run_llm_step(context, query_step, "prompt", [], "docs.query")
+        run_ask_step(context, query_step, "prompt", [], "docs.query")
     assert finalized == ["session-1"]

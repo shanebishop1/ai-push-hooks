@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Mapping, Protocol, Sequence
 
 
-RunnerMode = Literal["llm", "apply"]
+RunnerMode = Literal["ask", "apply"]
 ProjectAccess = Literal["artifacts", "project"]
 PromptTransport = Literal["stdin", "argv"]
 SessionState = Literal["persisted", "ephemeral", "deleted"]
@@ -206,8 +206,8 @@ class RunnerRequest:
         _validate_text(self.runner_type, "runner_type")
         _validate_text(self.stage, "stage")
         _validate_text(self.purpose, "purpose")
-        if self.mode not in {"llm", "apply"}:
-            raise RunnerContractError("mode must be 'llm' or 'apply'")
+        if self.mode not in {"ask", "apply"}:
+            raise RunnerContractError("mode must be 'ask' or 'apply'")
         _validate_text(self.instruction, "instruction", allow_empty=True, allow_line_breaks=True)
         if not isinstance(self.artifacts, (tuple, list)):
             raise RunnerContractError("artifacts must be an ordered sequence")
@@ -560,7 +560,7 @@ def request_sensitive_diagnostics(
 def require_final_text(final_text: str, *, mode: RunnerMode) -> str:
     """Enforce the runner-neutral output rule for analysis versus apply."""
 
-    if mode == "llm" and not final_text.strip():
+    if mode == "ask" and not final_text.strip():
         raise RunnerMissingOutputError("runner produced no final response")
     return final_text
 

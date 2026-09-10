@@ -28,7 +28,7 @@ if str(SRC_ROOT) not in sys.path:
 
 # These imports intentionally follow the direct-script src-path bootstrap.
 from ai_push_hooks.executors.apply import run_apply_step  # noqa: E402
-from ai_push_hooks.executors.llm import run_llm_step  # noqa: E402
+from ai_push_hooks.executors.ask import run_ask_step  # noqa: E402
 from ai_push_hooks.types import (  # noqa: E402
     GeneralConfig,
     HookConfig,
@@ -273,11 +273,11 @@ def run_live_probe(
         context = _context(project, read_profile, timeout_seconds)
         read_step = StepConfig(
             id="read-nonce",
-            type="llm",
+            type="ask",
             runner=read_profile.name,
         )
         git_state_before_read = _git_visible_state(project)
-        response = run_llm_step(
+        response = run_ask_step(
             context,
             read_step,
             f"Read {NONCE_FILENAME} from the current project. Return its exact contents only.",

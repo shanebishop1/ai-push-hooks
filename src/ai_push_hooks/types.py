@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
-READ_ONLY_STEP_TYPES = frozenset({"collect", "llm"})
-PROMPTABLE_STEP_TYPES = frozenset({"llm", "apply"})
-SUPPORTED_STEP_TYPES = frozenset({"collect", "llm", "apply", "exec", "assert"})
+READ_ONLY_STEP_TYPES = frozenset({"collect", "ask"})
+PROMPTABLE_STEP_TYPES = frozenset({"ask", "apply"})
+SUPPORTED_STEP_TYPES = frozenset({"collect", "ask", "apply", "exec", "assert"})
 FEATURE_BRANCH_PREFIXES = ("feat/", "feature/")
 ZERO_OID_LENGTHS = frozenset({40, 64})
 

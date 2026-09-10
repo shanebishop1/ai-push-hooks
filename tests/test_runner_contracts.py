@@ -44,8 +44,8 @@ def request(tmp_path: pathlib.Path, **overrides: object) -> RunnerRequest:
         "profile_id": "review",
         "runner_type": "command",
         "stage": "docs.query",
-        "purpose": "llm:query",
-        "mode": "llm",
+        "purpose": "ask:query",
+        "mode": "ask",
         "instruction": "Summarize the change.",
         "artifacts": (
             RunnerArtifact("first.txt", "first body"),
@@ -464,5 +464,5 @@ def test_nonzero_and_missing_final_output_are_distinct_contract_failures(tmp_pat
     with pytest.raises(RunnerNonzeroExitError, match="review.*command.*docs.query"):
         require_zero_exit(value, result, secrets=("hidden",))
     with pytest.raises(RunnerMissingOutputError):
-        require_final_text("", mode="llm")
+        require_final_text("", mode="ask")
     assert require_final_text("", mode="apply") == ""

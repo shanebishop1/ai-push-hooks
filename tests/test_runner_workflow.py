@@ -69,7 +69,7 @@ def test_run_runner_once_dispatches_profile_with_ordered_logical_artifacts_and_f
 
         def run(self, request):
             assert request.cwd == repo.resolve()
-            assert request.mode == "llm"
+            assert request.mode == "ask"
             assert request.model == "review-model"
             assert [(item.name, item.content) for item in request.artifacts] == [
                 ("first.logical", "first body"),

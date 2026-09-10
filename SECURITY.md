@@ -43,8 +43,8 @@ transcript files as proof that provider-side data was deleted.
 OpenCode permissions and temporary-workspace isolation are **not an
 operating-system sandbox**. There is no mandatory command allowlist, shell
 parser, container, credential broker, or trust prompt. Custom commands are
-arbitrary user-authorized argv programs and a nominally read-only custom `llm`
-profile is not enforced as read-only. `collect`/`llm` work may overlap up to
+arbitrary user-authorized argv programs and a nominally read-only custom `ask`
+profile is not enforced as read-only. `collect`/`ask` work may overlap up to
 `max_parallel`; trusted custom commands must tolerate that. `apply` is globally
 serialized, but this does not prevent a same-user process from changing the
 host.

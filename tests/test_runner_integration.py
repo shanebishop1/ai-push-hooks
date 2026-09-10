@@ -100,14 +100,14 @@ collector = "fixture"
 
 [[modules.docs.steps]]
 id = "codex"
-type = "llm"
+type = "ask"
 inputs = ["collect/first.txt", "collect/second.txt"]
 prompt = "codex prompt-secret"
 output = "codex.txt"
 
 [[modules.docs.steps]]
 id = "claude"
-type = "llm"
+type = "ask"
 inputs = ["collect/second.txt", "codex/codex.txt"]
 prompt = "claude prompt-secret"
 output = "claude.txt"
@@ -363,7 +363,7 @@ enabled = true
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 schema = "string_array"
 prompt = "retry prompt-secret"
 output = "result.json"
@@ -459,7 +459,7 @@ enabled = true
 
 [[modules.docs.steps]]
 id = "query"
-type = "llm"
+type = "ask"
 schema = "string_array"
 prompt = "opencode retry prompt-secret"
 output = "result.json"

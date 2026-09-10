@@ -218,10 +218,10 @@ def build_claude_argv(executable: str, request: RunnerRequest) -> list[str]:
         raise RunnerContractError(
             f"Claude runner cannot handle runner type {request.runner_type!r}"
         )
-    if request.mode not in {"llm", "apply"}:
-        raise RunnerContractError("Claude runner request mode must be 'llm' or 'apply'")
+    if request.mode not in {"ask", "apply"}:
+        raise RunnerContractError("Claude runner request mode must be 'ask' or 'apply'")
 
-    tools = ANALYSIS_TOOLS if request.mode == "llm" else APPLY_TOOLS
+    tools = ANALYSIS_TOOLS if request.mode == "ask" else APPLY_TOOLS
     argv = [
         executable,
         "-p",
@@ -234,7 +234,7 @@ def build_claude_argv(executable: str, request: RunnerRequest) -> list[str]:
     argv.extend(
         [
             "--permission-mode",
-            "dontAsk" if request.mode == "llm" else "acceptEdits",
+            "dontAsk" if request.mode == "ask" else "acceptEdits",
             "--tools",
             tools,
             "--allowedTools",

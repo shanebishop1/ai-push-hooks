@@ -9,7 +9,7 @@ from .config import resolve_prompt_text
 from .executors.apply import run_apply_step
 from .executors.assertions import ASSERTION_HANDLERS
 from .executors.exec import EXEC_HANDLERS, env_bool
-from .executors.llm import run_llm_step
+from .executors.ask import run_ask_step
 from .executors.step_commands import execute_step_command
 from .modules import COLLECTORS
 from .plugin_loader import PluginDispatcher
@@ -41,7 +41,7 @@ class WorkflowEngine:
         collectors: dict[str, CollectorHandler] | None = None,
         exec_handlers: dict[str, ExecHandler] | None = None,
         assertion_handlers: dict[str, AssertionHandler] | None = None,
-        llm_executor: Callable[[RuntimeContext, StepConfig, str, list[pathlib.Path], str], Any] = run_llm_step,
+        ask_executor: Callable[[RuntimeContext, StepConfig, str, list[pathlib.Path], str], Any] = run_ask_step,
         apply_executor: Callable[[RuntimeContext, ModuleRuntimeState, StepConfig, str, list[pathlib.Path], str], dict[str, object]] = run_apply_step,
     ) -> None:
         self.context = context
@@ -49,7 +49,7 @@ class WorkflowEngine:
         self.collectors = collectors or COLLECTORS
         self.exec_handlers = exec_handlers or EXEC_HANDLERS
         self.assertion_handlers = assertion_handlers or ASSERTION_HANDLERS
-        self.llm_executor = llm_executor
+        self.ask_executor = ask_executor
         self.apply_executor = apply_executor
         self._plugin_dispatcher: PluginDispatcher | None = None
 
@@ -141,9 +141,9 @@ class WorkflowEngine:
         input_paths = [self.artifacts.resolve_input(state, reference) for reference in step.inputs]
         stage_name = f"{state.module.id}.{step.id}"
 
-        if step.type == "llm":
+        if step.type == "ask":
             prompt = resolve_prompt_text(self.context.repo_root, step)
-            payload = self.llm_executor(self.context, step, prompt, input_paths, stage_name)
+            payload = self.ask_executor(self.context, step, prompt, input_paths, stage_name)
             artifact_name = step.output or "result.json"
             if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
                 path = self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)

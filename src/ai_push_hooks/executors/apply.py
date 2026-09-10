@@ -28,7 +28,7 @@ from .exec import (
     resolve_git_dir,
     run_command,
 )
-from .llm import validate_opencode_attachments
+from .ask import validate_opencode_attachments
 from .runner_workflow import run_runner_once
 
 METADATA_MAX_FILES = 20_000

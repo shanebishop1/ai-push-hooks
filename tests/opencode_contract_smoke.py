@@ -509,7 +509,7 @@ enabled = true
 
 [[modules.smoke.steps]]
 id = "readonly"
-type = "llm"
+type = "ask"
 prompt = "[SMOKE_READONLY] Return an empty JSON array after the tool requests."
 output = "readonly.json"
 schema = "string_array"
@@ -659,8 +659,8 @@ def run_adapter_project_contract(root: pathlib.Path, repo: pathlib.Path, provide
         profile_id="opencode-project",
         runner_type="opencode",
         stage="adapter.project-read",
-        purpose="llm:project-read",
-        mode="llm",
+        purpose="ask:project-read",
+        mode="ask",
         instruction=f"[SMOKE_PROJECT_READ] Working directory: {repo}",
         cwd=repo,
         timeout_seconds=60,

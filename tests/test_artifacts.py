@@ -14,7 +14,7 @@ def test_cross_module_looking_artifact_reference_fails_clearly(tmp_path: pathlib
         module=ModuleConfig(
             id="pr",
             enabled=True,
-            steps=(StepConfig(id="compose", type="llm"),),
+            steps=(StepConfig(id="compose", type="ask"),),
         )
     )
 

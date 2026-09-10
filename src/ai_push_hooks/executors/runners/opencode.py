@@ -14,7 +14,7 @@ import sys
 import tempfile
 from typing import Any
 
-from ..llm import (
+from ..ask import (
     OPENCODE_APPLY_AGENT,
     OPENCODE_READ_ONLY_AGENT,
     _transcript_dir,

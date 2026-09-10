@@ -97,7 +97,7 @@ def test_fake_adapters_verify_nonce_and_production_apply_allowlist(
     monkeypatch.setenv(live_probe.LIVE_APPLY_OPT_IN, "1")
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-read")
 
-    def fake_llm(context: object, step: object, prompt: str, inputs: list[pathlib.Path], stage: str) -> str:
+    def fake_ask(context: object, step: object, prompt: str, inputs: list[pathlib.Path], stage: str) -> str:
         assert live_probe.NONCE_FILENAME in prompt
         project = context.repo_root  # type: ignore[attr-defined]
         return (project / live_probe.NONCE_FILENAME).read_text(encoding="utf-8").strip()
@@ -120,7 +120,7 @@ def test_fake_adapters_verify_nonce_and_production_apply_allowlist(
         )
         return RunnerResult(final_text="", returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(live_probe, "run_llm_step", fake_llm)
+    monkeypatch.setattr(live_probe, "run_ask_step", fake_ask)
     monkeypatch.setattr(apply_executor, "run_runner_once", fake_runner)
 
     result = live_probe.run_live_probe(
@@ -144,14 +144,14 @@ def test_read_probe_rejects_git_visible_mutation_before_apply(
 ) -> None:
     monkeypatch.setenv(live_probe.LIVE_OPT_IN, "1")
 
-    def mutating_llm(
+    def mutating_ask(
         context: object, step: object, prompt: str, inputs: list[pathlib.Path], stage: str
     ) -> str:
         project = context.repo_root  # type: ignore[attr-defined]
         (project / live_probe.OUTSIDE_FILENAME).write_text("unexpected\n", encoding="utf-8")
         return (project / live_probe.NONCE_FILENAME).read_text(encoding="utf-8").strip()
 
-    monkeypatch.setattr(live_probe, "run_llm_step", mutating_llm)
+    monkeypatch.setattr(live_probe, "run_ask_step", mutating_ask)
 
     with pytest.raises(live_probe.LiveProbeError, match="Git-visible"):
         live_probe.run_live_probe(
