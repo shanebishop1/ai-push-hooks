@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format is based on 
   shell-free command adapters, with global and per-`ask`/`apply` selection.
 - Added explicit project-aware analysis and broad, bounded project apply staging
   while retaining allowlisted propagation and the artifact-only OpenCode default.
+- [Source-unreleased] Added repository-local Python callbacks for `collect`,
+  `exec`, and `assert`, plus direct argv commands for `exec` and `assert`.
 
 ### Changed
 
@@ -19,12 +21,24 @@ All notable changes to this project are documented here. The format is based on 
 - Documented authentication ownership, provider data exposure, custom-command
   and Pi trust/concurrency, protected and ignored apply inputs, and the
   no-sandbox boundary.
+- [Source-unreleased] Renamed the workflow step spelling from `llm` to `ask`
+  without an `llm` or `agent` alias. The shared `[llm]` model policy keeps its
+  historical name.
 
 ### Fixed
 
 - Fixed bounded child-process capture and timeout cleanup for descendant process
   trees on POSIX where possible, while preventing pipe descriptors from being
   reused and closed by a later invocation.
+
+### Compatibility and deferred work
+
+- Published `0.2.1` remains the beta compatibility baseline and historically
+  used `llm` as the model-backed workflow-step spelling. The source-unreleased
+  `ask` rename is deliberately documented separately and is not represented as
+  a retroactive change to the `0.2.1` notes.
+- [Deferred/proposed] Automatic discovery, an SDK, installed-module hooks,
+  sandboxing, and a universal external-agent observer remain out of scope.
 
 ## [0.2.1] - 2026-09-08
 

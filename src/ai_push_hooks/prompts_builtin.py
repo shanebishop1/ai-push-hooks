@@ -74,6 +74,8 @@ base_branch = "main"
 # Compatibility default: OpenCode receives validated hook artifacts only.
 # Define [runners.<name>] and select it with [llm].runner, or override an
 # individual ask/apply step with runner = "<name>". Project access is explicit.
+# Source-unreleased callbacks use python = "path/to/file.py:callable" and
+# command steps use a direct argv array; both are trusted local code.
 runner = "opencode"
 model = "openai/gpt-5.6-terra"
 variant = ""

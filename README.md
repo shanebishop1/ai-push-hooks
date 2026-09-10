@@ -64,6 +64,26 @@ requirement above is on `PATH` for the hook process; on Python 3.10 install
 `tomli` in that same environment. `npx --no-install` avoids an accidental
 registry lookup or global-package fallback.
 
+### Version boundary
+
+**Published `0.2.1`.** The published beta is the compatibility baseline. Its
+model-backed workflow spelling was historically `type = "llm"`, and it does not
+promise the source-tree runner profiles or pluggable workflow steps described
+below.
+
+**Source-unreleased in this checkout.** The current source uses `type = "ask"`
+(not `llm` or `agent`), adds repository-local Python callbacks and direct
+`exec`/`assert` commands, and supports named runner profiles. These examples
+are copyable source-tree configuration, not a claim that the published
+`0.2.1` wheel or npm package already contains them. There is no compatibility
+alias: update the configuration when consuming a release that publishes this
+rename.
+
+**Deferred/proposed.** Automatic discovery, installed-module references,
+package-relative hook loading, a plugin SDK, remote services, sandboxing, and a
+universal external-agent observer remain out of scope. Architecture-doc
+changes are deferred; this README documents usage and trust boundaries only.
+
 `install` resolves Git's effective hook path without changing Git
 configuration. It accepts `install [--force]`, creates missing repository-local
 hook directories, writes atomically, and makes the delegate executable. An
@@ -227,6 +247,216 @@ conflicts, or protected Git-state changes fail closed. Existing baseline checks
 and atomic file replacement reduce lost updates; they are not an atomic
 compare-and-swap against an arbitrary external writer. No rollback is attempted
 over pre-existing user changes.
+
+## Pluggable workflow steps (source-unreleased)
+
+The source tree supports two deliberately small extension seams. A deterministic
+step may use one repository-local Python callback, or `exec`/`assert` may use a
+direct argv command. This is configuration-defined trusted code, not a plugin
+framework or SDK.
+
+### Python callbacks
+
+Reference one explicit file and one top-level synchronous callable:
+`checks/hooks.py:collect_context`. The file is a contained, ordinary `.py`
+file; symlink/reparse traversal, attribute chains, installed-module references,
+and package-relative loading are not supported. The callback is imported only
+after the enabled-module gate, `when_env` gate, and input resolution. A source
+file is loaded once per run (including concurrent collectors), with no `sys.path`,
+cwd, or environment mutation. It may import standard-library or already
+installed dependencies from the interpreter running the hook; the host never
+runs `pip`. There is no hot reload, isolation sandbox, or enforceable hard
+timeout for in-process Python.
+
+Every callback receives exactly one frozen `PluginContext`. Its `repo_root`,
+`module_id`, and `step_id` identify the call; `inputs` is an insertion-ordered,
+read-only mapping from logical artifact references to validated `Path` values;
+`options` and `prior_module_metadata` are recursive read-only snapshots; and
+`push` contains bounded push facts (`branch_name`, `checked_out_branch`,
+`base_branch`, `ranges`, `changed_files`, `diff_text`, and `push_updates`). The
+existing thread-safe `logger` is also available. These values are immutable API
+containers, not read-only filesystem handles.
+
+This is a complete callback example for all three deterministic callback kinds:
+
+```python
+# checks/hooks.py
+import json
+
+from ai_push_hooks.plugins import CollectorResult, PluginContext
+
+
+def collect_context(context: PluginContext) -> CollectorResult:
+    return CollectorResult(
+        artifacts={"files.json": list(context.push.changed_files)},
+        metadata={"collected_by": context.step_id},
+    )
+
+
+def run_check(context: PluginContext) -> dict:
+    files = json.loads(context.inputs["context/files.json"].read_text(encoding="utf-8"))
+    return {"file_count": len(files), "severity": context.options["severity"]}
+
+
+def assert_policy(context: PluginContext) -> dict:
+    result = json.loads(context.inputs["check/result.json"].read_text(encoding="utf-8"))
+    ok = result["file_count"] <= context.options["max_files"]
+    return {"ok": ok, "message": "too many changed files" if not ok else ""}
+```
+
+The corresponding step declarations are:
+
+```toml
+[[modules.quality.steps]]
+id = "context"
+type = "collect"
+python = "checks/hooks.py:collect_context"
+options = { include_generated = false, severity = "high" }
+
+[[modules.quality.steps]]
+id = "check"
+type = "exec"
+python = "checks/hooks.py:run_check"
+inputs = ["context/files.json"]
+options = { severity = "high" }
+
+[[modules.quality.steps]]
+id = "policy"
+type = "assert"
+python = "checks/hooks.py:assert_policy"
+inputs = ["check/result.json"]
+options = { max_files = 25 }
+```
+
+`collect` callbacks return `CollectorResult` (artifacts, metadata, and optional
+module skip state). `exec` callbacks return a JSON-serializable `dict`, saved
+as `result.json` without automatically merging into module metadata. `assert`
+callbacks return a JSON-serializable `dict` with an actual boolean `ok` and,
+when present, a string `message`; the report is saved before `ok = false` blocks.
+Artifact names and serialization are validated, each plugin artifact is bounded
+to 16 MiB, and the aggregate collect payload is bounded to 64 MiB. Callback
+exceptions, import failures, `SystemExit`, coroutine functions, and awaitable
+returns fail closed with a concise named error; `KeyboardInterrupt` is not
+swallowed. Callback `print()` calls and direct host filesystem writes are
+outside host sanitization and remain the author's responsibility.
+
+`collect` callbacks retain the read-only/concurrent scheduling class and may
+overlap up to `max_parallel`; callback authors must make them concurrency-safe.
+Python `exec` and `assert` steps are serialized with other mutating work.
+
+### Direct argv commands
+
+For `exec` and `assert`, `command` is a non-empty argv array. It runs with
+`shell = false`, the repository root as cwd, the inherited user environment,
+and stdin closed with EOF by default. `stdin = "<logical-ref>"` instead streams
+that exact declared input artifact. The default command timeout is **60 seconds**;
+configured values must be positive. There is no command allowlist or `trusted`
+flag, and an explicit `bash -c` is the user's choice to adopt shell semantics.
+
+```toml
+[[modules.quality.steps]]
+id = "lint"
+type = "exec"
+command = ["{python}", "scripts/lint_changed.py", "{input:context/files.json}"]
+inputs = ["context/files.json"]
+stdin = "context/files.json"
+timeout_seconds = 60
+
+[[modules.quality.steps]]
+id = "policy-command"
+type = "assert"
+command = ["bash", "-c", "test -s \"$1\"", "assert", "{input:lint/result.json}"]
+inputs = ["lint/result.json"]
+```
+
+Reserved substitution happens only when the entire argv element is one exact
+token: `{repo}` is the canonical repository root, `{python}` is the interpreter
+running the hook, and `{input:<logical-ref>}` is a validated declared input.
+The token grammar is one `{...}` pair containing only letters, digits, `_`, `.`,
+`/`, `:`, or `-`; unknown tokens in that grammar (such as `{repos}`) are
+rejected, as are embedded recognized tokens such as `--path={repo}`. Other
+braces are literal command text, so Bash brace expansion, `awk '{print $1}'`,
+and `python -c 'print({"a": 1})'` pass unchanged. Substitution is not shell
+parsing or host-side string interpolation.
+
+Both streams are captured as private, unredacted step artifacts named
+`stdout.txt` and `stderr.txt`, including empty streams, and are not printed to
+the console by default. `result.json` records the return code, artifact
+references, and truncation flags. Valid stream text is UTF-8 and preserves
+Unicode exactly; invalid UTF-8, a missing executable, timeout, signal, or a
+stream exceeding the **16 MiB per-stream** bound is a process error and fails
+closed. Captured output is retained when a process started. Exec requires exit
+zero (an empty stdout is still success). Assert records `ok = true` for exit
+zero; a nonzero exit records `ok = false` plus a bounded redacted message,
+saves all reports first, and then blocks. Commands run in the real checkout and
+may modify it; this is intentionally different from `apply`'s protected
+staging projection. Exec/assert commands are serialized.
+
+Only the workflow-level `general.allow_push_on_error = true` (or its explicit
+`AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR=1` override) changes a failure into a
+fail-open warning. There is no per-command fail-open switch or custom success
+exit-code list.
+
+### Ask and apply are separate
+
+`ask` reads/reasons and returns a response. Omitting `schema` deliberately gives
+plain text and does not implicitly block a push or perform an action:
+
+```toml
+[[modules.review.steps]]
+id = "summary"
+type = "ask"
+runner = "reviewer"
+prompt = "Summarize the outgoing change in plain text."
+output = "summary.txt"
+# No schema: this is a response, not a verdict.
+```
+
+`apply` inspects a staging projection and may edit it. A preceding `ask` is not
+required, and JSON is not required. This standalone, no-JSON apply flow declares
+the workflow, enables its module, selects a runner, and supplies an explicit
+allowlist:
+
+```toml
+[llm]
+runner = "docs-apply"
+
+[runners.docs-apply]
+type = "opencode"
+model = "openai/gpt-5.6-terra"
+project_access = "project"
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "apply-docs"
+type = "apply"
+runner = "docs-apply"
+prompt = "Inspect the readable project projection and fix only factual drift in the allowed files."
+allow_paths = ["README.md", "docs/**/*.md"]
+```
+
+The apply projection and propagation checks remain distinct: readable project
+files may exceed the propagation allowlist, but only allowlisted changes can
+propagate and any other staging change fails. The existing filename-specific
+legacy shortcut also remains: an apply input whose filename ends in
+`issues.json` containing the empty JSON list skips apply. It is legacy behavior,
+not a general condition language or a replacement for an explicit policy step.
+
+### Safeguards versus user policy
+
+| Surface | Host-enforced safeguard | User/trusted-author policy |
+| --- | --- | --- |
+| Python reference/loading | Contained no-follow regular file; lazy reached-only import; per-run cache | Callback imports, direct writes, prints, and termination behavior |
+| Python context/results | Frozen snapshots; exact result types; JSON/artifact bounds; fail-closed malformed results | Semantic correctness and concurrency safety |
+| Command | Direct argv, cwd/stdin contract, timeout, bounded capture, UTF-8 validation, private artifacts | Inherited environment, explicit `bash -c`, executable behavior, checkout writes |
+| Assert | Strict Python boolean or command exit status; report saved before failure | Business verdict logic and whether a verdict should block |
+| Ask | Selected runner/profile, access mode, schema handling, and existing runner controls | Model quality; add `assert` if findings should block |
+| Apply | Staging inventory, allowlist propagation, Git/baseline/integrity checks | Runner/tool policy and prompt intent; no OS sandbox or atomic CAS claim |
 
 ### OpenCode isolation limits
 

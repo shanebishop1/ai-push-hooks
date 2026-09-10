@@ -38,6 +38,45 @@ policy; it does not claim that a transcript was captured. A provider may have
 already received the request even when local export fails. Do not use local
 transcript files as proof that provider-side data was deleted.
 
+## Repository callbacks and commands (source-unreleased)
+
+The published `0.2.1` beta predates the source-tree `ask` spelling, repository
+Python callbacks, and direct `exec`/`assert` commands. The following boundary
+describes the current source only; it is not a published-package promise.
+
+A callback reference is one contained, no-follow regular `.py` file plus one
+top-level callable. It is loaded lazily only after module, environment, and
+input gates, and cached once per run. Loading does not mutate `sys.path`, cwd,
+or the environment. A single-file callback may import dependencies already
+installed in the interpreter running the hook, but the host never runs `pip`;
+sibling/package-relative imports and installed-module references are not a
+supported loading mechanism. The callback runs in-process as trusted user code:
+there is no SDK, sandbox, filesystem write prevention, or enforceable hard
+timeout. Its `PluginContext` has frozen mappings/snapshots and validated `Path`
+values, but those paths do not make file contents read-only. Callback prints and
+direct writes can disclose or modify host data and are outside host
+sanitization. Use a separately managed low-privilege process/container/VM when
+that boundary is required.
+
+Command steps use direct argv with no implicit shell, repository-root cwd,
+inherited environment, and EOF on stdin unless an exact declared input is
+selected. `{repo}`, `{python}`, and `{input:<logical-ref>}` are substituted only
+as whole argv elements; unknown tokens in the reserved grammar and embedded
+recognized tokens are rejected, while ordinary brace text is preserved. The
+default command timeout is 60 seconds. stdout/stderr are private, unredacted
+`stdout.txt`/`stderr.txt` artifacts and are not printed by default. Each stream
+is capped at 16 MiB; invalid UTF-8, timeout, signal, missing executable, or
+truncation fails closed. A command may explicitly invoke `bash -c`, and
+`exec`/`assert` commands may modify the real checkout, so these are user-policy
+choices rather than host isolation guarantees. `assert` saves its report before
+blocking on a false/nonzero result. Only the workflow-level fail-open setting
+overrides that block; there is no per-command override.
+
+Read-only `collect` callback work may overlap up to `max_parallel`; trusted
+callback/command authors must provide their own concurrency safety. `exec` and
+`assert` remain serialized, and `apply` remains a separate staged, allowlisted
+operation.
+
 ## Boundary and apply limitations
 
 OpenCode permissions and temporary-workspace isolation are **not an
