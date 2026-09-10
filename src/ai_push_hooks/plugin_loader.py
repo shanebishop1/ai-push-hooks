@@ -10,7 +10,6 @@ completed.
 
 from __future__ import annotations  # noqa: I001
 
-import copy
 import errno
 import hashlib
 import inspect
@@ -174,96 +173,121 @@ class PluginLoader:
     def __init__(self) -> None:
         self._cache: dict[tuple[pathlib.Path, pathlib.Path], ModuleType] = {}
         self._lock = threading.RLock()
+        self._source_locks: dict[tuple[pathlib.Path, pathlib.Path], threading.Lock] = {}
         self._module_number = 0
+
+    def _source_lock(
+        self, key: tuple[pathlib.Path, pathlib.Path]
+    ) -> threading.Lock:
+        with self._lock:
+            lock = self._source_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._source_locks[key] = lock
+            return lock
+
+    def _load_module(
+        self,
+        root: pathlib.Path,
+        relative_path: str,
+        callable_name: str,
+    ) -> ModuleType:
+        try:
+            callback_path, source = _open_source(root, relative_path)
+        except HookError as exc:
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} could not be loaded safely: "
+                f"{str(exc).removeprefix('Python plugin ')}"
+            ) from None
+        # ``callback_path`` is canonical after containment checks and is equal
+        # to the lexical cache key for a safe repository file.
+        try:
+            source_text = source.decode(_SOURCE_ENCODING)
+            code = compile(source_text, str(callback_path), "exec")
+        except UnicodeDecodeError:
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} source is not valid UTF-8"
+            ) from None
+        except (SyntaxError, ValueError, TypeError):
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} could not be compiled"
+            ) from None
+
+        with self._lock:
+            self._module_number += 1
+            module_number = self._module_number
+        digest = hashlib.sha256(f"{root}\0{callback_path}".encode()).hexdigest()[:16]
+        module_name = f"ai_push_hooks_plugin_{digest}_{module_number}"
+        module = ModuleType(module_name)
+        module.__file__ = str(callback_path)
+        module.__package__ = ""
+        try:
+            exec(code, module.__dict__)  # noqa: S102
+        except KeyboardInterrupt:
+            raise
+        except SystemExit:
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} exited during import"
+            ) from None
+        except ModuleNotFoundError as exc:
+            if exc.name:
+                detail = f"is missing dependency {exc.name!r}"
+            else:
+                detail = "could not import a dependency"
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} {detail}"
+            ) from None
+        except ImportError:
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} could not import a dependency"
+            ) from None
+        except Exception:  # noqa: BLE001
+            raise HookError(
+                f"Python plugin {relative_path}:{callable_name} failed during import"
+            ) from None
+        return module
 
     def load(self, repo_root: pathlib.Path, reference: str) -> Callable[..., Any]:
         """Return the named top-level callable from a safe source snapshot.
 
-        The lock includes descriptor open, source read, compilation, and module
-        execution.  Thus concurrent collectors cannot execute the same source
-        twice.  The cache key includes both canonical repository root and
-        canonical file path, so identical relative names in two repositories
-        remain independent.
+        A per-source lock includes descriptor open, source read, compilation,
+        and module execution.  Thus concurrent collectors cannot execute the
+        same source twice, while different sources can import concurrently.
+        The cache key includes both canonical repository root and canonical
+        file path, so identical relative names in two repositories remain
+        independent.
         """
 
         relative_path, callable_name = _reference_parts(reference)
         root = _canonical_root(repo_root)
+        lexical_callback_path = root.joinpath(*relative_path.split("/"))
+        key = (root, lexical_callback_path)
         with self._lock:
-            lexical_callback_path = root.joinpath(*relative_path.split("/"))
-            key = (root, lexical_callback_path)
             module = self._cache.get(key)
-            if module is None:
-                try:
-                    callback_path, source = _open_source(root, relative_path)
-                except HookError as exc:
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} could not be loaded safely: "
-                        f"{str(exc).removeprefix('Python plugin ')}"
-                    ) from None
-                # ``callback_path`` is canonical after containment checks and
-                # is equal to the lexical path for a safe repository file.
-                key = (root, callback_path)
-                try:
-                    source_text = source.decode(_SOURCE_ENCODING)
-                    code = compile(source_text, str(callback_path), "exec")
-                except UnicodeDecodeError:
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} source is not valid UTF-8"
-                    ) from None
-                except (SyntaxError, ValueError, TypeError):
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} could not be compiled"
-                    ) from None
+        if module is None:
+            with self._source_lock(key):
+                with self._lock:
+                    module = self._cache.get(key)
+                if module is None:
+                    module = self._load_module(root, relative_path, callable_name)
+                    with self._lock:
+                        self._cache[key] = module
 
-                self._module_number += 1
-                digest = hashlib.sha256(
-                    f"{root}\0{callback_path}".encode()
-                ).hexdigest()[:16]
-                module_name = f"ai_push_hooks_plugin_{digest}_{self._module_number}"
-                module = ModuleType(module_name)
-                module.__file__ = str(callback_path)
-                module.__package__ = ""
-                try:
-                    exec(code, module.__dict__)  # noqa: S102
-                except KeyboardInterrupt:
-                    raise
-                except SystemExit:
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} exited during import"
-                    ) from None
-                except ModuleNotFoundError as exc:
-                    if exc.name:
-                        detail = f"is missing dependency {exc.name!r}"
-                    else:
-                        detail = "could not import a dependency"
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} {detail}"
-                    ) from None
-                except ImportError:
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} could not import a dependency"
-                    ) from None
-                except Exception:  # noqa: BLE001
-                    raise HookError(
-                        f"Python plugin {relative_path}:{callable_name} failed during import"
-                    ) from None
-                self._cache[key] = module
-
-            try:
-                callback = getattr(module, callable_name)
-            except AttributeError:
-                raise _failure(
-                    "callback", relative_path, callable_name, "was not defined"
-                ) from None
-            if not callable(callback):
-                raise _failure(
-                    "callback", relative_path, callable_name, "is not callable"
-                ) from None
-            if inspect.iscoroutinefunction(callback):
-                raise _failure(
-                    "callback", relative_path, callable_name, "must be synchronous"
-                ) from None
-            return callback
+        try:
+            callback = getattr(module, callable_name)
+        except AttributeError:
+            raise _failure(
+                "callback", relative_path, callable_name, "was not defined"
+            ) from None
+        if not callable(callback):
+            raise _failure(
+                "callback", relative_path, callable_name, "is not callable"
+            ) from None
+        if inspect.iscoroutinefunction(callback):
+            raise _failure(
+                "callback", relative_path, callable_name, "must be synchronous"
+            ) from None
+        return callback
 
     def invoke(
         self,
@@ -358,8 +382,8 @@ def build_plugin_context(
         module_id=state.module.id,
         step_id=step.id,
         inputs=_ordered_inputs(step, input_paths),
-        options=copy.deepcopy(step.options),
-        prior_module_metadata=copy.deepcopy(state.metadata),
+        options=step.options,
+        prior_module_metadata=state.metadata,
         push=push,
         logger=runtime.logger,
     )

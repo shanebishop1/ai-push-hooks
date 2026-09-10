@@ -4,6 +4,7 @@ import os
 import pathlib
 import sys
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -54,10 +55,6 @@ def _runtime(
         cache=cache or {},
     )
     return context, ModuleRuntimeState(module=module, metadata=metadata or {})
-
-
-def _step(reference: str, *, kind: str = "collect", inputs: tuple[str, ...] = ()) -> StepConfig:
-    return StepConfig(id="hook", type=kind, python=reference, inputs=inputs)
 
 
 def _write(repo: pathlib.Path, name: str, source: str) -> None:
@@ -125,6 +122,33 @@ def test_concurrent_load_executes_source_once(tmp_path: pathlib.Path) -> None:
     with ThreadPoolExecutor(max_workers=8) as pool:
         assert list(pool.map(lambda _: invoke(), range(8))) == [1] * 8
     assert marker.read_text(encoding="utf-8") == "x\n"
+
+
+def test_distinct_source_imports_can_overlap_without_sharing_a_global_lock(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import_barrier = threading.Barrier(2)
+    helper = types.ModuleType("plugin_import_barrier")
+    helper.wait = lambda: import_barrier.wait(timeout=2)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "plugin_import_barrier", helper)
+    source = (
+        "from plugin_import_barrier import wait\n"
+        "wait()\n"
+        "def hook(context): return 1\n"
+    )
+    _write(tmp_path, "first.py", source)
+    _write(tmp_path, "second.py", source)
+    loader = PluginLoader()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda reference: loader.invoke(tmp_path, reference, object()),
+                ("first.py:hook", "second.py:hook"),
+            )
+        )
+
+    assert results == [1, 1]
 
 
 def test_loader_rejects_symlink_and_traversal(tmp_path: pathlib.Path) -> None:
