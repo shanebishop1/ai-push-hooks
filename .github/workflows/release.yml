@@ -25,7 +25,7 @@ on:
         required: false
         type: string
       artifact_id:
-        description: "Immutable Actions artifact ID containing the release set (preferred; leave empty for the v0.3.0 draft-asset recovery)"
+        description: "Immutable Actions artifact ID containing the release set; leave empty only to recover a draft release asset set"
         required: false
         type: string
       deployment_id:
@@ -342,7 +342,7 @@ jobs:
             --manifest "$RELEASE_ROOT/checksum-manifest.json"
 
   recover-bookkeeping:
-    if: github.event_name == 'workflow_dispatch' && inputs.recover_bookkeeping == true && inputs.recover_release != true
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.recover_bookkeeping == true && inputs.recover_release != true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -373,7 +373,7 @@ jobs:
             --run-url "$RECOVERY_RUN_URL"
 
   recover-release:
-    if: github.event_name == 'workflow_dispatch' && inputs.recover_release == true && inputs.recover_bookkeeping != true
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.recover_release == true && inputs.recover_bookkeeping != true
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -400,7 +400,7 @@ jobs:
             esac
           fi
 
-      - name: Checkout trusted recovery helpers
+      - name: Checkout trusted default-branch recovery helpers
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -428,102 +428,22 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Download the immutable release set
+      - name: Download and validate the immutable release set
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          if test -n "$RECOVERY_ARTIFACT_ID"; then
-            mkdir -p "$RECOVERY_ROOT"
-            gh api \
-              "repos/$GITHUB_REPOSITORY/actions/artifacts/$RECOVERY_ARTIFACT_ID/zip" \
-              > "$RUNNER_TEMP/recovery-artifact.zip"
-            unzip -q "$RUNNER_TEMP/recovery-artifact.zip" -d "$RECOVERY_ROOT"
-          else
-            mkdir -p "$RECOVERY_ROOT/python" "$RECOVERY_ROOT/npm"
-            for name in \
-              checksum-manifest.json \
-              ai_push_hooks-0.3.0-py3-none-any.whl \
-              ai_push_hooks-0.3.0.tar.gz \
-              ai-push-hooks-0.3.0.tgz; do
-              asset_url=$(gh api \
-                "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-                --jq ".[] | select(.tag_name == \"$RECOVERY_TAG\") | .assets[] | select(.name == \"$name\") | .url")
-              test -n "$asset_url"
-              gh api \
-                --header 'Accept: application/octet-stream' \
-                "$asset_url" > "$RECOVERY_ROOT/$name"
-            done
-            mv "$RECOVERY_ROOT/ai_push_hooks-0.3.0-py3-none-any.whl" "$RECOVERY_ROOT/python/"
-            mv "$RECOVERY_ROOT/ai_push_hooks-0.3.0.tar.gz" "$RECOVERY_ROOT/python/"
-            mv "$RECOVERY_ROOT/ai-push-hooks-0.3.0.tgz" "$RECOVERY_ROOT/npm/"
-          fi
-
-      - name: Validate release binding and downloaded artifact identities
-        env:
-          RELEASE_ROOT: ${{ env.RECOVERY_ROOT }}
-        run: |
-          set -eu
-          python scripts/release_validation.py validate \
+          python scripts/release_recovery.py \
+            --repo "$GITHUB_REPOSITORY" \
             --tag "$RECOVERY_TAG" \
             --commit "$RECOVERY_COMMIT" \
-            --pyproject "$RUNNER_TEMP/release-source/pyproject.toml" \
-            --package-json "$RUNNER_TEMP/release-source/package.json" \
-            --release-channel "$RUNNER_TEMP/release-source/release-channel.toml"
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
+            --artifact-id "$RECOVERY_ARTIFACT_ID" \
+            --source-root "$RUNNER_TEMP/release-source" \
+            --root "$RECOVERY_ROOT" \
+            --release-channel "$RUNNER_TEMP/release-source/release-channel.toml" \
+            --token-env GH_TOKEN
 
-          root = Path(os.environ["RELEASE_ROOT"]).resolve()
-          manifest_path = root / "checksum-manifest.json"
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          if manifest.get("project") != "ai-push-hooks":
-              raise SystemExit("recovery manifest has the wrong project")
-          if manifest.get("tag") != os.environ["RECOVERY_TAG"]:
-              raise SystemExit("recovery manifest tag does not match the requested tag")
-          if manifest.get("commit") != os.environ["RECOVERY_COMMIT"]:
-              raise SystemExit("recovery manifest commit does not match the requested commit")
-
-          artifacts = manifest.get("artifacts")
-          if not isinstance(artifacts, list) or len(artifacts) != 3:
-              raise SystemExit("recovery manifest must contain exactly three artifacts")
-          kinds = {item.get("kind") for item in artifacts if isinstance(item, dict)}
-          if kinds != {"wheel", "sdist", "npm"}:
-              raise SystemExit("recovery manifest must contain wheel, sdist, and npm artifacts")
-
-          approved_paths = set()
-          for artifact in artifacts:
-              if not isinstance(artifact, dict):
-                  raise SystemExit("recovery manifest contains a malformed artifact")
-              relative = artifact.get("path")
-              if not isinstance(relative, str) or relative in approved_paths:
-                  raise SystemExit("recovery manifest contains a duplicate or invalid path")
-              approved_paths.add(relative)
-              path = (root / relative).resolve()
-              try:
-                  path.relative_to(root)
-              except ValueError as exc:
-                  raise SystemExit("recovery artifact path escapes the release root") from exc
-              if not path.is_file():
-                  raise SystemExit(f"recovery artifact is missing: {relative}")
-              if path.stat().st_size != artifact.get("size"):
-                  raise SystemExit(f"recovery artifact size mismatch: {relative}")
-              if hashlib.sha256(path.read_bytes()).hexdigest() != artifact.get("sha256"):
-                  raise SystemExit(f"recovery artifact hash mismatch: {relative}")
-
-          for path in root.rglob("*"):
-              if not path.is_file():
-                  continue
-              relative = path.relative_to(root).as_posix()
-              if path.suffix == ".whl" or path.name.endswith(".tar.gz") or path.suffix == ".tgz":
-                  if relative not in approved_paths:
-                      raise SystemExit(f"unapproved release artifact is present: {relative}")
-          print("downloaded recovery artifacts match checksum-manifest.json")
-          PY
-
-      - name: Confirm PyPI is complete without republishing
+      - name: Confirm PyPI is complete (npm-only recovery; never republish PyPI)
         run: |
           set -eu
           python scripts/release_validation.py registry-check \
@@ -579,11 +499,15 @@ jobs:
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --manifest "$RECOVERY_ROOT/checksum-manifest.json"
 
-      - name: Activate the verified prerelease without changing its assets
+      - name: Activate the verified release without changing its assets
         if: steps.verify-npm.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$RECOVERY_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=true
+        run: |
+          prerelease=$(python scripts/release_validation.py manifest-value \
+            --manifest "$RECOVERY_ROOT/checksum-manifest.json" --key github_prerelease)
+          gh release edit "$RECOVERY_TAG" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --prerelease="$prerelease"
 
       - name: Create or verify the correctly-classified GitHub release
         if: steps.verify-npm.outcome == 'success'

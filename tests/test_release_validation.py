@@ -1,9 +1,15 @@
+import base64
 import hashlib
+import http.server
+import io
 import json
+import threading
+import zipfile
 from pathlib import Path
 
 import pytest
 
+from scripts import release_recovery as recovery
 from scripts import release_validation as release
 
 
@@ -139,6 +145,205 @@ def test_checked_in_channel_maps_stable_version_to_beta_without_version_special_
     assert info.channel == "beta"
     assert info.npm_dist_tag == "beta"
     assert info.github_prerelease is True
+
+
+def _strict_release_set(tmp_path):
+    info = release.VersionInfo("1.2.3", "1.2.3", "v1.2.3", "stable", "latest", False)
+    files = {
+        "python/ai_push_hooks-1.2.3-py3-none-any.whl": b"wheel",
+        "python/ai_push_hooks-1.2.3.tar.gz": b"sdist",
+        "npm/ai-push-hooks-1.2.3.tgz": b"npm",
+    }
+    for relative, data in files.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return info, release.create_manifest(tmp_path, info, "a" * 40)
+
+
+def test_manifest_binds_version_channel_prerelease_and_source(tmp_path):
+    info, manifest = _strict_release_set(tmp_path)
+
+    for field, value in (
+        ("version", "9.9.9"),
+        ("npm_version", "9.9.9"),
+        ("channel", "beta"),
+        ("npm_dist_tag", "beta"),
+        ("github_prerelease", True),
+        ("tag", "v9.9.9"),
+        ("commit", "b" * 40),
+        ("project", "other-project"),
+    ):
+        candidate = {**manifest, field: value}
+        with pytest.raises(release.ReleaseValidationError, match="source metadata|fields|does not match"):
+            release.validate_manifest(candidate, info, "a" * 40, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("path", "../outside.whl", "safe relative path"),
+        ("path", "python/../outside.whl", "safe relative path"),
+        ("name", "../outside.whl", "unsafe name"),
+        ("kind", "unknown", "unknown kind"),
+        ("size", -1, "invalid size"),
+        ("sha256", "not-a-digest", "invalid sha256"),
+        ("sha512_integrity", "sha512-not-base64", "invalid sha512 integrity"),
+    ],
+)
+def test_manifest_rejects_malicious_artifact_metadata(tmp_path, field, value, message):
+    info, manifest = _strict_release_set(tmp_path)
+    artifact = {**manifest["artifacts"][0], field: value}
+    candidate = {**manifest, "artifacts": [artifact, *manifest["artifacts"][1:]]}
+
+    with pytest.raises(release.ReleaseValidationError, match=message):
+        release.validate_manifest(candidate, info, "a" * 40, root=tmp_path)
+
+
+def test_stage_missing_rejects_manifest_path_traversal(tmp_path):
+    root = tmp_path / "release"
+    destination = tmp_path / "staged"
+    root.mkdir()
+    manifest = {
+        "artifacts": [
+            {
+                "name": "ai-push-hooks-1.2.3.tgz",
+                "path": "../outside.tgz",
+            }
+        ]
+    }
+
+    with pytest.raises(release.ReleaseValidationError, match="safe relative path"):
+        release.stage_missing(
+            manifest, root, destination, ["ai-push-hooks-1.2.3.tgz"]
+        )
+
+
+def test_actions_artifact_requires_immutable_run_head_binding():
+    valid = {
+        "id": 42,
+        "name": "release-set-v1.2.3",
+        "expired": False,
+        "workflow_run": {"id": 7, "event": "push", "head_sha": "a" * 40},
+    }
+    recovery._validate_actions_artifact(valid, 42, "v1.2.3", "a" * 40)
+
+    for field, value in (
+        ("id", 43),
+        ("name", "release-set-v9.9.9"),
+        ("expired", True),
+    ):
+        candidate = {**valid, field: value}
+        with pytest.raises(release.ReleaseValidationError):
+            recovery._validate_actions_artifact(candidate, 42, "v1.2.3", "a" * 40)
+    for field, value in (("event", "workflow_dispatch"), ("head_sha", "b" * 40)):
+        candidate = {**valid, "workflow_run": {**valid["workflow_run"], field: value}}
+        with pytest.raises(release.ReleaseValidationError):
+            recovery._validate_actions_artifact(candidate, 42, "v1.2.3", "a" * 40)
+
+
+def test_recovery_archive_rejects_path_traversal(tmp_path):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("../escaped.txt", b"must not extract")
+
+    with pytest.raises(release.ReleaseValidationError, match="safe relative path"):
+        recovery._extract_archive(buffer.getvalue(), tmp_path / "root")
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_draft_asset_recovery_uses_manifest_names_and_paths(tmp_path, monkeypatch):
+    info = release.VersionInfo("1.2.3", "1.2.3", "v1.2.3", "stable", "latest", False)
+    manifest = {
+        "schema": 1,
+        "project": "ai-push-hooks",
+        "version": "1.2.3",
+        "npm_version": "1.2.3",
+        "tag": "v1.2.3",
+        "channel": "stable",
+        "commit": "a" * 40,
+        "npm_dist_tag": "latest",
+        "github_prerelease": False,
+        "artifacts": [
+            {
+                "name": "ai_push_hooks-1.2.3-py3-none-any.whl",
+                "path": "python/ai_push_hooks-1.2.3-py3-none-any.whl",
+                "kind": "wheel",
+                "size": 5,
+                "sha256": hashlib.sha256(b"wheel").hexdigest(),
+                "sha512_integrity": "sha512-" + base64.b64encode(hashlib.sha512(b"wheel").digest()).decode("ascii"),
+            },
+            {
+                "name": "ai_push_hooks-1.2.3.tar.gz",
+                "path": "python/ai_push_hooks-1.2.3.tar.gz",
+                "kind": "sdist",
+                "size": 5,
+                "sha256": hashlib.sha256(b"sdist").hexdigest(),
+                "sha512_integrity": "sha512-" + base64.b64encode(hashlib.sha512(b"sdist").digest()).decode("ascii"),
+            },
+            {
+                "name": "ai-push-hooks-1.2.3.tgz",
+                "path": "npm/ai-push-hooks-1.2.3.tgz",
+                "kind": "npm",
+                "size": 3,
+                "sha256": hashlib.sha256(b"npm").hexdigest(),
+                "sha512_integrity": "sha512-" + base64.b64encode(hashlib.sha512(b"npm").digest()).decode("ascii"),
+            },
+        ],
+    }
+    manifest_body = json.dumps(manifest).encode()
+    bodies = {release.MANIFEST_NAME: manifest_body}
+    bodies.update(
+        {
+            "ai_push_hooks-1.2.3-py3-none-any.whl": b"wheel",
+            "ai_push_hooks-1.2.3.tar.gz": b"sdist",
+            "ai-push-hooks-1.2.3.tgz": b"npm",
+        }
+    )
+    assets = [
+        {
+            "name": name,
+            "url": f"https://api.github.com/repos/owner/repo/releases/assets/{index}",
+        }
+        for index, name in enumerate(bodies, 1)
+    ]
+    monkeypatch.setattr(
+        recovery,
+        "_draft_release",
+        lambda *_args: {"tag_name": "v1.2.3", "draft": True, "assets": assets},
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_asset_bytes",
+        lambda asset, _token: bodies[asset["name"]],
+    )
+
+    root = tmp_path / "recovery"
+    root.mkdir()
+    recovery._download_draft_release_set("owner/repo", "v1.2.3", "a" * 40, info, root, "token")
+
+    assert (root / "checksum-manifest.json").read_bytes() == manifest_body
+    assert (root / "python/ai_push_hooks-1.2.3-py3-none-any.whl").read_bytes() == b"wheel"
+    assert (root / "npm/ai-push-hooks-1.2.3.tgz").read_bytes() == b"npm"
+
+
+def test_github_release_lookup_paginates_without_jq_input_interpolation(monkeypatch):
+    requests = []
+
+    def get(url, _token):
+        requests.append(url)
+        if url.endswith("page=1"):
+            return [{"tag_name": f"v{i}"} for i in range(100)]
+        return [{"tag_name": "v1.2.3"}]
+
+    monkeypatch.setattr(recovery.core, "_github_get", get)
+    result = recovery._github_list("https://api.github.com/repos/owner/repo/releases", "token")
+
+    assert len(result) == 101
+    assert requests == [
+        "https://api.github.com/repos/owner/repo/releases?per_page=100&page=1",
+        "https://api.github.com/repos/owner/repo/releases?per_page=100&page=2",
+    ]
 
 
 def test_explicit_beta_channel_is_generic_for_other_stable_versions():
@@ -532,7 +737,7 @@ def test_recovery_manifest_is_loaded_from_matching_release_asset(monkeypatch):
         "name": release.MANIFEST_NAME,
         "size": len(body),
         "digest": f"sha256:{hashlib.sha256(body).hexdigest()}",
-        "url": "https://api.invalid/assets/1",
+        "url": "https://api.github.com/repos/owner/repo/releases/assets/1",
     }
     monkeypatch.setattr(
         release,
@@ -550,6 +755,172 @@ def test_recovery_manifest_is_loaded_from_matching_release_asset(monkeypatch):
         lambda *_args, **_kwargs: release.HttpResult(200, {}, body),
     )
     assert release._load_release_manifest("owner/repo", manifest["tag"], "token") == manifest
+
+
+def test_recovery_asset_rejects_arbitrary_url_before_request(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        recovery.core,
+        "_request_read",
+        lambda *args, **kwargs: called.append((args, kwargs)),
+    )
+
+    with pytest.raises(release.ReleaseValidationError, match="GitHub API URL"):
+        recovery._asset_bytes(
+            {
+                "url": "https://attacker.invalid/repos/owner/repo/releases/assets/1",
+                "size": 0,
+            },
+            "secret-token",
+        )
+    assert called == []
+
+
+def test_release_asset_match_rejects_arbitrary_url_before_request(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        release,
+        "_request_read",
+        lambda *args, **kwargs: called.append((args, kwargs)),
+    )
+
+    with pytest.raises(release.ReleaseValidationError, match="GitHub API URL"):
+        release._asset_matches(
+            {
+                "name": release.MANIFEST_NAME,
+                "size": 1,
+                "url": "https://attacker.invalid/repos/owner/repo/releases/assets/1",
+            },
+            {"size": 1, "sha256": "a" * 64},
+            "secret-token",
+        )
+    assert called == []
+
+
+def test_pagination_rejects_non_github_api_before_request(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        recovery.core,
+        "_github_get",
+        lambda *args, **kwargs: called.append((args, kwargs)),
+    )
+
+    with pytest.raises(release.ReleaseValidationError, match="api.github.com"):
+        recovery._github_list("https://attacker.invalid/repos/owner/repo/releases", "token")
+    assert called == []
+
+
+def test_https_redirect_downgrade_is_rejected():
+    request = release.urllib.request.Request(
+        "https://api.github.com/repos/owner/repo/releases/assets/1",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    with pytest.raises(release.ReleaseValidationError, match="downgrade"):
+        release._SafeRedirectHandler().redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "http://127.0.0.1:1/redirected",
+        )
+
+
+def test_loopback_cross_origin_read_redirect_does_not_forward_credentials():
+    observed = []
+
+    class TargetHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            observed.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"asset")
+
+        def log_message(self, *_args):
+            pass
+
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_thread = threading.Thread(target=target.serve_forever)
+    target_thread.start()
+    try:
+        target_url = f"http://127.0.0.1:{target.server_port}/asset"
+
+        class SourceHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(302)
+                self.send_header("Location", target_url)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        source = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SourceHandler)
+        source_thread = threading.Thread(target=source.serve_forever)
+        source_thread.start()
+        try:
+            result = release._request_read(
+                f"http://127.0.0.1:{source.server_port}/redirect",
+                headers={"Authorization": "Bearer test-token"},
+                attempts=1,
+            )
+            assert result.body == b"asset"
+            assert observed == [None]
+        finally:
+            source.shutdown()
+            source.server_close()
+            source_thread.join()
+    finally:
+        target.shutdown()
+        target.server_close()
+        target_thread.join()
+
+
+def test_loopback_write_redirect_is_not_replayed():
+    observed = []
+
+    class TargetHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            observed.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_thread = threading.Thread(target=target.serve_forever)
+    target_thread.start()
+    try:
+        target_url = f"http://127.0.0.1:{target.server_port}/write"
+
+        class SourceHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                self.send_response(307)
+                self.send_header("Location", target_url)
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        source = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SourceHandler)
+        source_thread = threading.Thread(target=source.serve_forever)
+        source_thread.start()
+        try:
+            with pytest.raises(release.ReleaseValidationError, match="do not retry"):
+                release._request_write(
+                    f"http://127.0.0.1:{source.server_port}/write",
+                    data=b"payload",
+                    headers={"Authorization": "Bearer test-token"},
+                )
+            assert observed == []
+        finally:
+            source.shutdown()
+            source.server_close()
+            source_thread.join()
+    finally:
+        target.shutdown()
+        target.server_close()
+        target_thread.join()
 
 
 def test_recover_deployment_rejects_registry_mismatch_without_status_write(monkeypatch):
@@ -646,6 +1017,7 @@ def test_ensure_github_release_handles_404_and_uploads_manifest_once(tmp_path, m
                     "name": release.MANIFEST_NAME,
                     "size": manifest_path.stat().st_size,
                     "digest": f"sha256:{digest}",
+                    "url": "https://api.github.com/repos/owner/repo/releases/assets/1",
                 }
             ).encode(),
         ),

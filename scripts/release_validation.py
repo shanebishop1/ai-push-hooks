@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -23,6 +25,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Callable, Iterable
 
 
@@ -82,6 +85,129 @@ class Artifact:
     sha512_integrity: str
 
 
+def _url_origin(url: str) -> tuple[str, str, int | None]:
+    """Return the origin used when deciding whether credentials may follow."""
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise ReleaseValidationError("request URL is malformed") from exc
+    if parsed.username is not None or parsed.password is not None:
+        raise ReleaseValidationError("request URL must not contain embedded credentials")
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise ReleaseValidationError("request URL must use HTTP or HTTPS")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ReleaseValidationError("request URL has an invalid port") from exc
+    return parsed.scheme.lower(), parsed.hostname.lower(), port
+
+
+def _same_origin(left: str, right: str) -> bool:
+    left_origin = _url_origin(left)
+    right_origin = _url_origin(right)
+    left_port = left_origin[2] or (443 if left_origin[0] == "https" else 80)
+    right_port = right_origin[2] or (443 if right_origin[0] == "https" else 80)
+    return left_origin[:2] == right_origin[:2] and left_port == right_port
+
+
+def _strip_redirect_credentials(request: urllib.request.Request) -> None:
+    for header in ("Authorization", "Proxy-Authorization", "Cookie", "Cookie2"):
+        for collection in (request.headers, request.unredirected_hdrs):
+            for key in list(collection):
+                if key.lower() == header.lower():
+                    collection.pop(key, None)
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow read redirects without forwarding credentials to another origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _same_origin(req.full_url, newurl):
+            old_scheme = _url_origin(req.full_url)[0]
+            new_scheme = _url_origin(newurl)[0]
+            if old_scheme == "https" and new_scheme != "https":
+                raise ReleaseValidationError("refusing insecure redirect downgrade")
+        new_request = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_request is not None and not _same_origin(req.full_url, newurl):
+            _strip_redirect_credentials(new_request)
+        return new_request
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never replay a non-idempotent request at a redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _default_read_opener(request: urllib.request.Request, timeout: float) -> Any:
+    return urllib.request.build_opener(_SafeRedirectHandler()).open(request, timeout=timeout)
+
+
+def _default_write_opener(request: urllib.request.Request, timeout: float) -> Any:
+    return urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+
+
+def _validate_github_api_url(url: str, *, repo: str | None = None) -> None:
+    """Require an HTTPS GitHub API URL rooted at the requested repository."""
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise ReleaseValidationError("GitHub API URL is malformed") from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname is None
+        or parsed.hostname.lower() != "api.github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ReleaseValidationError("GitHub API URL must use https://api.github.com")
+    try:
+        if parsed.port not in (None, 443):
+            raise ReleaseValidationError("GitHub API URL has an invalid port")
+    except ValueError as exc:
+        raise ReleaseValidationError("GitHub API URL has an invalid port") from exc
+    parts = parsed.path.split("/")
+    if len(parts) < 4 or parts[1] != "repos" or not parts[2] or not parts[3]:
+        raise ReleaseValidationError("GitHub API URL is not a repository endpoint")
+    if any(part in {".", ".."} for part in parts[1:]):
+        raise ReleaseValidationError("GitHub API URL contains an unsafe path")
+    if repo is not None and "/".join(parts[2:4]) != repo:
+        raise ReleaseValidationError("GitHub API URL repository does not match the request")
+
+
+def _validate_github_asset_url(
+    url: str,
+    *,
+    repo: str | None = None,
+    allow_actions_artifact: bool = False,
+) -> None:
+    """Validate an authenticated GitHub asset API URL before sending a token."""
+
+    _validate_github_api_url(url, repo=repo)
+    path = urllib.parse.urlsplit(url).path.split("/")
+    is_release_asset = (
+        len(path) == 7
+        and path[4] == "releases"
+        and path[5] == "assets"
+        and path[6].isdecimal()
+        and int(path[6]) > 0
+    )
+    is_actions_asset = (
+        len(path) == 8
+        and path[4] == "actions"
+        and path[5] == "artifacts"
+        and path[6].isdecimal()
+        and int(path[6]) > 0
+        and path[7] == "zip"
+    )
+    if not is_release_asset and not (allow_actions_artifact and is_actions_asset):
+        raise ReleaseValidationError("GitHub asset URL is not an approved API asset endpoint")
+
+
 def response_class(status: int) -> str:
     """Classify a response without treating outages as absence."""
 
@@ -120,7 +246,7 @@ def _request_read(
     headers: dict[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     attempts: int = DEFAULT_ATTEMPTS,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     max_bytes: int = MAX_RESPONSE_BYTES,
 ) -> HttpResult:
@@ -133,11 +259,13 @@ def _request_read(
 
     if attempts < 1 or timeout <= 0:
         raise ValueError("attempts must be positive and timeout must be positive")
+    _url_origin(url)
     request = urllib.request.Request(url, headers=headers or {}, method="GET")
+    open_request = opener or _default_read_opener
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
-            with opener(request, timeout=timeout) as response:
+            with open_request(request, timeout=timeout) as response:
                 status = int(response.status)
                 response_headers = {key: value for key, value in response.headers.items()}
                 body = _bounded_read(response, max_bytes)
@@ -189,13 +317,15 @@ def _request_write(
     data: bytes,
     headers: dict[str, str],
     timeout: float = DEFAULT_TIMEOUT,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] | None = None,
 ) -> HttpResult:
     """Perform exactly one bounded non-idempotent request."""
 
+    _url_origin(url)
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    open_request = opener or _default_write_opener
     try:
-        with opener(request, timeout=timeout) as response:
+        with open_request(request, timeout=timeout) as response:
             body = _bounded_read(response)
             result = HttpResult(
                 int(response.status),
@@ -447,7 +577,7 @@ def create_manifest(root: Path, info: VersionInfo, commit: str) -> dict[str, Any
         raise ReleaseValidationError(f"sdist name is not for version {info.python_version}")
     if npm.name != f"{PROJECT_NAME}-{info.npm_version}.tgz":
         raise ReleaseValidationError(f"npm tarball name is not for version {info.npm_version}")
-    return {
+    manifest = {
         "schema": 1,
         "project": PROJECT_NAME,
         "version": info.python_version,
@@ -459,6 +589,79 @@ def create_manifest(root: Path, info: VersionInfo, commit: str) -> dict[str, Any
         "github_prerelease": info.github_prerelease,
         "artifacts": [artifact.__dict__ for artifact in artifacts],
     }
+    validate_manifest(manifest, info, commit, root=root)
+    return manifest
+
+
+def _safe_relative_path(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ReleaseValidationError(f"{context} must be a safe relative path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ReleaseValidationError(f"{context} must be a safe relative path")
+    return path.as_posix()
+
+
+def _safe_artifact_path(root: Path, relative: object, context: str) -> Path:
+    normalized = _safe_relative_path(relative, context)
+    candidate = root / Path(*PurePosixPath(normalized).parts)
+    try:
+        candidate.resolve(strict=False).relative_to(root.resolve())
+    except ValueError as exc:
+        raise ReleaseValidationError(f"{context} escapes the release root") from exc
+    return candidate
+
+
+def _validate_artifact_descriptor(
+    artifact: object,
+    index: int,
+) -> dict[str, Any]:
+    if not isinstance(artifact, dict):
+        raise ReleaseValidationError(f"release manifest artifact {index} is not an object")
+    expected_keys = {"name", "path", "kind", "size", "sha256", "sha512_integrity"}
+    if set(artifact) != expected_keys:
+        raise ReleaseValidationError(f"release manifest artifact {index} has invalid fields")
+    name = artifact["name"]
+    if (
+        not isinstance(name, str)
+        or not name
+        or Path(name).name != name
+        or "\\" in name
+        or name in {".", ".."}
+    ):
+        raise ReleaseValidationError(f"release manifest artifact {index} has an unsafe name")
+    path = _safe_relative_path(artifact["path"], f"release manifest artifact {index} path")
+    if PurePosixPath(path).name != name:
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} path does not end in its name"
+        )
+    kind = artifact["kind"]
+    if not isinstance(kind, str) or kind not in {"wheel", "sdist", "npm"}:
+        raise ReleaseValidationError(f"release manifest artifact {index} has an unknown kind")
+    size = artifact["size"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ReleaseValidationError(f"release manifest artifact {index} has an invalid size")
+    sha256 = artifact["sha256"]
+    if not isinstance(sha256, str) or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+        raise ReleaseValidationError(f"release manifest artifact {index} has an invalid sha256")
+    integrity = artifact["sha512_integrity"]
+    if not isinstance(integrity, str) or not integrity.startswith("sha512-"):
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an invalid sha512 integrity"
+        )
+    try:
+        decoded = base64.b64decode(integrity.removeprefix("sha512-"), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an invalid sha512 integrity"
+        ) from exc
+    if len(decoded) != hashlib.sha512().digest_size:
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an invalid sha512 integrity"
+        )
+    normalized = dict(artifact)
+    normalized["path"] = path
+    return normalized
 
 
 def _artifacts(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -466,6 +669,108 @@ def _artifacts(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts):
         raise ReleaseValidationError("checksum manifest has no valid artifacts")
     return artifacts
+
+
+def validate_manifest(
+    manifest: dict[str, Any],
+    info: VersionInfo,
+    commit: str,
+    *,
+    root: Path | None = None,
+) -> None:
+    """Validate a release manifest against source metadata and optional files.
+
+    The manifest is used as a release input during recovery, so its identity
+    must be derived from the checked-out source rather than trusted merely
+    because its own hashes are internally consistent.
+    """
+
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        raise ReleaseValidationError("manifest commit must be a full SHA-1")
+    expected = {
+        "schema",
+        "project",
+        "version",
+        "npm_version",
+        "tag",
+        "channel",
+        "commit",
+        "npm_dist_tag",
+        "github_prerelease",
+        "artifacts",
+    }
+    if set(manifest) != expected:
+        raise ReleaseValidationError("release manifest has invalid fields")
+    if (
+        manifest["schema"] != 1
+        or manifest["project"] != PROJECT_NAME
+        or manifest["version"] != info.python_version
+        or manifest["npm_version"] != info.npm_version
+        or manifest["tag"] != info.tag
+        or manifest["channel"] != info.channel
+        or manifest["commit"] != commit
+        or manifest["npm_dist_tag"] != info.npm_dist_tag
+        or manifest["github_prerelease"] is not info.github_prerelease
+    ):
+        raise ReleaseValidationError("release manifest does not match checked-out source metadata")
+
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, list) or len(artifacts) != 3:
+        raise ReleaseValidationError("release manifest must contain exactly three artifacts")
+    normalized = [_validate_artifact_descriptor(item, index) for index, item in enumerate(artifacts)]
+    if {item["kind"] for item in normalized} != {"wheel", "sdist", "npm"}:
+        raise ReleaseValidationError("release manifest must contain wheel, sdist, and npm artifacts")
+    if len({item["name"] for item in normalized}) != len(normalized):
+        raise ReleaseValidationError("release manifest contains duplicate artifact names")
+    if len({item["path"] for item in normalized}) != len(normalized):
+        raise ReleaseValidationError("release manifest contains duplicate artifact paths")
+
+    by_kind = {item["kind"]: item for item in normalized}
+    normalized_name = PROJECT_NAME.replace("-", "_")
+    if not (
+        by_kind["wheel"]["name"].startswith(f"{normalized_name}-{info.python_version}-")
+        and by_kind["wheel"]["name"].endswith(".whl")
+    ):
+        raise ReleaseValidationError(f"wheel does not identify version {info.python_version}")
+    if by_kind["sdist"]["name"] != f"{normalized_name}-{info.python_version}.tar.gz":
+        raise ReleaseValidationError(f"sdist name is not for version {info.python_version}")
+    if by_kind["npm"]["name"] != f"{PROJECT_NAME}-{info.npm_version}.tgz":
+        raise ReleaseValidationError(f"npm tarball name is not for version {info.npm_version}")
+
+    if root is None:
+        return
+    if not root.is_dir():
+        raise ReleaseValidationError(f"release root is not a directory: {root}")
+    resolved_root = root.resolve()
+    approved_paths = {artifact["path"] for artifact in normalized}
+    for artifact in normalized:
+        path = _safe_artifact_path(resolved_root, artifact["path"], "release artifact path")
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise ReleaseValidationError(f"manifest artifact is missing: {path}") from exc
+        if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+            raise ReleaseValidationError(f"manifest artifact is not a regular file: {path}")
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise ReleaseValidationError(f"cannot read release artifact {path}") from exc
+        if len(data) != artifact["size"]:
+            raise ReleaseValidationError(f"manifest artifact size mismatch: {artifact['name']}")
+        if hashlib.sha256(data).hexdigest() != artifact["sha256"]:
+            raise ReleaseValidationError(f"manifest artifact hash mismatch: {artifact['name']}")
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode("ascii")
+        if integrity != artifact["sha512_integrity"]:
+            raise ReleaseValidationError(
+                f"manifest artifact integrity mismatch: {artifact['name']}"
+            )
+    for path in resolved_root.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(resolved_root).as_posix()
+        if path.suffix == ".whl" or path.name.endswith(".tar.gz") or path.suffix == ".tgz":
+            if relative not in approved_paths:
+                raise ReleaseValidationError(f"unapproved release artifact is present: {relative}")
 
 
 def _manifest_artifact(manifest: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -615,17 +920,31 @@ def stage_missing(manifest: dict[str, Any], root: Path, destination: Path, names
     wanted = set(names)
     destination.mkdir(parents=True, exist_ok=True)
     for artifact in _artifacts(manifest):
-        if artifact.get("name") not in wanted:
+        name = artifact.get("name")
+        if not isinstance(name, str):
             continue
-        source = root / artifact["path"]
-        if not source.is_file():
+        if name not in wanted:
+            continue
+        if Path(name).name != name or "\\" in name:
+            raise ReleaseValidationError(f"manifest artifact has an unsafe name: {name}")
+        source = _safe_artifact_path(root, artifact.get("path"), "manifest artifact path")
+        try:
+            metadata = source.lstat()
+        except OSError as exc:
+            raise ReleaseValidationError(f"manifest artifact is missing: {source}") from exc
+        if not stat.S_ISREG(metadata.st_mode) or source.is_symlink():
             raise ReleaseValidationError(f"manifest artifact is missing: {source}")
         shutil.copyfile(source, destination / artifact["name"])
 
 
 def verify_staged(manifest: dict[str, Any], root: Path, destination: Path) -> None:
     expected = {item["name"]: item for item in _artifacts(manifest)}
-    observed = sorted(path.name for path in destination.iterdir() if path.is_file())
+    observed = []
+    for path in destination.iterdir():
+        if path.is_symlink():
+            raise ReleaseValidationError(f"staged artifact is not a regular file: {path.name}")
+        if path.is_file():
+            observed.append(path.name)
     for name in observed:
         if name not in expected:
             raise ReleaseValidationError(f"staged artifact is not approved: {name}")
@@ -653,8 +972,17 @@ def _validate_manifest_binding(manifest: dict[str, Any], tag: str, commit: str) 
         raise ReleaseValidationError("release manifest does not bind to the expected tag and commit")
 
 
-def _github_get(url: str, token: str) -> dict[str, Any] | list[Any] | None:
-    result = _request_read(url, headers=_auth_headers(token))
+def _github_get(
+    url: str,
+    token: str,
+    *,
+    opener: Callable[..., Any] | None = None,
+) -> dict[str, Any] | list[Any] | None:
+    _validate_github_api_url(url)
+    request_args: dict[str, Any] = {"headers": _auth_headers(token)}
+    if opener is not None:
+        request_args["opener"] = opener
+    result = _request_read(url, **request_args)
     if response_class(result.status) == "not_found":
         return None
     try:
@@ -673,25 +1001,47 @@ def _github_write(url: str, token: str, payload: dict[str, Any], *, content_type
     return _json_result(result, "GitHub API write")
 
 
-def _asset_matches(asset: dict[str, Any], expected: dict[str, Any], token: str) -> bool:
+def _asset_matches(
+    asset: dict[str, Any],
+    expected: dict[str, Any],
+    token: str,
+    *,
+    repo: str | None = None,
+    opener: Callable[..., Any] | None = None,
+) -> bool:
     if asset.get("name") != MANIFEST_NAME or asset.get("size") != expected["size"]:
         return False
-    digest = asset.get("digest")
-    if digest:
-        return digest == f"sha256:{expected['sha256']}"
     asset_url = asset.get("url")
     if not isinstance(asset_url, str):
         return False
+    _validate_github_asset_url(asset_url, repo=repo)
+    digest = asset.get("digest")
+    if digest:
+        return digest == f"sha256:{expected['sha256']}"
+    request_args: dict[str, Any] = {
+        "headers": _auth_headers(token, "application/octet-stream")
+    }
+    if opener is not None:
+        request_args["opener"] = opener
     result = _request_read(
         asset_url,
-        headers=_auth_headers(token, "application/octet-stream"),
+        **request_args,
     )
     return hashlib.sha256(result.body).hexdigest() == expected["sha256"]
 
 
-def _load_release_manifest(repo: str, tag: str, token: str) -> dict[str, Any]:
+def _load_release_manifest(
+    repo: str,
+    tag: str,
+    token: str,
+    *,
+    opener: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
     url = f"{GITHUB_API_URL}/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}"
-    release = _github_get(url, token)
+    if opener is None:
+        release = _github_get(url, token)
+    else:
+        release = _github_get(url, token, opener=opener)
     if not isinstance(release, dict):
         raise ReleaseValidationError("expected GitHub release was not found")
     if release.get("tag_name") != tag or release.get("draft") is True:
@@ -708,10 +1058,13 @@ def _load_release_manifest(repo: str, tag: str, token: str) -> dict[str, Any]:
     asset_url = asset.get("url")
     if not isinstance(asset_url, str):
         raise ReleaseValidationError("checksum manifest asset has no API URL")
-    result = _request_read(
-        asset_url,
-        headers=_auth_headers(token, "application/octet-stream"),
-    )
+    _validate_github_asset_url(asset_url, repo=repo)
+    request_args: dict[str, Any] = {
+        "headers": _auth_headers(token, "application/octet-stream")
+    }
+    if opener is not None:
+        request_args["opener"] = opener
+    result = _request_read(asset_url, **request_args)
     if isinstance(asset.get("size"), int) and asset["size"] != len(result.body):
         raise ReleaseValidationError("checksum manifest asset size mismatch")
     digest = asset.get("digest")
@@ -776,7 +1129,7 @@ def ensure_github_release(repo: str, manifest: dict[str, Any], manifest_path: Pa
     }
     matching = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == MANIFEST_NAME]
     if matching:
-        if len(matching) != 1 or not _asset_matches(matching[0], expected, token):
+        if len(matching) != 1 or not _asset_matches(matching[0], expected, token, repo=repo):
             raise ReleaseValidationError("existing checksum manifest asset does not match")
         return
     upload_url = release.get("upload_url")
@@ -790,14 +1143,14 @@ def ensure_github_release(repo: str, manifest: dict[str, Any], manifest_path: Pa
     try:
         uploaded = _request_write(upload_url, data=data, headers=headers)
         uploaded_asset = _json_result(uploaded, "GitHub asset upload")
-        if not _asset_matches(uploaded_asset, expected, token):
+        if not _asset_matches(uploaded_asset, expected, token, repo=repo):
             raise ReleaseValidationError("uploaded checksum manifest asset does not match")
     except ReleaseValidationError as exc:
         reread = _github_get(url, token)
         if isinstance(reread, dict):
             reread_assets = reread.get("assets", [])
             matches = [item for item in reread_assets if isinstance(item, dict) and item.get("name") == MANIFEST_NAME]
-            if len(matches) == 1 and _asset_matches(matches[0], expected, token):
+            if len(matches) == 1 and _asset_matches(matches[0], expected, token, repo=repo):
                 return
         raise exc
 
