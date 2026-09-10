@@ -21,7 +21,7 @@ This is the shortest path. It installs the package, writes the exact starter
 configuration filename, and installs a repository-local `pre-push` delegate:
 
 ```bash
-python -m pip install ai-push-hooks==0.2.1
+python -m pip install ai-push-hooks==0.3.0
 ai-push-hooks init --template minimal-docs
 ai-push-hooks install
 ```
@@ -33,9 +33,9 @@ the bare remote. The first command above can instead be `uv tool install
 ai-push-hooks` or `pipx install ai-push-hooks` when using an isolated
 application environment.
 
-These instructions describe the `0.2.1` beta release. npm exposes it through
+These instructions describe the `0.3.0` beta release. npm exposes it through
 the `beta` dist-tag; PyPI has no separate beta channel, so Python installation
-must select the exact `0.2.1` version. Published `0.1.19` artifacts retain
+must select the exact `0.3.0` version. Published `0.1.19` artifacts retain
 historical provenance and must not be assumed to contain this release's
 `install` command.
 
@@ -56,7 +56,7 @@ npx --no-install ai-push-hooks install
 # or: pnpm add -D ai-push-hooks && pnpm exec ai-push-hooks install
 ```
 
-Use `ai-push-hooks@0.2.1` instead of `@beta` when an exact npm version pin is
+Use `ai-push-hooks@0.3.0` instead of `@beta` when an exact npm version pin is
 required.
 
 The npm package does not contain a Python runtime. Ensure the Python
@@ -66,18 +66,11 @@ registry lookup or global-package fallback.
 
 ### Version boundary
 
-**Published `0.2.1`.** The published beta is the compatibility baseline. Its
-model-backed workflow spelling was historically `type = "llm"`, and it does not
-promise the source-tree runner profiles or pluggable workflow steps described
-below.
-
-**Source-unreleased in this checkout.** The current source uses `type = "ask"`
-(not `llm` or `agent`), adds repository-local Python callbacks and direct
-`exec`/`assert` commands, and supports named runner profiles. These examples
-are copyable source-tree configuration, not a claim that the published
-`0.2.1` wheel or npm package already contains them. There is no compatibility
-alias: update the configuration when consuming a release that publishes this
-rename.
+**Published `0.3.0` beta.** This release uses `type = "ask"` (not `llm` or
+`agent`), adds repository-local Python callbacks and direct `exec`/`assert`
+commands, and supports named runner profiles. The previous `0.2.1` beta used
+`type = "llm"`; there is no compatibility alias, so update configurations when
+upgrading to this release.
 
 **Deferred/proposed.** Automatic discovery, installed-module references,
 package-relative hook loading, a plugin SDK, remote services, sandboxing, and a
@@ -106,25 +99,23 @@ resolved. The fallback delegate fails clearly with status 127 if
 Pin an approved published release in the consuming repository:
 
 ```bash
-mise use npm:ai-push-hooks@0.2.1
+mise use npm:ai-push-hooks@0.3.0
 ```
 
 This adds the following project-level tool entry to `mise.toml` and installs it:
 
 ```toml
 [tools]
-"npm:ai-push-hooks" = "0.2.1"
+"npm:ai-push-hooks" = "0.3.0"
 ```
 
 After checking in `mise.toml`, other contributors can install the pinned tool with `mise install`.
 
 ### Runner profiles and access modes
 
-> **Unreleased source note:** The selectable runner profiles described here are
-> source-tree behavior and are not included in the published `0.2.1` wheel or
-> npm artifacts. Do not assume `pip install ai-push-hooks==0.2.1` or
-> `ai-push-hooks@beta` provides this feature until a release explicitly includes
-> it.
+> **Published in the `0.3.0` beta:** selectable runner profiles are available
+> in both the Python wheel and npm package. The default OpenCode profile retains
+> its artifact-only compatibility boundary; project access remains explicit.
 
 `ask` and `apply` steps select a strict named profile. `[llm].runner` is the
 workflow default; a `runner` on an individual `ask` or `apply` step overrides it.
@@ -248,7 +239,7 @@ and atomic file replacement reduce lost updates; they are not an atomic
 compare-and-swap against an arbitrary external writer. No rollback is attempted
 over pre-existing user changes.
 
-## Pluggable workflow steps (source-unreleased)
+## Pluggable workflow steps
 
 The source tree supports two deliberately small extension seams. A deterministic
 step may use one repository-local Python callback, or `exec`/`assert` may use a

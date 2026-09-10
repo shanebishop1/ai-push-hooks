@@ -4,14 +4,23 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.3.0] - 2026-09-09
+
+This is a beta feature release. Python and npm both use `0.3.0`, the canonical
+Git tag is `v0.3.0`, npm uses the `beta` dist-tag, and GitHub marks the release
+as a prerelease. PyPI does not provide a separate beta channel, so Python users
+must select the exact `0.3.0` version.
+
 ### Added
 
 - Added strict named runner profiles for OpenCode, Codex, Claude, and direct
   shell-free command adapters, with global and per-`ask`/`apply` selection.
 - Added explicit project-aware analysis and broad, bounded project apply staging
   while retaining allowlisted propagation and the artifact-only OpenCode default.
-- [Source-unreleased] Added repository-local Python callbacks for `collect`,
-  `exec`, and `assert`, plus direct argv commands for `exec` and `assert`.
+- Added repository-local Python callbacks for `collect`, `exec`, and `assert`,
+  plus direct argv commands for `exec` and `assert`.
 
 ### Changed
 
@@ -21,9 +30,8 @@ All notable changes to this project are documented here. The format is based on 
 - Documented authentication ownership, provider data exposure, custom-command
   and Pi trust/concurrency, protected and ignored apply inputs, and the
   no-sandbox boundary.
-- [Source-unreleased] Renamed the workflow step spelling from `llm` to `ask`
-  without an `llm` or `agent` alias. The shared `[llm]` model policy keeps its
-  historical name.
+- Renamed the workflow step spelling from `llm` to `ask` without an `llm` or
+  `agent` alias. The shared `[llm]` model policy keeps its historical name.
 
 ### Fixed
 
@@ -33,10 +41,9 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Compatibility and deferred work
 
-- Published `0.2.1` remains the beta compatibility baseline and historically
-  used `llm` as the model-backed workflow-step spelling. The source-unreleased
-  `ask` rename is deliberately documented separately and is not represented as
-  a retroactive change to the `0.2.1` notes.
+- Published `0.2.1` remains the historical beta baseline and used `llm` as the
+  model-backed workflow-step spelling. Upgrading to `0.3.0` requires changing
+  that step spelling to `ask`; the old spelling is not accepted.
 - [Deferred/proposed] Automatic discovery, an SDK, installed-module hooks,
   sandboxing, and a universal external-agent observer remain out of scope.
 
@@ -115,7 +122,8 @@ the exact `0.2.0` version rather than a PyPI beta channel.
 - Preserved Git porcelain paths and protected pre-existing dirty allowlisted files during apply steps.
 - Clarified module-local artifact references and standardized the repository hook integration.
 
-[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.1.19...v0.2.0
 [0.1.19]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.1.18...v0.1.19

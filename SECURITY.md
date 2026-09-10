@@ -38,11 +38,12 @@ policy; it does not claim that a transcript was captured. A provider may have
 already received the request even when local export fails. Do not use local
 transcript files as proof that provider-side data was deleted.
 
-## Repository callbacks and commands (source-unreleased)
+## Repository callbacks and commands
 
-The published `0.2.1` beta predates the source-tree `ask` spelling, repository
-Python callbacks, and direct `exec`/`assert` commands. The following boundary
-describes the current source only; it is not a published-package promise.
+The published `0.3.0` beta includes the `ask` spelling, repository Python
+callbacks, and direct `exec`/`assert` commands. The previous `0.2.1` beta used
+`llm` for model-backed workflow steps; there is no compatibility alias, so
+configurations must be updated when upgrading.
 
 A callback reference is one contained, no-follow regular `.py` file plus one
 top-level callable. It is loaded lazily only after module, environment, and
