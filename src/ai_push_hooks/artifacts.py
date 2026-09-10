@@ -194,16 +194,3 @@ class ArtifactStore:
                 )
             raise HookError(f"Unknown artifact reference: {reference}")
         return path
-
-    def register_external(
-        self,
-        state: ModuleRuntimeState,
-        module_id: str,
-        step_id: str,
-        artifact_name: str,
-        path: pathlib.Path,
-    ) -> None:
-        validate_path_component(module_id, "Artifact module id")
-        validate_path_component(step_id, "Artifact step id")
-        validate_path_component(artifact_name, "Artifact name")
-        state.artifacts[f"{module_id}:{step_id}/{artifact_name}"] = path

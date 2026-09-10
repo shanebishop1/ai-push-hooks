@@ -7,7 +7,7 @@ import pytest
 
 from ai_push_hooks.artifacts import generate_run_id
 from ai_push_hooks.config import load_config, resolve_runner_profile
-from ai_push_hooks.executors import exec as exec_module
+from ai_push_hooks import git_utils
 from ai_push_hooks.types import HookError
 
 from .conftest import init_repo
@@ -427,9 +427,9 @@ def test_collect_ranges_uses_configured_base_branch_for_new_remote_branch(monkey
             return base_oid
         return ""
 
-    monkeypatch.setattr(exec_module, "git", fake_git)
+    monkeypatch.setattr(git_utils, "git", fake_git)
 
-    ranges = exec_module.collect_ranges_from_stdin(
+    ranges = git_utils.collect_ranges_from_stdin(
         pathlib.Path("/repo"),
         "origin",
         [f"refs/heads/feature/x {local_oid} refs/heads/feature/x {'0' * 40}"],
@@ -478,7 +478,7 @@ def test_resolve_storage_path_rejects_symlink_escape(tmp_path: pathlib.Path) -> 
     (repo_root / "logs").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(HookError, match="symlink"):
-        exec_module.resolve_storage_path(repo_root, git_dir, "logs/output")
+        git_utils.resolve_storage_path(repo_root, git_dir, "logs/output")
 
 
 def test_resolve_storage_path_rejects_git_namespace_symlink(tmp_path: pathlib.Path) -> None:
@@ -490,7 +490,7 @@ def test_resolve_storage_path_rejects_git_namespace_symlink(tmp_path: pathlib.Pa
     (git_dir / "ai-push-hooks").symlink_to(objects, target_is_directory=True)
 
     with pytest.raises(HookError, match="symlink"):
-        exec_module.resolve_storage_path(
+        git_utils.resolve_storage_path(
             repo_root, git_dir, ".git/ai-push-hooks/logs"
         )
 

@@ -21,15 +21,15 @@ from ..paths import (
     sanitize_file_mode,
 )
 from ..types import HookError, ModuleRuntimeState, RuntimeContext, StepConfig
-from .exec import (
+from ..git_utils import (
     list_repo_changes,
     path_matches,
     resolve_git_common_dir,
     resolve_git_dir,
     run_command,
 )
-from .ask import validate_opencode_attachments
 from .runner_workflow import run_runner_once
+from .runners.opencode_support import validate_hook_owned_artifacts
 
 METADATA_MAX_FILES = 20_000
 METADATA_MAX_BYTES = 64 * 1024 * 1024
@@ -815,7 +815,7 @@ def run_apply_step(
     input_paths: list[pathlib.Path],
     stage_name: str,
 ) -> dict[str, object]:
-    validated_inputs = validate_opencode_attachments(context, input_paths)
+    validated_inputs = validate_hook_owned_artifacts(context, input_paths)
     for input_path in validated_inputs:
         if input_path.name.endswith("issues.json"):
             issues = json.loads(input_path.read_text(encoding="utf-8"))

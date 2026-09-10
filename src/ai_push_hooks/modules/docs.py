@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ..types import CollectorResult, RuntimeContext
-from ..executors.exec import collect_commit_messages_for_ranges, git, path_matches, run_command
+from ..git_utils import collect_commit_messages_for_ranges, git, path_matches, run_command
 
 DOC_INCLUDE_PATTERNS = ("README.md", "docs/**/*.md")
 DOC_IGNORE_PATTERNS = ("docs/archive/**",)

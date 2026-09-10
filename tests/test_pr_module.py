@@ -11,6 +11,7 @@ from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.engine import WorkflowEngine
 from ai_push_hooks.executors import exec as exec_module
 from ai_push_hooks.executors.exec import gh_pr_create_executor
+from ai_push_hooks import git_utils
 from ai_push_hooks.types import HookError, ModuleConfig, StepConfig
 
 from .conftest import build_context, init_repo, make_config
@@ -111,17 +112,16 @@ def test_gh_pr_create_defaults_to_configured_base_branch(tmp_path: pathlib.Path,
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "lookup_open_pr_url",
         lambda repo_root, branch_name, base_branch="", repository="": "",
     )
-    monkeypatch.setattr(exec_module, "remote_branch_exists", lambda repo_root, remote_name, branch_name: True)
 
     def fake_run_command(args, cwd, **kwargs):
         captured["args"] = args
         return type("Completed", (), {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""})()
 
-    monkeypatch.setattr(exec_module, "run_command", fake_run_command)
+    monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
     result = gh_pr_create_executor(context, type("State", (), {"metadata": {}})(), config.modules["pr"].steps[-1], [payload])
 
@@ -146,7 +146,7 @@ def test_gh_pr_create_cannot_override_pushed_head_or_configured_base(
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "lookup_open_pr_url",
         lambda repo_root, branch_name, base_branch="", repository="": "",
     )
@@ -159,7 +159,7 @@ def test_gh_pr_create_cannot_override_pushed_head_or_configured_base(
             {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""},
         )()
 
-    monkeypatch.setattr(exec_module, "run_command", fake_run_command)
+    monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
     result = gh_pr_create_executor(
         context,
@@ -183,7 +183,7 @@ def test_initial_push_returns_actionable_deferred_result_without_calling_gh(
     payload = context.run_dir / "pr-draft.json"
     payload.write_text('{"title":"Title","body":"Body"}\n', encoding="utf-8")
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "run_command",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gh must not run")),
     )
@@ -212,12 +212,12 @@ def test_gh_pr_create_does_not_create_after_lookup_failure(
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "lookup_open_pr_url",
         lambda *args, **kwargs: (_ for _ in ()).throw(HookError("gh lookup failed")),
     )
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "run_command",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("PR creation must not follow a failed lookup")
@@ -244,9 +244,9 @@ def test_gh_pr_create_reuses_existing_open_pr_without_creating_another(
     existing_url = "https://github.com/test/repo/pull/42"
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(exec_module, "lookup_open_pr_url", lambda *args, **kwargs: existing_url)
+    monkeypatch.setattr(git_utils, "lookup_open_pr_url", lambda *args, **kwargs: existing_url)
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "run_command",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("an existing PR must be reused")
@@ -306,10 +306,10 @@ def test_open_pr_lookup_is_scoped_to_configured_base(
         captured["args"] = args
         return type("Completed", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
 
-    monkeypatch.setattr(exec_module, "run_command", fake_run_command)
+    monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
     assert (
-        exec_module.lookup_open_pr_url(
+        git_utils.lookup_open_pr_url(
             repo, "feature/pushed", "develop", "owner/repository"
         )
         == ""
@@ -332,19 +332,19 @@ def test_github_repository_is_derived_from_supported_push_urls(
 ) -> None:
     repo = init_repo(tmp_path)
 
-    assert exec_module.resolve_github_repository(repo, "origin", remote_url) == (
+    assert git_utils.resolve_github_repository(repo, "origin", remote_url) == (
         "owner/repository"
     )
 
 
 def test_github_repository_can_be_derived_from_validated_remote_name(tmp_path) -> None:
     repo = init_repo(tmp_path)
-    exec_module.git(
+    git_utils.git(
         repo,
         ["remote", "add", "origin", "git@github.com:owner/repository.git"],
     )
 
-    assert exec_module.resolve_github_repository(repo, "origin", "") == "owner/repository"
+    assert git_utils.resolve_github_repository(repo, "origin", "") == "owner/repository"
 
 
 def test_pr_context_fails_closed_when_push_repository_cannot_be_determined(
@@ -356,7 +356,7 @@ def test_pr_context_fails_closed_when_push_repository_cannot_be_determined(
     context.remote_url = "file:///tmp/not-github.git"
     monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "lookup_open_pr_url",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("lookup must not run without a safe repository scope")

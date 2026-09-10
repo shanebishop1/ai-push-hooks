@@ -8,7 +8,8 @@ from .artifacts import ArtifactStore
 from .config import resolve_prompt_text
 from .executors.apply import run_apply_step
 from .executors.assertions import ASSERTION_HANDLERS
-from .executors.exec import EXEC_HANDLERS, env_bool
+from .executors.exec import EXEC_HANDLERS
+from .git_utils import env_bool
 from .executors.ask import run_ask_step
 from .executors.step_commands import execute_step_command
 from .modules import COLLECTORS

@@ -1,8 +1,8 @@
 """OpenCode adapter for the internal runner boundary.
 
-The compatibility invocation deliberately remains the shipped ``opencode
-run`` shape.  This module owns the adapter-level protocol and lifecycle
-semantics; workflow retries and JSON/schema handling remain in orchestration.
+The adapter deliberately retains the shipped ``opencode run`` shape.  This
+module owns the adapter-level protocol and lifecycle semantics; workflow
+retries and JSON/schema handling remain in orchestration.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import sys
 import tempfile
 from typing import Any
 
-from ..ask import (
+from .opencode_support import (
     OPENCODE_APPLY_AGENT,
     OPENCODE_READ_ONLY_AGENT,
     _transcript_dir,
@@ -23,10 +23,9 @@ from ..ask import (
     opencode_isolation_env,
     resolve_opencode_executable,
     sanitize_filename_component,
-    validate_opencode_attachments,
+    validate_hook_owned_artifacts,
 )
-from ...paths import resolve_contained_path, write_text_no_follow
-from ...paths import ensure_private_directory
+from ...paths import ensure_private_directory, resolve_contained_path, write_text_no_follow
 from .process import ProcessResult
 from .contracts import (
     RunnerCapabilities,
@@ -159,7 +158,7 @@ class OpenCodeRunner:
         # Validate source ownership and symlink traversal before making any
         # copy.  The source is then never reopened: its logical snapshot is
         # the only content sent through OpenCode's native --file transport.
-        validate_opencode_attachments(
+        validate_hook_owned_artifacts(
             context,
             [path for path in original_paths if path is not None],
         )
@@ -251,6 +250,27 @@ class OpenCodeRunner:
         argv.extend(["--", prompt])
         return argv
 
+    @staticmethod
+    def _require_staging_directory(context: Any, working_directory: pathlib.Path) -> None:
+        """Reject repository worktrees as apply targets.
+
+        The apply workflow supplies a disposable, non-VCS staging projection.
+        A runner request can identify the repository root and the selected cwd,
+        but it cannot turn an arbitrary host directory into a sandbox.  Refuse
+        the known unsafe cases at this boundary instead of granting edit
+        permissions to the checked-out repository.
+        """
+
+        repository_root = context.repo_root.resolve(strict=True)
+        if working_directory == repository_root or working_directory.is_relative_to(repository_root):
+            raise RunnerContractError(
+                "OpenCode apply requests require an isolated staging directory"
+            )
+        if any((parent / ".git").exists() for parent in (working_directory, *working_directory.parents)):
+            raise RunnerContractError(
+                "OpenCode apply requests require a non-VCS isolated staging directory"
+            )
+
     def run(self, request: RunnerRequest) -> RunnerResult:
         if request.runner_type != "opencode":
             raise RunnerContractError(
@@ -268,8 +288,17 @@ class OpenCodeRunner:
         else:
             working_directory = None
 
-        if working_directory is not None and not working_directory.is_dir():
-            raise RunnerContractError("OpenCode request cwd must be an existing directory")
+        if working_directory is not None:
+            try:
+                working_directory = working_directory.resolve(strict=True)
+            except (OSError, RuntimeError) as exc:
+                raise RunnerContractError(
+                    "OpenCode request cwd must be an existing directory"
+                ) from exc
+            if not working_directory.is_dir():
+                raise RunnerContractError("OpenCode request cwd must be an existing directory")
+            if request.mode == "apply":
+                self._require_staging_directory(context, working_directory)
 
         agent = "apply" if request.mode == "apply" else "read-only"
         _agent_name, security_config = build_opencode_security_config(
@@ -325,7 +354,7 @@ class OpenCodeRunner:
                     with tempfile.TemporaryDirectory(prefix="ai-push-hooks-readonly-") as directory:
                         completed = invoke(pathlib.Path(directory).resolve(strict=True))
                 else:
-                    completed = invoke(working_directory.resolve(strict=True))
+                    completed = invoke(working_directory)
             except (RunnerError,) as error:
                 process_result = getattr(error, "_process_result", None)
                 partial_stdout = (

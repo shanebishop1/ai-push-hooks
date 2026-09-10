@@ -54,15 +54,15 @@ def _safe_input_artifacts(
 ) -> tuple[RunnerArtifact, ...]:
     """Build the ordered logical artifact list shared by every adapter.
 
-    ``validate_opencode_attachments`` is retained as the hook-owned artifact
-    boundary used by the shipped implementation.  The logical names are the
+    ``validate_hook_owned_artifacts`` is the hook-owned artifact boundary used
+    before adapter dispatch.  The logical names are the
     configured input references, rather than filesystem basenames, so command,
     Codex, Claude, and OpenCode receive the same ordered context.
     """
 
-    from .ask import validate_opencode_attachments
+    from .runners.opencode_support import validate_hook_owned_artifacts
 
-    validated = validate_opencode_attachments(context, input_paths)
+    validated = validate_hook_owned_artifacts(context, input_paths)
     if len(validated) != len(step.inputs):
         raise HookError(
             f"Runner input count does not match configured inputs for step `{step.id}`"

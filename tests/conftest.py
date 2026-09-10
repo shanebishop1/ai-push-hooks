@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from ai_push_hooks.artifacts import ArtifactStore
-from ai_push_hooks.executors.exec import resolve_git_dir
+from ai_push_hooks.git_utils import resolve_git_dir
 from ai_push_hooks.prompts_builtin import MINIMAL_DOCS_TEMPLATE
 from ai_push_hooks.types import GeneralConfig, HookConfig, HookLogger, LlmConfig, LoggingConfig, ModuleConfig, PushRefUpdate, RuntimeContext, WorkflowConfig
 

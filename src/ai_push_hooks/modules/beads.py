@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..executors.exec import collect_commit_messages_for_ranges, is_feature_branch
+from ..git_utils import collect_commit_messages_for_ranges, is_feature_branch
 from ..types import CollectorResult, RuntimeContext
 
 

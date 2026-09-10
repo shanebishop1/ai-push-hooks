@@ -8,7 +8,7 @@ import stat
 from collections.abc import Mapping
 from typing import Any
 
-from .executors.exec import env_bool, resolve_git_common_dir, resolve_git_dir
+from .git_utils import env_bool, resolve_git_common_dir, resolve_git_dir
 from .paths import (
     is_path_within,
     normalized_component,

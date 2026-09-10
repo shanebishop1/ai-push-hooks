@@ -6,8 +6,8 @@ import subprocess
 
 import pytest
 
-from ai_push_hooks.executors import exec as exec_module
-from ai_push_hooks.executors.exec import collect_changed_files, collect_diff
+from ai_push_hooks import git_utils
+from ai_push_hooks.git_utils import collect_changed_files, collect_diff
 from ai_push_hooks.types import HookError
 
 from .conftest import init_repo
@@ -51,7 +51,7 @@ def test_changed_files_preserve_surrogateescape(
     completed = subprocess.CompletedProcess(
         ["git", "diff"], 0, stdout=f"{escaped_name}\x00", stderr=""
     )
-    monkeypatch.setattr(exec_module, "run_command", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(git_utils, "run_command", lambda *args, **kwargs: completed)
 
     assert collect_changed_files(pathlib.Path("."), ["range"]) == [escaped_name]
 

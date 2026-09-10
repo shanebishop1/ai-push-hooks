@@ -10,7 +10,7 @@ from .artifacts import ArtifactStore, generate_run_id
 from .config import load_config
 from .engine import WorkflowEngine
 from .paths import ensure_private_directory, resolve_contained_path, write_text_no_follow
-from .executors.exec import (
+from .git_utils import (
     collect_changed_files,
     collect_diff,
     collect_revision_ranges,

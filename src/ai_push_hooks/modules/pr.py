@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..executors.exec import (
+from ..git_utils import (
     collect_commit_messages_for_ranges,
     env_bool,
     initial_pr_defer_reason,

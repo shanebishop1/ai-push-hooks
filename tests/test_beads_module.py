@@ -9,12 +9,13 @@ import pytest
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.engine import WorkflowEngine
 from ai_push_hooks.executors import exec as exec_module
+from ai_push_hooks import git_utils
+from ai_push_hooks.git_utils import collect_commit_messages_for_ranges
 from ai_push_hooks.executors.exec import (
     BEADS_ALIGNMENT_MAX_COMMANDS,
     BEADS_ALIGNMENT_TIMEOUT_SECONDS,
     BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS,
     beads_alignment_executor,
-    collect_commit_messages_for_ranges,
 )
 from ai_push_hooks.types import HookError, ModuleConfig, ModuleRuntimeState, StepConfig
 
@@ -190,7 +191,7 @@ def test_beads_alignment_executes_only_validated_alignment_commands(
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr("ai_push_hooks.executors.exec.resolve_beads_executable", fake_resolve)
-    monkeypatch.setattr("ai_push_hooks.executors.exec.run_command", fake_run_command)
+    monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
     result = beads_alignment_executor(
         context,
@@ -263,7 +264,7 @@ def test_beads_alignment_rejects_untrusted_commands_before_any_execution(
     )
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.exec.run_command",
+        "ai_push_hooks.git_utils.run_command",
         lambda args, **kwargs: calls.append(args),
     )
 
@@ -299,7 +300,7 @@ def test_beads_alignment_rejects_excessive_command_count_before_execution(
     )
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        "ai_push_hooks.executors.exec.run_command",
+        "ai_push_hooks.git_utils.run_command",
         lambda args, **kwargs: calls.append(args),
     )
 
@@ -340,7 +341,7 @@ def test_beads_alignment_enforces_total_execution_budget(
         "ai_push_hooks.executors.exec.resolve_beads_executable", lambda _repo: "/safe/bin/bd"
     )
     monkeypatch.setattr(
-        "ai_push_hooks.executors.exec.run_command",
+        "ai_push_hooks.git_utils.run_command",
         lambda args, **kwargs: calls.append(args),
     )
 
@@ -368,7 +369,7 @@ def test_beads_alignment_reports_report_write_failure(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "ai_push_hooks.executors.exec.write_text_file", lambda *args, **kwargs: False
+        "ai_push_hooks.git_utils.write_text_file", lambda *args, **kwargs: False
     )
 
     with pytest.raises(HookError, match="Failed to write Beads alignment report"):

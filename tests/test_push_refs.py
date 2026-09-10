@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from ai_push_hooks import hook as hook_module
-from ai_push_hooks.executors.exec import (
+from ai_push_hooks.git_utils import (
     collect_changed_files,
     collect_commit_messages_for_ranges,
     collect_ranges_from_stdin,

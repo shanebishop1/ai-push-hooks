@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import pathlib
 import stat
-import subprocess
 from dataclasses import replace
 from types import SimpleNamespace
 
 from ai_push_hooks import paths as path_utils
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.config import load_config
-from ai_push_hooks.executors.ask import finalize_opencode_session
+from ai_push_hooks.executors.runners import (
+    ProcessResult,
+    RunnerRequest,
+    RunnerResult,
+    SessionMetadata,
+)
+from ai_push_hooks.executors.runners.opencode import OpenCodeRunner
 from ai_push_hooks.hook import _build_logger, _write_summary
 from ai_push_hooks.types import ModuleRuntimeState
 
@@ -18,6 +23,20 @@ from .conftest import build_context, init_repo
 
 def _mode(path: pathlib.Path) -> int:
     return stat.S_IMODE(path.lstat().st_mode)
+
+
+def _lifecycle_request(context) -> RunnerRequest:
+    return RunnerRequest(
+        profile_id="opencode",
+        runner_type="opencode",
+        stage="docs.query",
+        purpose="ask:query",
+        mode="ask",
+        instruction="prompt",
+        cwd=context.repo_root,
+        timeout_seconds=3,
+        integration_context=context,
+    )
 
 
 def test_runtime_directories_and_files_are_private_by_default(tmp_path, monkeypatch) -> None:
@@ -42,13 +61,18 @@ def test_runtime_directories_and_files_are_private_by_default(tmp_path, monkeypa
     context.logger.status("test.private", "private runtime output")
     _write_summary(context, {"ok": True})
 
-    def fake_run_command(args, **kwargs):
+    def fake_run_process(args, **kwargs):
         assert not pathlib.Path(kwargs["cwd"]).is_relative_to(repo.resolve())
         assert list(kwargs["cwd"].iterdir()) == []
-        return subprocess.CompletedProcess(args, 0, stdout='{"session":"ok"}\n', stderr="")
+        return ProcessResult(0, '{"session":"ok"}\n', "")
 
-    monkeypatch.setattr("ai_push_hooks.executors.ask.run_command", fake_run_command)
-    finalize_opencode_session(context, "docs.query", "session-1")
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process", fake_run_process
+    )
+    OpenCodeRunner().finalize(
+        _lifecycle_request(context),
+        RunnerResult("[]", 0, "", "", SessionMetadata("session-1", "persisted", True)),
+    )
 
     transcript_dir = runtime_root / "transcripts"
     transcript = next(transcript_dir.iterdir())

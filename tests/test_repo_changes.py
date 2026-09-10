@@ -3,8 +3,8 @@ from __future__ import annotations
 import pathlib
 import subprocess
 
-from ai_push_hooks.executors import exec as exec_module
-from ai_push_hooks.executors.exec import list_repo_changes
+from ai_push_hooks import git_utils
+from ai_push_hooks.git_utils import list_repo_changes
 
 
 def test_list_repo_changes_preserves_first_path_character(repo: pathlib.Path) -> None:
@@ -33,7 +33,7 @@ def test_list_repo_changes_decodes_non_utf8_names_with_surrogateescape(
     raw_name = b"invalid-\xff.txt"
     decoded_name = raw_name.decode("utf-8", errors="surrogateescape")
     monkeypatch.setattr(
-        exec_module,
+        git_utils,
         "run_command",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 0, stdout=f"?? {decoded_name}\x00", stderr=""
