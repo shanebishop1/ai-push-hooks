@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -13,6 +14,30 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 FULL_OID_LENGTH = 40
 REQUIRE_LEFTHOOK_ENV = "AI_PUSH_HOOKS_REQUIRE_LEFTHOOK"
+MAX_DIAGNOSTIC_CHARS = 4096
+SAFE_ENV_NAMES = (
+    "PATH",
+    "HOME",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "COMSPEC",
+    "PATHEXT",
+)
+SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)(\b(?:[A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|AUTH|CREDENTIAL)[A-Z0-9_]*|"
+    r"api[-_ ]?key|token|secret|password|authorization|credential)s?\b\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)"
+)
+SENSITIVE_FLAG = re.compile(
+    r"(?i)(--?(?:token|password|secret|api[-_]?key|authorization)\s+)[^\s]+"
+)
 
 
 def _require_lefthook() -> bool:
@@ -32,30 +57,99 @@ def _run(
     timeout: float = 45,
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        input=input_text,
-        check=check,
-        timeout=timeout,
-    )
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            input=input_text,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        diagnostic = _failure_diagnostic(exc.stdout, exc.stderr)
+        suffix = f"\n{diagnostic}" if diagnostic else ""
+        raise AssertionError(
+            f"command timed out after {timeout:g}s: {_safe_command(args)}{suffix}"
+        ) from None
+    except OSError as exc:
+        detail = exc.strerror or exc.__class__.__name__
+        raise AssertionError(f"could not start command {_safe_command(args)}: {detail}") from None
+
+    if check and completed.returncode != 0:
+        diagnostic = _failure_diagnostic(completed.stdout, completed.stderr)
+        suffix = f"\n{diagnostic}" if diagnostic else ""
+        raise AssertionError(
+            f"command exited with status {completed.returncode}: {_safe_command(args)}{suffix}"
+        )
+    return completed
+
+
+def _redact_diagnostic(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = str(value).strip()
+    if not text:
+        return ""
+    text = SENSITIVE_ASSIGNMENT.sub(r"\1<redacted>", text)
+    text = SENSITIVE_FLAG.sub(r"\1<redacted>", text)
+    if len(text) > MAX_DIAGNOSTIC_CHARS:
+        text = text[:MAX_DIAGNOSTIC_CHARS] + "... [diagnostic truncated]"
+    return text
+
+
+def _failure_diagnostic(stdout: str | bytes | None, stderr: str | bytes | None) -> str:
+    sections = []
+    for label, value in (("stderr", stderr), ("stdout", stdout)):
+        diagnostic = _redact_diagnostic(value)
+        if diagnostic:
+            sections.append(f"{label}: {diagnostic}")
+    return "\n".join(sections)
+
+
+def _safe_command(args: list[str]) -> str:
+    command = shlex.join(args)
+    command = SENSITIVE_ASSIGNMENT.sub(r"\1<redacted>", command)
+    command = SENSITIVE_FLAG.sub(r"\1<redacted>", command)
+    if len(command) > 512:
+        command = command[:512] + "... [command truncated]"
+    return command
 
 
 def _git(cwd: pathlib.Path, env: dict[str, str], *args: str) -> str:
     return _run(["git", *args], cwd, env).stdout.strip()
 
 
-def _isolated_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
+def _isolated_env(home: pathlib.Path) -> dict[str, str]:
+    home.mkdir(parents=True, exist_ok=True)
+    temp_dir = home / "tmp"
+    temp_dir.mkdir(exist_ok=True)
+    env = {name: os.environ[name] for name in SAFE_ENV_NAMES if os.environ.get(name)}
+    env["PATH"] = os.pathsep.join(
+        (str(pathlib.Path(sys.executable).parent), os.environ.get("PATH", os.defpath))
+    )
     env.update(
         {
+            "HOME": str(home),
+            "TMPDIR": str(temp_dir),
+            "TMP": str(temp_dir),
+            "TEMP": str(temp_dir),
+            "NPM_CONFIG_USERCONFIG": str(home / "npmrc"),
+            "NPM_CONFIG_CACHE": str(home / "npm-cache"),
+            "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+            "NPM_CONFIG_AUDIT": "false",
+            "NPM_CONFIG_FUND": "false",
+            "NPM_CONFIG_OFFLINE": "true",
+            "PIP_CONFIG_FILE": os.devnull,
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
             "GIT_AUTHOR_NAME": "Installed Hook Test",
             "GIT_AUTHOR_EMAIL": "installed-hook@example.invalid",
             "GIT_COMMITTER_NAME": "Installed Hook Test",
@@ -63,6 +157,41 @@ def _isolated_env() -> dict[str, str]:
         }
     )
     return env
+
+
+def test_installed_harness_environment_excludes_credentials(tmp_path: pathlib.Path, monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("AI_PUSH_HOOKS_TEST_TOKEN", "test-hook-token")
+    env = _isolated_env(tmp_path / "home")
+
+    assert env["PATH"].split(os.pathsep)[0] == str(pathlib.Path(sys.executable).parent)
+    assert env["PATH"].endswith(os.environ.get("PATH", os.defpath))
+    assert env["HOME"] == str(tmp_path / "home")
+    assert env["TMPDIR"] == str(tmp_path / "home" / "tmp")
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert "PYTHONPATH" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert "AI_PUSH_HOOKS_TEST_TOKEN" not in env
+
+
+def test_installed_harness_failure_is_bounded_and_redacted(tmp_path: pathlib.Path) -> None:
+    env = _isolated_env(tmp_path / "home")
+    secret = "test-command-secret"
+    output = f"GITHUB_TOKEN={secret} " + ("payload " * 1200)
+    script = f"import sys; print({output!r}, file=sys.stderr); sys.exit(7)"
+
+    with pytest.raises(AssertionError) as failure:
+        _run([sys.executable, "-c", script], tmp_path, env)
+
+    message = str(failure.value)
+    assert "status 7" in message
+    assert "<redacted>" in message
+    assert secret not in message
+    assert "diagnostic truncated" in message
+    assert "'env'" not in message
+    assert len(message) < MAX_DIAGNOSTIC_CHARS + 1024
 
 
 def _scenario_config(*, reject: bool = False) -> str:
@@ -195,10 +324,11 @@ def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, p
     npm_dir = output / "npm"
     wheel_dir.mkdir()
     npm_dir.mkdir()
+    env = _isolated_env(output / "home")
     _run(
         [sys.executable, "-m", "build", "--wheel", "--outdir", str(wheel_dir)],
         REPO_ROOT,
-        _isolated_env(),
+        env,
         timeout=120,
     )
     wheels = sorted(wheel_dir.glob("ai_push_hooks-*.whl"))
@@ -206,7 +336,7 @@ def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, p
     packed = _run(
         ["npm", "pack", "--json", "--pack-destination", str(npm_dir)],
         REPO_ROOT,
-        _isolated_env(),
+        env,
         timeout=120,
     )
     package_metadata = json.loads(packed.stdout)
@@ -310,9 +440,9 @@ def test_installed_hook_runs_real_local_push_scenario(
     installed_artifacts: dict[str, pathlib.Path],
     tmp_path: pathlib.Path,
 ) -> None:
-    env = _isolated_env()
     root = tmp_path / f"{distribution}-scenario"
     root.mkdir()
+    env = _isolated_env(root / "home")
     repo = root / "client repo"
     repo.mkdir()
     command = (
@@ -372,7 +502,9 @@ def test_installed_hook_runs_real_local_push_scenario(
             timeout=45,
             input_text=stdin_text,
         )
-        assert completed.returncode == expected, completed.stderr
+        assert completed.returncode == expected, _failure_diagnostic(
+            completed.stdout, completed.stderr
+        )
 
     valid_branch = f"refs/heads/main {baseline_oid} refs/heads/main {remote_baseline_oid}\n"
     invoke("", expected=0)
@@ -438,7 +570,7 @@ def test_installed_hook_runs_real_local_push_scenario(
         timeout=45,
         input_text=f"refs/heads/main {local_oid} refs/heads/main {remote_oid}\n",
     )
-    assert direct.returncode == 0, direct.stderr
+    assert direct.returncode == 0, _failure_diagnostic(direct.stdout, direct.stderr)
     _run(["git", "push", "origin", "main"], repo, env, timeout=45)
     assert _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main") == local_oid
 
@@ -455,22 +587,22 @@ def test_installed_hook_runs_real_local_push_scenario(
 def test_real_lefthook_install_uses_installed_runner(
     installed_artifacts: dict[str, pathlib.Path], tmp_path: pathlib.Path
 ) -> None:
+    root = tmp_path / "lefthook-scenario"
+    root.mkdir()
+    env = _isolated_env(root / "home")
     lefthook = shutil.which("lefthook")
     if not lefthook:
         if _require_lefthook():
             pytest.fail("Lefthook is required for the CI installed-hook gate")
         pytest.skip("Lefthook is not installed")
     version = subprocess.run(
-        [lefthook, "version"], capture_output=True, text=True, timeout=15
+        [lefthook, "version"], capture_output=True, text=True, timeout=15, env=env
     )
     if version.returncode != 0:
         if _require_lefthook():
-            pytest.fail(f"Lefthook is required in CI: {version.stderr.strip()}")
+            pytest.fail(_failure_diagnostic(version.stdout, version.stderr))
         pytest.skip("Lefthook is unavailable in the local tool environment")
 
-    env = _isolated_env()
-    root = tmp_path / "lefthook-scenario"
-    root.mkdir()
     command = _prepare_wheel_command(installed_artifacts["wheel"], root, env)
     repo = root / "client repo"
     repo.mkdir()
