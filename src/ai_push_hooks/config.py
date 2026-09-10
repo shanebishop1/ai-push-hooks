@@ -19,6 +19,7 @@ from .paths import (
 )
 from .prompts_builtin import BUILTIN_PROMPTS
 from .types import (
+    DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS,
     SUPPORTED_STEP_TYPES,
     GeneralConfig,
     HookConfig,
@@ -106,7 +107,6 @@ EMBEDDED_COMMAND_PLACEHOLDER_PATTERN = re.compile(
     r"\{(?:repo|python|input:[A-Za-z0-9_./:-]+)\}"
 )
 COMMAND_PLACEHOLDER_NAMES = frozenset({"repo", "python"})
-DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS = 60
 RUNNER_PLACEHOLDER_PATTERN = re.compile(r"\{[^{}]*\}")
 
 
@@ -683,7 +683,9 @@ def _build_config(
                 _normalize_step(
                     step,
                     f"modules.{module_id}.steps[{index}]",
-                    repo_root=repo_root,
+                    # Repository filesystem checks are performed once below,
+                    # after environment overrides have been resolved.
+                    repo_root=None,
                 )
                 for index, step in enumerate(steps_raw, start=1)
             ),
@@ -693,10 +695,14 @@ def _build_config(
     # while preserving the existing runtime model that only workflow modules are
     # materialized in HookConfig.modules.
     if repo_root is not None:
+        validated_python_references: set[str] = set()
         for module_id, module_raw in module_payload.items():
             for index, step_raw in enumerate(module_raw.get("steps", []) or [], start=1):
                 python_ref = step_raw.get("python")
                 if python_ref is not None:
+                    if python_ref in validated_python_references:
+                        continue
+                    validated_python_references.add(python_ref)
                     _validate_python_reference(
                         python_ref,
                         f"modules.{module_id}.steps[{index}].python",
@@ -789,7 +795,10 @@ def resolve_runner_profile(
 
 
 def _apply_env_overrides(
-    config: HookConfig, *, repo_root: pathlib.Path | None = None
+    config: HookConfig,
+    *,
+    repo_root: pathlib.Path | None = None,
+    raw_modules: dict[str, Any] | None = None,
 ) -> HookConfig:
     raw = {
         "general": {
@@ -830,6 +839,10 @@ def _apply_env_overrides(
             "enabled": module.enabled,
             "steps": step_payloads,
         }
+    if raw_modules is not None:
+        # Keep disabled and unselected modules in the final build so their
+        # callback references are validated without materializing them.
+        raw["modules"] = raw_modules
     for name, profile in config.runners.items():
         runner_raw: dict[str, Any] = {
             "type": profile.type,
@@ -930,8 +943,9 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
     _validate_model_override(model_override)
     _validate_variant_override(variant_override)
     return _apply_env_overrides(
-        _build_config(loaded, effective_model=model_override, repo_root=repo_root),
+        _build_config(loaded, effective_model=model_override, repo_root=None),
         repo_root=repo_root,
+        raw_modules=loaded.get("modules", {}),
     ), config_path
 
 

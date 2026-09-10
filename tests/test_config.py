@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+from ai_push_hooks import config as config_module
 from ai_push_hooks.artifacts import generate_run_id
 from ai_push_hooks.config import load_config, resolve_runner_profile
 from ai_push_hooks import git_utils
@@ -921,6 +922,99 @@ def test_python_reference_validation_does_not_import_code(tmp_path: pathlib.Path
     load_config(tmp_path)
 
     assert not marker.exists()
+
+
+def test_load_config_validates_each_callback_reference_once_across_env_rebuild(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "checks.py").write_text("# callback fixture\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("# callback fixture\n", encoding="utf-8")
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["selected"]
+
+[modules.selected]
+enabled = true
+
+[[modules.selected.steps]]
+id = "selected"
+type = "collect"
+python = "checks.py:hook"
+
+[modules.disabled]
+enabled = false
+
+[[modules.disabled.steps]]
+id = "disabled"
+type = "collect"
+python = "checks.py:hook"
+
+[modules.unselected]
+enabled = true
+
+[[modules.unselected.steps]]
+id = "unselected"
+type = "collect"
+python = "other.py:hook"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+    validate_reference = config_module._validate_python_reference
+
+    def count_filesystem_validations(
+        value: str, label: str, repo_root: pathlib.Path | None = None
+    ) -> str:
+        if repo_root is not None:
+            calls.append(value)
+        return validate_reference(value, label, repo_root)
+
+    monkeypatch.setattr(
+        config_module, "_validate_python_reference", count_filesystem_validations
+    )
+
+    config, _ = load_config(tmp_path)
+
+    assert config.workflow.modules == ("selected",)
+    assert calls == ["checks.py:hook", "other.py:hook"]
+
+
+def test_load_config_rejects_invalid_python_reference_in_disabled_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# callback fixture\n", encoding="utf-8")
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["selected"]
+
+[modules.selected]
+enabled = true
+
+[[modules.selected.steps]]
+id = "selected"
+type = "collect"
+python = "checks.py:hook"
+
+[modules.disabled]
+enabled = false
+
+[[modules.disabled.steps]]
+id = "disabled"
+type = "collect"
+python = "missing.py:hook"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        HookError,
+        match=r"modules\.disabled\.steps\[1\]\.python path must reference an existing regular file",
+    ):
+        load_config(tmp_path)
 
 
 @pytest.mark.parametrize(
