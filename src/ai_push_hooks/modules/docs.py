@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import pathlib
 import re
@@ -10,7 +9,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ..types import CollectorResult, RuntimeContext
-from ..git_utils import collect_commit_messages_for_ranges, git, path_matches, run_command
+from ..git_utils import collect_commit_messages_for_ranges, git, path_matches
 
 DOC_INCLUDE_PATTERNS = ("README.md", "docs/**/*.md")
 DOC_IGNORE_PATTERNS = ("docs/archive/**",)
@@ -18,6 +17,10 @@ DOC_CONTEXT_LINES = 2
 DOC_MAX_BYTES = 64 * 1024
 DOC_CONTEXT_BUDGET = 32000
 DOC_FALLBACK_FILE_LIMIT = 8
+# Matching metadata is deliberately bounded independently of the document
+# inventory.  The normal context budget is reached much earlier, while this
+# cap prevents a pathological repeated-match file from retaining every hit.
+DOC_MAX_QUERY_MATCHES = 4096
 
 
 def _path_matches(path: str, patterns: tuple[str, ...]) -> bool:
@@ -126,25 +129,70 @@ def _read_bounded_text(path: pathlib.Path, max_bytes: int | None = None) -> str:
             os.close(descriptor)
 
 
-def _append_context_chunk(chunks: list[str], chunk: str, budget: int) -> bool:
-    current_size = sum(len(item) for item in chunks) + max(0, len(chunks) - 1)
-    remaining = budget - current_size
-    if remaining <= 0:
-        return False
-    truncated = len(chunk) > remaining
-    if truncated:
-        if chunks:
+class _ContextAccumulator:
+    """Collect bounded snippets without rescanning all prior snippets."""
+
+    def __init__(self) -> None:
+        self.chunks: list[str] = []
+        self.size = 0
+
+    def append(self, chunk: str, budget: int) -> bool:
+        remaining = budget - self.size
+        separator_size = 1 if self.chunks else 0
+        remaining -= separator_size
+        if remaining <= 0:
             return False
-        chunk = chunk[:remaining]
-    chunks.append(chunk)
-    return not truncated
+        truncated = len(chunk) > remaining
+        if truncated:
+            if self.chunks:
+                return False
+            chunk = chunk[:remaining]
+        self.chunks.append(chunk)
+        self.size += separator_size + len(chunk)
+        return not truncated
+
+    def render(self) -> str:
+        return "\n".join(self.chunks)
 
 
-def _fallback_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path]) -> str:
+class _QueryMatchBuffer:
+    """Bounded query-ranked snippet metadata for one document scan."""
+
+    def __init__(self, max_matches: int = DOC_MAX_QUERY_MATCHES) -> None:
+        self.max_matches = max_matches
+        self.matches: list[tuple[tuple[int, int], str]] = []
+        self._seen: set[tuple[int, int]] = set()
+        self.characters = 0
+        self.saturated = False
+
+    def add(
+        self,
+        key: tuple[int, int],
+        relative: str,
+        line_number: int,
+        line: str,
+    ) -> None:
+        if key in self._seen or self.saturated or len(self.matches) >= self.max_matches:
+            return
+        chunk = f"{relative}:{line_number}: {line}"
+        self._seen.add(key)
+        self.matches.append((key, chunk))
+        self.characters += len(chunk)
+        self.saturated = (
+            len(self.matches) >= self.max_matches
+            or self.characters >= DOC_CONTEXT_BUDGET
+        )
+
+
+def _fallback_docs_context(
+    repo_root: pathlib.Path,
+    doc_files: list[pathlib.Path],
+    contents: dict[pathlib.Path, str] | None = None,
+) -> str:
     snippets: list[str] = []
     for path in doc_files[:DOC_FALLBACK_FILE_LIMIT]:
         relative = path.relative_to(repo_root).as_posix()
-        content = _read_bounded_text(path)
+        content = _read_bounded_text(path) if contents is None else contents[path]
         block = f"--- {relative} ---\n{content}"
         current_size = len("\n\n".join(snippets))
         remaining = DOC_CONTEXT_BUDGET - current_size
@@ -156,6 +204,54 @@ def _fallback_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path
     return "\n\n".join(snippets)
 
 
+def _collect_query_matches(
+    repo_root: pathlib.Path,
+    doc_files: list[pathlib.Path],
+    queries: list[str],
+    *,
+    rg_available: bool,
+) -> tuple[list[_QueryMatchBuffer], dict[pathlib.Path, str]]:
+    """Read each document once and retain only bounded ranked snippet metadata.
+
+    The old rg path skipped files larger than ``DOC_MAX_BYTES`` while its
+    no-rg fallback read a bounded prefix.  Keep that environment-dependent
+    compatibility behavior explicit while avoiding N query subprocesses and
+    without caching the whole documentation tree.
+    """
+
+    buffers = [_QueryMatchBuffer() for _query in queries]
+    fallback_contents: dict[pathlib.Path, str] = {}
+    for path_index, path in enumerate(doc_files):
+        if rg_available:
+            try:
+                if path.stat().st_size > DOC_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+        content = _read_bounded_text(path)
+        if not rg_available and path_index < DOC_FALLBACK_FILE_LIMIT:
+            fallback_contents[path] = content
+        lines = content.splitlines()
+        relative = path.relative_to(repo_root).as_posix()
+        for line_index, line in enumerate(lines):
+            for query_index, query in enumerate(queries):
+                if query not in line:
+                    continue
+                first = max(0, line_index - DOC_CONTEXT_LINES)
+                last = min(len(lines), line_index + DOC_CONTEXT_LINES + 1)
+                buffer = buffers[query_index]
+                for index in range(first, last):
+                    buffer.add(
+                        (path_index, index),
+                        relative,
+                        index + 1,
+                        lines[index],
+                    )
+                if all(buffer.saturated for buffer in buffers):
+                    return buffers, fallback_contents
+    return buffers, fallback_contents
+
+
 def _search_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path], queries: list[str]) -> str:
     repo_root = repo_root.resolve(strict=True)
     if not doc_files:
@@ -163,83 +259,27 @@ def _search_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path],
     if not queries:
         return _fallback_docs_context(repo_root, doc_files)
 
-    if shutil.which("rg") is None:
-        chunks: list[str] = []
-        seen: set[tuple[str, int]] = set()
-        for query in queries:
-            for path in doc_files:
-                relative = path.relative_to(repo_root).as_posix()
-                lines = _read_bounded_text(path).splitlines()
-                matching_lines = [index for index, line in enumerate(lines) if query in line]
-                for matching_index in matching_lines:
-                    first = max(0, matching_index - DOC_CONTEXT_LINES)
-                    last = min(len(lines), matching_index + DOC_CONTEXT_LINES + 1)
-                    for index in range(first, last):
-                        key = (relative, index + 1)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        chunk = f"{relative}:{index + 1}: {lines[index]}"
-                        if not _append_context_chunk(chunks, chunk, DOC_CONTEXT_BUDGET):
-                            return "\n".join(chunks)
-        return "\n".join(chunks) if chunks else _fallback_docs_context(repo_root, doc_files)
-
-    files = [path.relative_to(repo_root).as_posix() for path in doc_files]
-    allowed_files = set(files)
-    chunks: list[str] = []
-    seen: set[tuple[str, int]] = set()
-    for query in queries:
-        completed = run_command(
-            [
-                "rg",
-                "--json",
-                "--fixed-strings",
-                "--with-filename",
-                "--color=never",
-                "--context",
-                str(DOC_CONTEXT_LINES),
-                "--max-filesize",
-                str(DOC_MAX_BYTES),
-                "--",
-                query,
-                *files,
-            ],
-            cwd=repo_root,
-            check=False,
-        )
-        if completed.returncode not in {0, 1}:
-            continue
-        for line in completed.stdout.splitlines():
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if message.get("type") not in {"match", "context"}:
-                continue
-            data = message.get("data")
-            if not isinstance(data, dict):
-                continue
-            path_data = data.get("path")
-            lines_data = data.get("lines")
-            file_name = path_data.get("text") if isinstance(path_data, dict) else None
-            line_number = data.get("line_number")
-            content = lines_data.get("text") if isinstance(lines_data, dict) else None
-            if (
-                not isinstance(file_name, str)
-                or file_name not in allowed_files
-                or not isinstance(line_number, int)
-                or not isinstance(content, str)
-            ):
-                continue
-            key = (file_name, line_number)
+    rg_available = shutil.which("rg") is not None
+    matches_by_query, fallback_contents = _collect_query_matches(
+        repo_root,
+        doc_files,
+        queries,
+        rg_available=rg_available,
+    )
+    accumulator = _ContextAccumulator()
+    seen: set[tuple[int, int]] = set()
+    for query_matches in matches_by_query:
+        for key, chunk in query_matches.matches:
             if key in seen:
                 continue
             seen.add(key)
-            clean_content = content.rstrip("\r\n")
-            chunk = f"{file_name}:{line_number}: {clean_content}"
-            if not _append_context_chunk(chunks, chunk, DOC_CONTEXT_BUDGET):
-                return "\n".join(chunks)
-    return "\n".join(chunks)
+            if not accumulator.append(chunk, DOC_CONTEXT_BUDGET):
+                return accumulator.render()
+    if accumulator.chunks:
+        return accumulator.render()
+    if rg_available:
+        return ""
+    return _fallback_docs_context(repo_root, doc_files, fallback_contents)
 
 
 def collect_docs_context(context: RuntimeContext, _state: Any) -> CollectorResult:
