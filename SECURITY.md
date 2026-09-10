@@ -98,8 +98,8 @@ captured stdout/stderr are each bounded to 16 MiB; staging is bounded to 10,000
 entries/256 MiB and Git metadata snapshots to 20,000 entries/64 MiB. These
 limits are resource and scope controls, not isolation. Existing baseline checks
 are not an atomic CAS against arbitrary external writers, and automatic rollback
-is avoided to protect pre-existing user changes. See the README's [runner
-profiles and access modes](README.md#runner-profiles-and-access-modes).
+is avoided to protect pre-existing user changes. See [runner profiles and
+access modes](docs/configuration.md#runner-profiles).
 
 Apply intentionally repeats integrity and state scans: it snapshots the checkout
 and Git metadata, inventories staging before and after the runner, checks each
