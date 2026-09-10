@@ -17,12 +17,12 @@ pnpm exec ai-push-hooks install
 For a Python-only installation:
 
 ```bash
-python -m pip install ai-push-hooks==0.3.0
+python -m pip install ai-push-hooks==0.3.1
 ai-push-hooks init --template minimal-docs
 ai-push-hooks install
 ```
 
-`uv tool install ai-push-hooks==0.3.0` or `pipx install ai-push-hooks==0.3.0` can replace the pip command. npm uses the `beta` tag; use `ai-push-hooks@0.3.0` for an exact pin.
+`uv tool install ai-push-hooks==0.3.1` or `pipx install ai-push-hooks==0.3.1` can replace the pip command. npm uses the `beta` tag; use `ai-push-hooks@0.3.1` for an exact pin.
 
 AI steps need the selected CLI installed and authenticated with an available model. Deterministic-only workflows do not need one. `init` and `install` refuse to overwrite existing files; `--force` explicitly replaces them.
 

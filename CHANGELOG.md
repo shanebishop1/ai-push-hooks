@@ -4,8 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
-These notes describe unreleased source changes; they do not announce a newly
-published package.
+## [0.3.1] - 2026-09-10
+
+### Changed
+
+- Rewrote the README around npm-first setup, modular workflows, and AI
+  ask/apply examples; moved detailed configuration into a separate guide.
 
 ### Fixed
 
@@ -145,7 +149,8 @@ the exact `0.2.0` version rather than a PyPI beta channel.
 - Preserved Git porcelain paths and protected pre-existing dirty allowlisted files during apply steps.
 - Clarified module-local artifact references and standardized the repository hook integration.
 
-[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.1.19...v0.2.0
