@@ -482,6 +482,7 @@ def test_real_lefthook_install_uses_installed_runner(
     (repo / "README.md").write_text("# Initial\n", encoding="utf-8")
     (repo / "docs").mkdir()
     (repo / "docs" / "INDEX.md").write_text("# Docs\n", encoding="utf-8")
+    _install_repo_fixtures(repo)
     (repo / "ai-push-hooks.toml").write_text(_scenario_config(), encoding="utf-8")
     _run(["git", "add", "."], repo, env)
     _run(["git", "commit", "-m", "initial"], repo, env)
