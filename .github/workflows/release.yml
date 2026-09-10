@@ -6,26 +6,35 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      recover_release:
+        description: "Publish an existing immutable release artifact set and finish the release"
+        required: false
+        default: false
+        type: boolean
       recover_bookkeeping:
         description: "Only recover an already-created npm deployment status"
         required: false
         default: false
         type: boolean
       tag:
-        description: "Release tag used by the bookkeeping recovery"
-        required: true
+        description: "Release tag used by the recovery"
+        required: false
         type: string
       commit:
-        description: "Expected full commit SHA for the deployment"
-        required: true
+        description: "Expected full commit SHA for the recovery"
+        required: false
+        type: string
+      artifact_id:
+        description: "Immutable Actions artifact ID containing the release set (preferred; leave empty for the v0.3.0 draft-asset recovery)"
+        required: false
         type: string
       deployment_id:
         description: "Existing GitHub deployment id"
-        required: true
+        required: false
         type: string
       run_url:
         description: "Run URL to put in the recovered deployment status"
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -333,7 +342,7 @@ jobs:
             --manifest "$RELEASE_ROOT/checksum-manifest.json"
 
   recover-bookkeeping:
-    if: github.event_name == 'workflow_dispatch' && inputs.recover_bookkeeping == true
+    if: github.event_name == 'workflow_dispatch' && inputs.recover_bookkeeping == true && inputs.recover_release != true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -362,3 +371,225 @@ jobs:
             --tag "$RECOVERY_TAG" \
             --commit "$RECOVERY_COMMIT" \
             --run-url "$RECOVERY_RUN_URL"
+
+  recover-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.recover_release == true && inputs.recover_bookkeeping != true
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      deployments: write
+      id-token: write
+    env:
+      RECOVERY_TAG: ${{ inputs.tag }}
+      RECOVERY_COMMIT: ${{ inputs.commit }}
+      RECOVERY_ARTIFACT_ID: ${{ inputs.artifact_id }}
+      RECOVERY_ROOT: recovery-set
+    steps:
+      - name: Require recovery inputs
+        run: |
+          set -eu
+          test -n "$RECOVERY_TAG"
+          test -n "$RECOVERY_COMMIT"
+          if test -n "$RECOVERY_ARTIFACT_ID"; then
+            case "$RECOVERY_ARTIFACT_ID" in
+              ''|*[!0-9]*)
+                printf 'artifact_id must be a numeric immutable Actions artifact ID\n' >&2
+                exit 2
+                ;;
+            esac
+          fi
+
+      - name: Checkout trusted recovery helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Fetch and bind the fully-qualified release tag
+        run: |
+          set -eu
+          git check-ref-format "refs/tags/$RECOVERY_TAG"
+          git fetch --no-tags origin "refs/tags/$RECOVERY_TAG:refs/tags/$RECOVERY_TAG"
+          tag_commit=$(git rev-parse "refs/tags/$RECOVERY_TAG^{}")
+          test "$tag_commit" = "$RECOVERY_COMMIT"
+          git worktree add --detach "$RUNNER_TEMP/release-source" "refs/tags/$RECOVERY_TAG"
+          source_commit=$(git -C "$RUNNER_TEMP/release-source" rev-parse HEAD)
+          test "$source_commit" = "$RECOVERY_COMMIT"
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node for npm trusted publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download the immutable release set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if test -n "$RECOVERY_ARTIFACT_ID"; then
+            mkdir -p "$RECOVERY_ROOT"
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts/$RECOVERY_ARTIFACT_ID/zip" \
+              > "$RUNNER_TEMP/recovery-artifact.zip"
+            unzip -q "$RUNNER_TEMP/recovery-artifact.zip" -d "$RECOVERY_ROOT"
+          else
+            mkdir -p "$RECOVERY_ROOT/python" "$RECOVERY_ROOT/npm"
+            for name in \
+              checksum-manifest.json \
+              ai_push_hooks-0.3.0-py3-none-any.whl \
+              ai_push_hooks-0.3.0.tar.gz \
+              ai-push-hooks-0.3.0.tgz; do
+              asset_url=$(gh api \
+                "repos/$GITHUB_REPOSITORY/releases/tags/$RECOVERY_TAG" \
+                --jq ".assets[] | select(.name == \"$name\") | .url")
+              test -n "$asset_url"
+              gh api \
+                --header 'Accept: application/octet-stream' \
+                "$asset_url" > "$RECOVERY_ROOT/$name"
+            done
+            mv "$RECOVERY_ROOT/ai_push_hooks-0.3.0-py3-none-any.whl" "$RECOVERY_ROOT/python/"
+            mv "$RECOVERY_ROOT/ai_push_hooks-0.3.0.tar.gz" "$RECOVERY_ROOT/python/"
+            mv "$RECOVERY_ROOT/ai-push-hooks-0.3.0.tgz" "$RECOVERY_ROOT/npm/"
+          fi
+
+      - name: Validate release binding and downloaded artifact identities
+        env:
+          RELEASE_ROOT: ${{ env.RECOVERY_ROOT }}
+        run: |
+          set -eu
+          python scripts/release_validation.py validate \
+            --tag "$RECOVERY_TAG" \
+            --commit "$RECOVERY_COMMIT" \
+            --pyproject "$RUNNER_TEMP/release-source/pyproject.toml" \
+            --package-json "$RUNNER_TEMP/release-source/package.json" \
+            --release-channel "$RUNNER_TEMP/release-source/release-channel.toml"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RELEASE_ROOT"]).resolve()
+          manifest_path = root / "checksum-manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("project") != "ai-push-hooks":
+              raise SystemExit("recovery manifest has the wrong project")
+          if manifest.get("tag") != os.environ["RECOVERY_TAG"]:
+              raise SystemExit("recovery manifest tag does not match the requested tag")
+          if manifest.get("commit") != os.environ["RECOVERY_COMMIT"]:
+              raise SystemExit("recovery manifest commit does not match the requested commit")
+
+          artifacts = manifest.get("artifacts")
+          if not isinstance(artifacts, list) or len(artifacts) != 3:
+              raise SystemExit("recovery manifest must contain exactly three artifacts")
+          kinds = {item.get("kind") for item in artifacts if isinstance(item, dict)}
+          if kinds != {"wheel", "sdist", "npm"}:
+              raise SystemExit("recovery manifest must contain wheel, sdist, and npm artifacts")
+
+          approved_paths = set()
+          for artifact in artifacts:
+              if not isinstance(artifact, dict):
+                  raise SystemExit("recovery manifest contains a malformed artifact")
+              relative = artifact.get("path")
+              if not isinstance(relative, str) or relative in approved_paths:
+                  raise SystemExit("recovery manifest contains a duplicate or invalid path")
+              approved_paths.add(relative)
+              path = (root / relative).resolve()
+              try:
+                  path.relative_to(root)
+              except ValueError as exc:
+                  raise SystemExit("recovery artifact path escapes the release root") from exc
+              if not path.is_file():
+                  raise SystemExit(f"recovery artifact is missing: {relative}")
+              if path.stat().st_size != artifact.get("size"):
+                  raise SystemExit(f"recovery artifact size mismatch: {relative}")
+              if hashlib.sha256(path.read_bytes()).hexdigest() != artifact.get("sha256"):
+                  raise SystemExit(f"recovery artifact hash mismatch: {relative}")
+
+          for path in root.rglob("*"):
+              if not path.is_file():
+                  continue
+              relative = path.relative_to(root).as_posix()
+              if path.suffix == ".whl" or path.name.endswith(".tar.gz") or path.suffix == ".tgz":
+                  if relative not in approved_paths:
+                      raise SystemExit(f"unapproved release artifact is present: {relative}")
+          print("downloaded recovery artifacts match checksum-manifest.json")
+          PY
+
+      - name: Confirm PyPI is complete without republishing
+        run: |
+          set -eu
+          python scripts/release_validation.py registry-check \
+            --registry pypi \
+            --manifest "$RECOVERY_ROOT/checksum-manifest.json" \
+            --decision "$RECOVERY_ROOT/pypi-decision.json"
+          state=$(python -c \
+            'import json, sys; print(json.load(open(sys.argv[1]))["state"])' \
+            "$RECOVERY_ROOT/pypi-decision.json")
+          test "$state" = complete
+
+      - name: Check npm artifact identity
+        id: npm
+        run: |
+          python scripts/release_validation.py registry-check \
+            --registry npm \
+            --manifest "$RECOVERY_ROOT/checksum-manifest.json" \
+            --decision "$RECOVERY_ROOT/npm-decision.json" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: Publish the exact npm tarball once
+        if: steps.npm.outputs.publish_required == 'true'
+        continue-on-error: true
+        env:
+          npm_config_fetch_retries: "0"
+          npm_config_fetch_timeout: "10000"
+        run: |
+          npm publish \
+            "$RECOVERY_ROOT/$(python scripts/release_validation.py manifest-artifact \
+              --manifest "$RECOVERY_ROOT/checksum-manifest.json" --kind npm)" \
+            --access public \
+            --tag "$(python scripts/release_validation.py manifest-value \
+              --manifest "$RECOVERY_ROOT/checksum-manifest.json" --key npm_dist_tag)" \
+            --provenance
+
+      - name: Verify npm identity after the single publish attempt
+        id: verify-npm
+        if: always()
+        run: |
+          python scripts/release_validation.py registry-verify \
+            --registry npm \
+            --manifest "$RECOVERY_ROOT/checksum-manifest.json"
+
+      - name: Record verified npm deployment bookkeeping
+        if: steps.verify-npm.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/release_validation.py record-deployment \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$RECOVERY_TAG" \
+            --commit "$RECOVERY_COMMIT" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --manifest "$RECOVERY_ROOT/checksum-manifest.json"
+
+      - name: Activate the verified prerelease without changing its assets
+        if: steps.verify-npm.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RECOVERY_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=true
+
+      - name: Create or verify the correctly-classified GitHub release
+        if: steps.verify-npm.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/release_validation.py github-release \
+            --repo "$GITHUB_REPOSITORY" \
+            --manifest "$RECOVERY_ROOT/checksum-manifest.json"
