@@ -196,7 +196,7 @@ def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, p
     wheel_dir.mkdir()
     npm_dir.mkdir()
     _run(
-        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(wheel_dir)],
         REPO_ROOT,
         _isolated_env(),
         timeout=120,
@@ -238,7 +238,8 @@ def _prepare_wheel_command(
     bin_dir.mkdir()
     _run(
         [
-            "uv",
+            sys.executable,
+            "-m",
             "pip",
             "install",
             "--no-index",
