@@ -447,8 +447,8 @@ jobs:
               ai_push_hooks-0.3.0.tar.gz \
               ai-push-hooks-0.3.0.tgz; do
               asset_url=$(gh api \
-                "repos/$GITHUB_REPOSITORY/releases/tags/$RECOVERY_TAG" \
-                --jq ".assets[] | select(.name == \"$name\") | .url")
+                "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+                --jq ".[] | select(.tag_name == \"$RECOVERY_TAG\") | .assets[] | select(.name == \"$name\") | .url")
               test -n "$asset_url"
               gh api \
                 --header 'Accept: application/octet-stream' \
