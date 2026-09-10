@@ -300,6 +300,30 @@ def test_post_publication_verification_retries_partial_then_complete(monkeypatch
     assert not remaining
 
 
+def test_post_publication_default_budget_allows_extended_propagation(monkeypatch):
+    manifest = _pypi_manifest()
+    complete = json.dumps(
+        _pypi_payload(manifest, [item["name"] for item in manifest["artifacts"]])
+    ).encode()
+    opener, remaining = opener_for(
+        *(MockResponse(404) for _ in range(8)), MockResponse(200, complete)
+    )
+    monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
+
+    release.verify_registry_after_publish(
+        "pypi",
+        manifest,
+        opener=opener,
+        sleeper=lambda _delay: None,
+        clock=lambda: 0.0,
+        log=lambda _message: None,
+    )
+
+    assert release.POST_PUBLICATION_ATTEMPTS >= 9
+    assert release.POST_PUBLICATION_DEADLINE >= 120
+    assert not remaining
+
+
 @pytest.mark.parametrize("state", ["404", "partial"])
 def test_post_publication_verification_exhausts_incomplete_state(state, monkeypatch):
     manifest = _pypi_manifest()
