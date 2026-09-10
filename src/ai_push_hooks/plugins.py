@@ -75,6 +75,15 @@ def _require_json(value: Any, label: str) -> None:
         json.dumps(value, allow_nan=False)
     except (RecursionError, TypeError, ValueError) as exc:
         raise HookError(f"{label} must be JSON-serializable") from exc
+    pending = [(value, 0)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > 1000:
+            raise HookError(f"{label} exceeds the maximum JSON nesting depth")
+        if isinstance(current, dict):
+            pending.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            pending.extend((item, depth + 1) for item in current)
 
 
 def validate_collector_result(value: Any) -> CollectorResult:
