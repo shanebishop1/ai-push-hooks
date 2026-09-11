@@ -178,10 +178,7 @@ class CollectorResult:
 
 @dataclass
 class StepResult:
-    status: str = "completed"
-    artifacts: dict[str, pathlib.Path] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    message: str = ""
 
 
 @dataclass

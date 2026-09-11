@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from typing import Any, Callable
+from typing import Any
 
 from .artifacts import ArtifactStore
 from .config import resolve_prompt_text
 from .executors.apply import run_apply_step
+from .executors.ask import run_ask_step
 from .executors.assertions import ASSERTION_HANDLERS
 from .executors.exec import EXEC_HANDLERS
-from .git_utils import env_bool
-from .executors.ask import run_ask_step
 from .executors.step_commands import execute_step_command
+from .git_utils import env_bool
 from .modules import COLLECTORS
 from .plugin_loader import PluginDispatcher
 from .plugins import (
@@ -106,7 +107,7 @@ class WorkflowEngine:
                     state.active_step_id = None
                     try:
                         result = future.result()
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         state.status = "failed"
                         state.error = str(exc)
                         raise
@@ -127,8 +128,8 @@ class WorkflowEngine:
     def _execute_step(self, state: ModuleRuntimeState, step: StepConfig) -> StepResult:
         if step.when_env and env_bool(step.when_env) is not True:
             payload = {"skipped": True, "reason": f"{step.when_env} not enabled"}
-            path = self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
-            return StepResult(status="skipped", artifacts={"result.json": path}, metadata={})
+            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            return StepResult()
 
         if step.type == "collect":
             if step.python:
@@ -147,16 +148,16 @@ class WorkflowEngine:
             payload = self.ask_executor(self.context, step, prompt, input_paths, stage_name)
             artifact_name = step.output or "result.json"
             if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
-                path = self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)
+                self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)
             else:
-                path = self.artifacts.write_text(state, state.step_index, step.id, artifact_name, str(payload))
-            return StepResult(artifacts={artifact_name: path})
+                self.artifacts.write_text(state, state.step_index, step.id, artifact_name, str(payload))
+            return StepResult()
 
         if step.type == "apply":
             prompt = resolve_prompt_text(self.context.repo_root, step)
             payload = self.apply_executor(self.context, state, step, prompt, input_paths, stage_name)
-            path = self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
-            return StepResult(artifacts={"result.json": path})
+            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            return StepResult()
 
         if step.type == "exec":
             if step.python:
@@ -164,23 +165,23 @@ class WorkflowEngine:
                 payload = validate_exec_result(
                     self._dispatch_plugin(state, step, plugin_inputs)
                 )
-                path = self._persist_plugin_result(state, step, payload)
-                return StepResult(artifacts={"result.json": path})
+                self._persist_plugin_result(state, step, payload)
+                return StepResult()
             if step.command:
-                persisted = execute_step_command(
+                execute_step_command(
                     self.context,
                     state,
                     step,
                     dict(zip(step.inputs, input_paths)),
                     artifacts=self.artifacts,
                 )
-                return StepResult(artifacts=dict(persisted.artifacts))
+                return StepResult()
             handler = self.exec_handlers.get(step.executor or "")
             if handler is None:
                 raise HookError(f"Unknown exec handler: {step.executor}")
             payload = handler(self.context, state, step, input_paths)
-            path = self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
-            return StepResult(artifacts={"result.json": path})
+            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            return StepResult()
 
         if step.type == "assert":
             if step.python:
@@ -188,27 +189,27 @@ class WorkflowEngine:
                 payload = validate_assert_result(
                     self._dispatch_plugin(state, step, plugin_inputs)
                 )
-                path = self._persist_plugin_result(state, step, payload)
+                self._persist_plugin_result(state, step, payload)
                 if not payload["ok"]:
                     raise HookError(payload.get("message", "assertion failed"))
-                return StepResult(artifacts={"result.json": path})
+                return StepResult()
             if step.command:
-                persisted = execute_step_command(
+                execute_step_command(
                     self.context,
                     state,
                     step,
                     dict(zip(step.inputs, input_paths)),
                     artifacts=self.artifacts,
                 )
-                return StepResult(artifacts=dict(persisted.artifacts))
+                return StepResult()
             handler = self.assertion_handlers.get(step.assertion or "")
             if handler is None:
                 raise HookError(f"Unknown assertion handler: {step.assertion}")
             payload = handler(self.context, step, input_paths)
-            path = self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
             if not bool(payload.get("ok", False)):
                 raise HookError(str(payload.get("message", "assertion failed")))
-            return StepResult(artifacts={"result.json": path})
+            return StepResult()
 
         raise HookError(f"Unsupported step type: {step.type}")
 
@@ -238,16 +239,15 @@ class WorkflowEngine:
     ) -> StepResult:
         # Serialize and enforce both limits before the first write/register.
         serialized = self.artifacts.serialize_plugin_artifacts(result.artifacts)
-        artifacts: dict[str, pathlib.Path] = {}
         for artifact_name, content in serialized.items():
-            artifacts[artifact_name] = self.artifacts.write_bytes(
+            self.artifacts.write_bytes(
                 state, state.step_index, step.id, artifact_name, content
             )
         metadata = dict(result.metadata)
         if result.skip_module:
             metadata["skip_module"] = True
             metadata["skip_reason"] = result.skip_reason
-        return StepResult(artifacts=artifacts, metadata=metadata)
+        return StepResult(metadata=metadata)
 
     def _persist_plugin_result(
         self, state: ModuleRuntimeState, step: StepConfig, payload: dict[str, Any]
@@ -265,15 +265,13 @@ class WorkflowEngine:
         if handler is None:
             raise HookError(f"Unknown collector: {step.collector}")
         result = handler(self.context, state)
-        artifacts: dict[str, pathlib.Path] = {}
         for artifact_name, payload in result.artifacts.items():
             if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
-                path = self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)
+                self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)
             else:
-                path = self.artifacts.write_text(state, state.step_index, step.id, artifact_name, str(payload))
-            artifacts[artifact_name] = path
+                self.artifacts.write_text(state, state.step_index, step.id, artifact_name, str(payload))
         metadata = dict(result.metadata)
         if result.skip_module:
             metadata["skip_module"] = True
             metadata["skip_reason"] = result.skip_reason
-        return StepResult(artifacts=artifacts, metadata=metadata)
+        return StepResult(metadata=metadata)

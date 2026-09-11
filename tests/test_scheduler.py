@@ -3,8 +3,8 @@ from __future__ import annotations
 import pathlib
 import shutil
 import sys
-import time
 import threading
+import time
 
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.config import load_config
@@ -29,7 +29,10 @@ barrier.mkdir(parents=True, exist_ok=True)
 stage = sys.argv[1]
 (barrier / (stage + ".ready")).touch()
 expected = [item for item in os.environ["AI_PUSH_HOOKS_TEST_STAGES"].split(",") if item]
+deadline = time.monotonic() + 5
 while not all((barrier / (item + ".ready")).exists() for item in expected):
+    if time.monotonic() >= deadline:
+        raise RuntimeError("timed out waiting for scheduler barrier")
     time.sleep(0.005)
 sys.stdin.read()
 print(stage)
