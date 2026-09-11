@@ -17,12 +17,12 @@ pnpm exec ai-push-hooks install
 For a Python-only installation:
 
 ```bash
-python -m pip install ai-push-hooks==0.3.1
+python -m pip install ai-push-hooks
 ai-push-hooks init --template minimal-docs
 ai-push-hooks install
 ```
 
-`uv tool install ai-push-hooks==0.3.1` or `pipx install ai-push-hooks==0.3.1` can replace the pip command. npm uses the `beta` tag; use `ai-push-hooks@0.3.1` for an exact pin.
+`uv tool install ai-push-hooks` or `pipx install ai-push-hooks` can replace the pip command. npm uses the `beta` tag while the package is in beta.
 
 AI steps need the selected CLI installed and authenticated with an available model. Deterministic-only workflows do not need one. `init` and `install` refuse to overwrite existing files; `--force` explicitly replaces them.
 
@@ -30,7 +30,7 @@ AI steps need the selected CLI installed and authenticated with an available mod
 
 `[workflow].modules` selects the modules to run. Define each module under `modules.<name>` with a non-empty list of steps. Modules are enabled by default; set `enabled = false` to disable one.
 
-Step inputs refer to earlier artifacts in the same module: `collect/push.diff`, for example. Cross-module inputs are not supported. Independent `collect` and `ask` work may run concurrently; mutating work is serialized.
+Step inputs refer to earlier artifacts in the same module: `collect/push.diff`, for example. Cross-module inputs are not supported. Independent `collect` and `ask` work may run concurrently; built-in `exec`, `assert`, and `apply` steps are serialized. Trusted custom command runners, including project-access `ask` commands, are not enforced read-only.
 
 | Field | Used by | Meaning |
 | --- | --- | --- |
@@ -177,7 +177,7 @@ These optional settings supplement the workflow and runner definitions:
 | `general` | `skip_on_sync_branch` | `true` |
 | `general` | `base_branch` | `"main"` |
 | `llm` | `runner` | `"opencode"` |
-| `llm` | `model` | `"openai/gpt-5.6-terra"` (implicit OpenCode profile) |
+| `llm` | `model` | `"openai/gpt-5.6-luna"` (implicit OpenCode profile) |
 | `llm` | `variant` | `""` |
 | `llm` | `timeout_seconds` | `800` |
 | `llm` | `max_parallel` | `2` |
@@ -244,4 +244,4 @@ To remove the generated hook, inspect `git rev-parse --git-path hooks/pre-push` 
 | Push blocked after edits | Review `git diff`, run checks, commit approved changes, and retry. |
 | Need diagnostics | Inspect `.git/ai-push-hooks/logs` and `.git/ai-push-hooks/summaries`. |
 
-For tested CLI versions and evidence, see [Runner Verification](reports/runner-verification.md). For validation commands, see [Contributing](../CONTRIBUTING.md).
+For validation commands, see [Contributing](../CONTRIBUTING.md).

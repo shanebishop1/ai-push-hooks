@@ -19,9 +19,11 @@ Write your own rules in prompts or supply a rules file as context. These are exa
 
 ## Why Now?
 
-With lower-cost models such as GPT 5.6 Luna, Muse Spark 1.3, and Gemini Flash, running several focused agentic checks on each push can be practical, rather than reserving AI review for special occasions. Keep context narrow and measure your workflow's cost and latency. GPT 5.6 Luna is the default.
+With lower-cost models such as GPT 5.6 Luna, GLM 5.3 Flash, Muse Spark 1.3, and Gemini Flash, running several focused agentic checks on each push can be practical, rather than reserving AI review for special occasions. Keep context narrow and measure your workflow's cost and latency. GPT 5.6 Luna is the default.
 
 ## Quick Start
+
+Install the [ai-push-hooks skill](skills/ai-push-hooks/SKILL.md), tell your agent what intelligent checks you want before pushes, and let it set up the modules for you.
 
 ```bash
 npm install --save-dev ai-push-hooks@beta
@@ -107,7 +109,7 @@ Each module combines the steps it needs:
 | `exec` | Run scripts, tests, or other actions. |
 | `assert` | Evaluate a verdict and block the push if it fails. |
 
-`ask` alone does not block on findings; add an `assert` gate. Combine AI review with your existing linters and tests, not instead of them. Independent analysis can run concurrently; mutating steps are serialized.
+`ask` alone does not block on findings; add an `assert` gate. Combine AI review with your existing linters and tests, not instead of them. Independent analysis can run concurrently; built-in `exec`, `assert`, and `apply` steps are serialized. Trusted custom command runners, including project-access `ask` commands, are not enforced read-only.
 
 ## Choose Your AI
 

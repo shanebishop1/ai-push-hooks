@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the default OpenCode model and README positioning to
+  `openai/gpt-5.6-luna`.
+- Clarified that built-in mutating steps are serialized, while trusted custom
+  command runners, including project-access `ask` commands, are not enforced
+  read-only.
+
+### Documentation
+
+- Included the configuration guide in the npm package and removed its link to
+  the local-only runner verification report.
+
 ## [0.3.1] - 2026-09-10
 
 ### Changed
