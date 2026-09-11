@@ -11,6 +11,18 @@ All notable changes to this project are documented here. The format is based on 
 - Clarified that built-in mutating steps are serialized, while trusted custom
   command runners, including project-access `ask` commands, are not enforced
   read-only.
+- Removed the unused secondary shell launcher in favor of the canonical Python
+  console script and npm wrapper.
+
+### Fixed
+
+- Hardened pull-request creation by validating generated payload types,
+  reconciling failed `gh` calls against GitHub, and keeping remote credentials
+  out of diagnostics.
+- Bounded config, prompt, and callback source reads and rejected unsafe config
+  file types.
+- Restored the PyPI release job's checkout permission and pinned the OpenCode
+  contract test's base container image.
 
 ### Documentation
 
