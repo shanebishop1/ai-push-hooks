@@ -4,7 +4,7 @@ set -euo pipefail
 # This smoke test deliberately builds and runs the test in a container.  The
 # container receives no checkout, home directory, credential directory, SSH
 # agent, or Docker socket from the host.
-ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 OPENCODE_VERSION="1.18.29"
 
 if ! command -v docker >/dev/null 2>&1; then

@@ -38,9 +38,9 @@
     "src/**/*.py",
     "vendor",
     "README.md",
+    "docs/configuration.md",
     "CHANGELOG.md",
     "SECURITY.md",
-    "run.sh",
     "pyproject.toml",
     "LICENSE",
     "ai-push-hooks.toml"
