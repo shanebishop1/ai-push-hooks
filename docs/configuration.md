@@ -1,6 +1,6 @@
 # Configuration
 
-Define workflows in `ai-push-hooks.toml` at the repository root. Start with the [README example](../README.md#example-docs-alignment) or the [starter configuration](../ai-push-hooks.toml).
+Define workflows in `ai-push-hooks.toml` at the repository root. Start with the [README example](../README.md#example-check-your-rules) or the [starter configuration](../ai-push-hooks.toml).
 
 ## Installation
 

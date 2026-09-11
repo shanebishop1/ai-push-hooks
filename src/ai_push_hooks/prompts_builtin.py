@@ -77,7 +77,7 @@ base_branch = "main"
 # Repository callbacks use python = "path/to/file.py:callable" and command
 # steps use a direct argv array; both are trusted local code.
 runner = "opencode"
-model = "openai/gpt-5.6-terra"
+model = "openai/gpt-5.6-luna"
 variant = ""
 timeout_seconds = 800
 max_parallel = 2
