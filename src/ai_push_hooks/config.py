@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import math
 import os
 import pathlib
@@ -108,6 +109,30 @@ EMBEDDED_COMMAND_PLACEHOLDER_PATTERN = re.compile(
 )
 COMMAND_PLACEHOLDER_NAMES = frozenset({"repo", "python"})
 RUNNER_PLACEHOLDER_PATTERN = re.compile(r"\{[^{}]*\}")
+CONFIG_MAX_BYTES = 1 * 1024 * 1024
+PROMPT_MAX_BYTES = 256 * 1024
+_FILE_READ_CHUNK_BYTES = 64 * 1024
+
+
+def _read_descriptor_limited(
+    descriptor: int, max_bytes: int, oversize_message: str
+) -> bytes:
+    """Read an already-validated descriptor without exceeding ``max_bytes``."""
+
+    if os.fstat(descriptor).st_size > max_bytes:
+        raise HookError(oversize_message)
+    content = bytearray()
+    while True:
+        read_limit = min(
+            _FILE_READ_CHUNK_BYTES,
+            max_bytes - len(content) + 1,
+        )
+        chunk = os.read(descriptor, max(1, read_limit))
+        if not chunk:
+            return bytes(content)
+        content.extend(chunk)
+        if len(content) > max_bytes:
+            raise HookError(oversize_message)
 
 
 def _require_table(value: Any, label: str) -> dict[str, Any]:
@@ -918,17 +943,59 @@ def _apply_env_overrides(
 
 def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
     config_path = repo_root / "ai-push-hooks.toml"
-    if not config_path.exists():
+    try:
+        path_metadata = config_path.lstat()
+    except FileNotFoundError:
         raise HookError(
             "Missing required config file `ai-push-hooks.toml` in repo root. "
             "Run `ai-push-hooks init --template minimal-docs` first"
         )
+    except OSError as exc:
+        raise HookError(f"Could not inspect config file {config_path}: {exc}") from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if stat.S_ISLNK(path_metadata.st_mode) or bool(
+        getattr(path_metadata, "st_file_attributes", 0) & reparse_flag
+    ):
+        raise HookError(f"Config file must not be a symlink or reparse point: {config_path}")
+    if not stat.S_ISREG(path_metadata.st_mode):
+        raise HookError(f"Config file must be a regular file: {config_path}")
+
+    descriptor = -1
     try:
-        text = config_path.read_text(encoding="utf-8")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(config_path, flags)
+        descriptor_metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(descriptor_metadata.st_mode):
+            raise HookError(f"Config file must be a regular file: {config_path}")
+        content = _read_descriptor_limited(
+            descriptor,
+            CONFIG_MAX_BYTES,
+            f"Config file exceeds maximum size of {CONFIG_MAX_BYTES} bytes: {config_path}",
+        )
+        text = content.decode("utf-8")
+    except HookError:
+        raise
     except UnicodeDecodeError as exc:
         raise HookError(f"Config file is not valid UTF-8: {config_path}") from exc
     except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.EMLINK}:
+            raise HookError(
+                f"Config file must not be a symlink or reparse point: {config_path}"
+            ) from exc
+        if exc.errno == errno.ENOENT:
+            raise HookError(
+                "Missing required config file `ai-push-hooks.toml` in repo root. "
+                "Run `ai-push-hooks init --template minimal-docs` first"
+            ) from exc
         raise HookError(f"Could not read config file {config_path}: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     try:
         loaded = tomllib.loads(text)
     except ValueError as exc:
@@ -975,7 +1042,12 @@ def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:
         if any(is_path_within(resolved_prompt_path, git_root) for git_root in git_roots):
             raise HookError(f"Prompt file for step `{step.id}` must not resolve inside Git metadata")
         if prompt_path.exists():
-            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
             try:
                 descriptor = os.open(prompt_path, flags)
             except OSError as exc:
@@ -987,9 +1059,18 @@ def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:
                     raise HookError(
                         f"Prompt file is not a regular file for step `{step.id}`: {prompt_path}"
                     )
-                with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-                    descriptor = -1
-                    text = handle.read().strip()
+                content = _read_descriptor_limited(
+                    descriptor,
+                    PROMPT_MAX_BYTES,
+                    f"Prompt file exceeds maximum size of {PROMPT_MAX_BYTES} bytes "
+                    f"for step `{step.id}`: {prompt_path}",
+                )
+                try:
+                    text = content.decode("utf-8").strip()
+                except UnicodeDecodeError as exc:
+                    raise HookError(
+                        f"Prompt file is not valid UTF-8 for step `{step.id}`: {prompt_path}"
+                    ) from exc
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)

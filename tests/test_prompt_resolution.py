@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+from ai_push_hooks import config as config_module
 from ai_push_hooks.config import resolve_prompt_text
 from ai_push_hooks.prompts_builtin import BUILTIN_PROMPTS
 from ai_push_hooks.types import HookError, StepConfig
@@ -39,6 +40,14 @@ def test_file_prompt_wins_over_builtin(tmp_path: pathlib.Path) -> None:
         fallback_prompt_id="docs-query-basic",
     )
     assert resolve_prompt_text(tmp_path, step) == "file prompt"
+
+
+def test_oversized_prompt_file_is_rejected(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "prompt.txt").write_bytes(b"x" * (config_module.PROMPT_MAX_BYTES + 1))
+    step = StepConfig(id="query", type="ask", output="result.json", prompt_file="prompt.txt")
+
+    with pytest.raises(HookError, match="exceeds maximum size"):
+        resolve_prompt_text(tmp_path, step)
 
 
 def test_missing_file_falls_back_to_builtin(tmp_path: pathlib.Path) -> None:

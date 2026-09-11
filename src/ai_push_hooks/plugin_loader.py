@@ -33,6 +33,8 @@ from .types import HookError, ModuleRuntimeState, RuntimeContext, StepConfig
 
 _CALLABLE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _SOURCE_ENCODING = "utf-8"
+PLUGIN_SOURCE_MAX_BYTES = 1 * 1024 * 1024
+_SOURCE_READ_CHUNK_BYTES = 64 * 1024
 _OS_OPEN = os.open
 _DESCRIPTOR_RELATIVE_SUPPORTED = bool(
     getattr(os, "O_DIRECTORY", 0)
@@ -43,6 +45,32 @@ _DESCRIPTOR_RELATIVE_SUPPORTED = bool(
 
 def _descriptor_relative_supported() -> bool:
     return _DESCRIPTOR_RELATIVE_SUPPORTED
+
+
+def _read_source_limited(descriptor: int) -> bytes:
+    """Read plugin source from a checked descriptor within the source budget."""
+
+    oversize_message = (
+        "Python plugin source exceeds maximum size of "
+        f"{PLUGIN_SOURCE_MAX_BYTES} bytes"
+    )
+    if os.fstat(descriptor).st_size > PLUGIN_SOURCE_MAX_BYTES:
+        raise HookError(oversize_message)
+    content = bytearray()
+    while True:
+        read_limit = min(
+            _SOURCE_READ_CHUNK_BYTES,
+            PLUGIN_SOURCE_MAX_BYTES - len(content) + 1,
+        )
+        try:
+            chunk = os.read(descriptor, max(1, read_limit))
+        except OSError:
+            raise HookError("Python plugin source could not be read") from None
+        if not chunk:
+            return bytes(content)
+        content.extend(chunk)
+        if len(content) > PLUGIN_SOURCE_MAX_BYTES:
+            raise HookError(oversize_message)
 
 
 def _reference_parts(reference: str) -> tuple[str, str]:
@@ -82,7 +110,12 @@ def _open_source_descriptor_relative(
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         directory_fd = _OS_OPEN(root, directory_flags)
         for part in parts[:-1]:
@@ -93,9 +126,7 @@ def _open_source_descriptor_relative(
         metadata = os.fstat(file_fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise HookError("Python plugin path must reference an ordinary regular file")
-        with os.fdopen(file_fd, "rb") as source:
-            file_fd = -1
-            return root.joinpath(*parts), source.read()
+        return root.joinpath(*parts), _read_source_limited(file_fd)
     except HookError:
         raise
     except OSError as exc:
@@ -131,7 +162,12 @@ def _open_source_absolute(root: pathlib.Path, relative_path: str) -> tuple[pathl
     if not stat.S_ISREG(metadata.st_mode):
         raise HookError("Python plugin path must reference an ordinary regular file")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(callback_path, flags)
     except OSError:
@@ -140,9 +176,7 @@ def _open_source_absolute(root: pathlib.Path, relative_path: str) -> tuple[pathl
         descriptor_metadata = os.fstat(descriptor)
         if not stat.S_ISREG(descriptor_metadata.st_mode):
             raise HookError("Python plugin path must reference an ordinary regular file")
-        with os.fdopen(descriptor, "rb") as source:
-            descriptor = -1
-            return callback_path, source.read()
+        return callback_path, _read_source_limited(descriptor)
     except HookError:
         raise
     except OSError:

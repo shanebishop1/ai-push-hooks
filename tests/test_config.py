@@ -295,6 +295,31 @@ def test_load_config_reports_invalid_utf8(tmp_path: pathlib.Path) -> None:
         load_config(tmp_path)
 
 
+def test_load_config_rejects_oversized_file(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_bytes(
+        b"x" * (config_module.CONFIG_MAX_BYTES + 1)
+    )
+
+    with pytest.raises(HookError, match="exceeds maximum size"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_symlink(tmp_path: pathlib.Path) -> None:
+    target = tmp_path / "real-config.toml"
+    target.write_text('[workflow]\nmodules = ["docs"]\n', encoding="utf-8")
+    (tmp_path / "ai-push-hooks.toml").symlink_to(target)
+
+    with pytest.raises(HookError, match="symlink"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_non_regular_file(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").mkdir()
+
+    with pytest.raises(HookError, match="regular file"):
+        load_config(tmp_path)
+
+
 def test_load_config_rejects_invalid_numeric_environment_override(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

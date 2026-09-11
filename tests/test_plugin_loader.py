@@ -165,6 +165,15 @@ def test_loader_rejects_symlink_and_traversal(tmp_path: pathlib.Path) -> None:
         loader.load(repo, "../outside.py:hook")
 
 
+def test_loader_rejects_oversized_source(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "checks.py").write_bytes(
+        b"# source\n" * (plugin_loader_module.PLUGIN_SOURCE_MAX_BYTES // 8 + 1)
+    )
+
+    with pytest.raises(HookError, match="exceeds maximum size"):
+        PluginLoader().load(tmp_path, "checks.py:hook")
+
+
 def test_descriptor_relative_load_rejects_parent_symlink_replacement(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
