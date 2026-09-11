@@ -65,6 +65,11 @@ def validate_schema(schema: str | None, payload: Any) -> Any:
     if schema == "pr_create_payload":
         if not isinstance(payload, dict):
             raise HookError("Expected schema pr_create_payload")
+        for field in ("title", "body"):
+            if field in payload and not isinstance(payload[field], str):
+                raise HookError(f"pr_create_payload.{field} must be a string")
+        if "draft" in payload and not isinstance(payload["draft"], bool):
+            raise HookError("pr_create_payload.draft must be a boolean")
         return payload
     raise HookError(f"Unsupported schema: {schema}")
 

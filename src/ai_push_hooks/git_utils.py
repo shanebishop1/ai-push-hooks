@@ -729,17 +729,17 @@ def resolve_github_repository(
     if repository:
         return repository
     if remote_url.strip():
-        raise HookError(f"Cannot safely determine GitHub repository from push remote URL: {remote_url!r}")
+        raise HookError("Cannot safely determine GitHub repository from push remote URL")
     repository = _github_repository_from_url(remote_name)
     if repository:
         return repository
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", remote_name):
-        raise HookError(f"Cannot safely resolve push remote name: {remote_name!r}")
+        raise HookError("Cannot safely resolve push remote name")
     configured_url = git(repo_root, ["remote", "get-url", "--push", remote_name], check=False)
     repository = _github_repository_from_url(configured_url)
     if not repository:
         raise HookError(
-            f"Cannot safely determine GitHub repository for push remote {remote_name!r}"
+            "Cannot safely determine GitHub repository for the configured push remote"
         )
     return repository
 

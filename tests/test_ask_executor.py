@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from ai_push_hooks.config import load_config
-from ai_push_hooks.executors.ask import run_ask_step
+from ai_push_hooks.executors.ask import run_ask_step, validate_schema
 from ai_push_hooks.executors.runners import (
     RunnerAdapterUnavailableError,
     RunnerCapabilities,
@@ -17,6 +17,23 @@ from ai_push_hooks.executors.runners import (
 from ai_push_hooks.types import HookError
 
 from .conftest import build_context, init_repo
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("title", True), ("body", 123), ("draft", "false"), ("draft", 1)],
+)
+def test_pr_create_payload_rejects_type_coercion_inputs(field: str, value: object) -> None:
+    payload = {field: value}
+
+    with pytest.raises(HookError, match=rf"pr_create_payload\.{field}"):
+        validate_schema("pr_create_payload", payload)
+
+
+def test_pr_create_payload_allows_optional_fields_to_be_omitted() -> None:
+    assert validate_schema("pr_create_payload", {"extra": "preserved"}) == {
+        "extra": "preserved"
+    }
 
 
 def _use_runner_boundary_logger(context, monkeypatch) -> None:

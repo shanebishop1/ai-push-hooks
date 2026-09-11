@@ -316,11 +316,14 @@ def gh_pr_create_executor(
         args.append("--draft")
     created = git_utils.run_command(args, cwd=context.repo_root, check=False)
     combined_output = "\n".join([(created.stdout or "").strip(), (created.stderr or "").strip()])
-    pr_url = git_utils.extract_pr_url(combined_output)
-    if created.returncode != 0 and not pr_url:
+    if created.returncode != 0:
+        # A URL in failed-command output is not proof that the create operation
+        # succeeded. Reconcile against GitHub before accepting the result.
         pr_url = git_utils.lookup_open_pr_url(
             context.repo_root, branch_name, default_base_branch, repository
         )
+    else:
+        pr_url = git_utils.extract_pr_url(combined_output)
     if not pr_url:
         details = git_utils._command_diagnostics(args, created.stdout or "", created.stderr or "")
         raise HookError(

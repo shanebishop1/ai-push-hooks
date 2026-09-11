@@ -263,6 +263,84 @@ def test_gh_pr_create_reuses_existing_open_pr_without_creating_another(
     assert result == {"skipped": False, "pr_url": existing_url, "already_exists": True}
 
 
+def test_gh_pr_create_requires_lookup_after_nonzero_result_with_url(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text('{"title":"Title","body":"Body"}\n', encoding="utf-8")
+    authoritative_url = "https://github.com/test/repo/pull/99"
+    lookup_results = iter(["", authoritative_url])
+    lookup_calls = []
+
+    monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_lookup(*args, **kwargs):
+        lookup_calls.append((args, kwargs))
+        return next(lookup_results)
+
+    monkeypatch.setattr(git_utils, "lookup_open_pr_url", fake_lookup)
+    monkeypatch.setattr(
+        git_utils,
+        "run_command",
+        lambda *args, **kwargs: type(
+            "Completed",
+            (),
+            {
+                "returncode": 1,
+                "stdout": "created https://github.com/test/repo/pull/1",
+                "stderr": "gh reported an error",
+            },
+        )(),
+    )
+
+    result = gh_pr_create_executor(
+        context,
+        type("State", (), {"metadata": {}})(),
+        config.modules["pr"].steps[-1],
+        [payload],
+    )
+
+    assert result["pr_url"] == authoritative_url
+    assert len(lookup_calls) == 2
+
+
+def test_gh_pr_create_rejects_nonzero_result_even_when_output_contains_url(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text('{"title":"Title","body":"Body"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(git_utils, "lookup_open_pr_url", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        git_utils,
+        "run_command",
+        lambda *args, **kwargs: type(
+            "Completed",
+            (),
+            {
+                "returncode": 1,
+                "stdout": "created https://github.com/test/repo/pull/1",
+                "stderr": "gh reported an error",
+            },
+        )(),
+    )
+
+    with pytest.raises(HookError):
+        gh_pr_create_executor(
+            context,
+            type("State", (), {"metadata": {}})(),
+            config.modules["pr"].steps[-1],
+            [payload],
+        )
+
+
 def test_initial_push_workflow_defers_before_llm_or_gh(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
@@ -335,6 +413,26 @@ def test_github_repository_is_derived_from_supported_push_urls(
     assert git_utils.resolve_github_repository(repo, "origin", remote_url) == (
         "owner/repository"
     )
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://alice:super-secret@example.invalid/owner/repository.git",
+        "malformed remote URL with super-secret",
+    ],
+)
+def test_rejected_remote_url_diagnostics_do_not_echo_url_or_credentials(
+    tmp_path: pathlib.Path, remote_url: str
+) -> None:
+    repo = init_repo(tmp_path)
+
+    with pytest.raises(HookError) as raised:
+        git_utils.resolve_github_repository(repo, "origin", remote_url)
+
+    message = str(raised.value)
+    assert remote_url not in message
+    assert "super-secret" not in message
 
 
 def test_github_repository_can_be_derived_from_validated_remote_name(tmp_path) -> None:
