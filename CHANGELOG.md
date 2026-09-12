@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-12
+
+This is a beta patch release. Python and npm both use `0.3.2`, the canonical
+Git tag is `v0.3.2`, npm uses the `beta` dist-tag, and GitHub marks the release
+as a prerelease. PyPI does not provide a separate beta channel, so Python users
+must select the exact `0.3.2` version.
+
 ### Changed
 
 - Added a pinned Ruff 0.13.3 formatting policy for Python sources, tests, and scripts.
@@ -189,7 +196,8 @@ the exact `0.2.0` version rather than a PyPI beta channel.
 - Preserved Git porcelain paths and protected pre-existing dirty allowlisted files during apply steps.
 - Clarified module-local artifact references and standardized the repository hook integration.
 
-[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.0...v0.2.1
