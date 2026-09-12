@@ -25,8 +25,10 @@ _PLACEHOLDER_PATTERN = re.compile(r"\{[^{}]*\}")
 
 
 def _is_plain_text(value: object, *, allow_empty: bool = False) -> bool:
-    return isinstance(value, str) and (allow_empty or bool(value.strip())) and not any(
-        ord(character) < 32 for character in value
+    return (
+        isinstance(value, str)
+        and (allow_empty or bool(value.strip()))
+        and not any(ord(character) < 32 for character in value)
     )
 
 
@@ -69,10 +71,14 @@ def _validate_request(request: object) -> RunnerRequest:
         or not math.isfinite(request.timeout_seconds)
         or request.timeout_seconds <= 0
     ):
-        raise RunnerContractError("timeout_seconds must be finite and greater than zero")
+        raise RunnerContractError(
+            "timeout_seconds must be finite and greater than zero"
+        )
 
     if request.model is not None and not _is_plain_text(request.model):
-        raise RunnerContractError("model must be a non-empty NUL-free string when provided")
+        raise RunnerContractError(
+            "model must be a non-empty NUL-free string when provided"
+        )
     if request.variant is not None:
         raise RunnerContractError("variant is not valid for runner type command")
     if request.prompt_transport not in {"stdin", "argv"}:
@@ -85,11 +91,17 @@ def _validate_request(request: object) -> RunnerRequest:
     prompt_count = 0
     for index, argument in enumerate(command, start=1):
         if not isinstance(argument, str) or not argument.strip() or "\x00" in argument:
-            raise RunnerContractError(f"command[{index}] must be a non-empty NUL-free string")
+            raise RunnerContractError(
+                f"command[{index}] must be a non-empty NUL-free string"
+            )
         for placeholder in _PLACEHOLDER_PATTERN.findall(argument):
             if placeholder not in _ALLOWED_PLACEHOLDERS:
-                raise RunnerContractError(f"unknown placeholder {placeholder!r} in command[{index}]")
-        if ("{" in argument or "}" in argument) and argument not in _ALLOWED_PLACEHOLDERS:
+                raise RunnerContractError(
+                    f"unknown placeholder {placeholder!r} in command[{index}]"
+                )
+        if (
+            "{" in argument or "}" in argument
+        ) and argument not in _ALLOWED_PLACEHOLDERS:
             raise RunnerContractError(
                 f"placeholders in command[{index}] must be whole argv elements"
             )
@@ -97,7 +109,9 @@ def _validate_request(request: object) -> RunnerRequest:
             prompt_count += 1
 
     if request.prompt_transport == "stdin" and prompt_count:
-        raise RunnerContractError("command must not contain {prompt} with stdin transport")
+        raise RunnerContractError(
+            "command must not contain {prompt} with stdin transport"
+        )
     if request.prompt_transport == "argv" and prompt_count != 1:
         raise RunnerContractError(
             "command must contain exactly one {prompt} with argv transport"
@@ -142,7 +156,9 @@ class CommandRunner:
         except RunnerExecutableNotFoundError as exc:
             # The rendered argv can contain prompt/model values.  Do not
             # repeat the lower-level adapter's executable detail here.
-            raise RunnerExecutableNotFoundError("runner executable was not found") from exc
+            raise RunnerExecutableNotFoundError(
+                "runner executable was not found"
+            ) from exc
         result = RunnerResult(
             final_text=process_result.stdout,
             returncode=process_result.returncode,

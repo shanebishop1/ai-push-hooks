@@ -25,7 +25,11 @@ from .opencode_support import (
     sanitize_filename_component,
     validate_hook_owned_artifacts,
 )
-from ...paths import ensure_private_directory, resolve_contained_path, write_text_no_follow
+from ...paths import (
+    ensure_private_directory,
+    resolve_contained_path,
+    write_text_no_follow,
+)
 from .process import ProcessResult
 from .contracts import (
     RunnerCapabilities,
@@ -65,7 +69,9 @@ class OpenCodeRunner:
         session_id: str | None = None
         text_parts: list[str] = []
 
-        def protocol_failure(message: str, *, missing: bool = False) -> RunnerProtocolError:
+        def protocol_failure(
+            message: str, *, missing: bool = False
+        ) -> RunnerProtocolError:
             error: RunnerProtocolError
             if missing:
                 error = RunnerMissingOutputError(message)
@@ -86,7 +92,9 @@ class OpenCodeRunner:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise protocol_failure("OpenCode emitted malformed JSONL output") from exc
+                raise protocol_failure(
+                    "OpenCode emitted malformed JSONL output"
+                ) from exc
             if not isinstance(event, dict):
                 raise protocol_failure("OpenCode emitted a non-object JSONL event")
 
@@ -220,7 +228,11 @@ class OpenCodeRunner:
         *,
         prompt: str,
     ) -> list[str]:
-        agent = OPENCODE_APPLY_AGENT if request.mode == "apply" else OPENCODE_READ_ONLY_AGENT
+        agent = (
+            OPENCODE_APPLY_AGENT
+            if request.mode == "apply"
+            else OPENCODE_READ_ONLY_AGENT
+        )
         config = getattr(getattr(context, "config", None), "llm", None)
         title_prefix = getattr(config, "session_title_prefix", "ai-push-hooks")
         argv = [
@@ -251,7 +263,9 @@ class OpenCodeRunner:
         return argv
 
     @staticmethod
-    def _require_staging_directory(context: Any, working_directory: pathlib.Path) -> None:
+    def _require_staging_directory(
+        context: Any, working_directory: pathlib.Path
+    ) -> None:
         """Reject repository worktrees as apply targets.
 
         The apply workflow supplies a disposable, non-VCS staging projection.
@@ -262,11 +276,16 @@ class OpenCodeRunner:
         """
 
         repository_root = context.repo_root.resolve(strict=True)
-        if working_directory == repository_root or working_directory.is_relative_to(repository_root):
+        if working_directory == repository_root or working_directory.is_relative_to(
+            repository_root
+        ):
             raise RunnerContractError(
                 "OpenCode apply requests require an isolated staging directory"
             )
-        if any((parent / ".git").exists() for parent in (working_directory, *working_directory.parents)):
+        if any(
+            (parent / ".git").exists()
+            for parent in (working_directory, *working_directory.parents)
+        ):
             raise RunnerContractError(
                 "OpenCode apply requests require a non-VCS isolated staging directory"
             )
@@ -296,7 +315,9 @@ class OpenCodeRunner:
                     "OpenCode request cwd must be an existing directory"
                 ) from exc
             if not working_directory.is_dir():
-                raise RunnerContractError("OpenCode request cwd must be an existing directory")
+                raise RunnerContractError(
+                    "OpenCode request cwd must be an existing directory"
+                )
             if request.mode == "apply":
                 self._require_staging_directory(context, working_directory)
 
@@ -311,12 +332,17 @@ class OpenCodeRunner:
                 working_directory if request.project_access == "project" else None
             ),
         )
-        executable = getattr(context, "opencode_executable", None) or resolve_opencode_executable()
+        executable = (
+            getattr(context, "opencode_executable", None)
+            or resolve_opencode_executable()
+        )
         isolated_env = opencode_isolation_env(context, security_config, request.stage)
         attachment_dir: pathlib.Path | None = None
         session_id: str | None = None
         try:
-            attachments, attachment_dir = self._materialize_attachments(context, request)
+            attachments, attachment_dir = self._materialize_attachments(
+                context, request
+            )
             # Every logical artifact is materialized, including pathless
             # contract artifacts.  Therefore native attachments carry the
             # complete snapshot and the instruction is never duplicated in a
@@ -351,14 +377,18 @@ class OpenCodeRunner:
 
             try:
                 if working_directory is None:
-                    with tempfile.TemporaryDirectory(prefix="ai-push-hooks-readonly-") as directory:
+                    with tempfile.TemporaryDirectory(
+                        prefix="ai-push-hooks-readonly-"
+                    ) as directory:
                         completed = invoke(pathlib.Path(directory).resolve(strict=True))
                 else:
                     completed = invoke(working_directory)
             except (RunnerError,) as error:
                 process_result = getattr(error, "_process_result", None)
                 partial_stdout = (
-                    process_result.stdout if isinstance(process_result, ProcessResult) else ""
+                    process_result.stdout
+                    if isinstance(process_result, ProcessResult)
+                    else ""
                 )
                 setattr(
                     error,
@@ -397,7 +427,9 @@ class OpenCodeRunner:
                 stdout=completed.stdout,
                 stderr=completed.stderr,
                 session=(
-                    SessionMetadata(session_id=session_id, state="persisted", resumable=True)
+                    SessionMetadata(
+                        session_id=session_id, state="persisted", resumable=True
+                    )
                     if session_id
                     else SessionMetadata()
                 ),
@@ -427,7 +459,9 @@ class OpenCodeRunner:
             non_agent_opencode_config(),
             request.stage,
         )
-        with tempfile.TemporaryDirectory(prefix=f"ai-push-hooks-session-{action}-") as directory:
+        with tempfile.TemporaryDirectory(
+            prefix=f"ai-push-hooks-session-{action}-"
+        ) as directory:
             return run_process(
                 argv,
                 cwd=pathlib.Path(directory).resolve(strict=True),
@@ -456,7 +490,10 @@ class OpenCodeRunner:
                     "OpenCode transcript path",
                 )
                 try:
-                    executable = getattr(context, "opencode_executable", None) or resolve_opencode_executable()
+                    executable = (
+                        getattr(context, "opencode_executable", None)
+                        or resolve_opencode_executable()
+                    )
                     exported = self._lifecycle_process(
                         request,
                         context,
@@ -469,10 +506,17 @@ class OpenCodeRunner:
                         and not getattr(exported, "stderr_truncated", False)
                         and exported.stdout.strip()
                     ):
-                        write_text_no_follow(transcript_path, exported.stdout.strip() + "\n")
+                        write_text_no_follow(
+                            transcript_path, exported.stdout.strip() + "\n"
+                        )
                     else:
                         transcript_path = None
-                        self._warn_export(context, request, session_id, "export returned no transcript")
+                        self._warn_export(
+                            context,
+                            request,
+                            session_id,
+                            "export returned no transcript",
+                        )
                 except Exception as exc:  # noqa: BLE001
                     transcript_path = None
                     self._warn_export(context, request, session_id, type(exc).__name__)
@@ -480,7 +524,10 @@ class OpenCodeRunner:
         deleted = False
         if getattr(context.config.llm, "delete_session_after_run", False):
             try:
-                executable = getattr(context, "opencode_executable", None) or resolve_opencode_executable()
+                executable = (
+                    getattr(context, "opencode_executable", None)
+                    or resolve_opencode_executable()
+                )
                 deleted_result = self._lifecycle_process(
                     request,
                     context,
@@ -489,9 +536,13 @@ class OpenCodeRunner:
                 )
                 deleted = deleted_result.returncode == 0
                 if not deleted:
-                    self._warn_export(context, request, session_id, "session deletion failed")
+                    self._warn_export(
+                        context, request, session_id, "session deletion failed"
+                    )
             except Exception as exc:  # noqa: BLE001
-                self._warn_export(context, request, session_id, f"delete {type(exc).__name__}")
+                self._warn_export(
+                    context, request, session_id, f"delete {type(exc).__name__}"
+                )
 
         state = "deleted" if deleted else "persisted"
         finalized_session = SessionMetadata(
@@ -510,7 +561,9 @@ class OpenCodeRunner:
         )
 
     @staticmethod
-    def _warn_export(context: Any, request: RunnerRequest, session_id: str, reason: str) -> None:
+    def _warn_export(
+        context: Any, request: RunnerRequest, session_id: str, reason: str
+    ) -> None:
         logger = getattr(context, "logger", None)
         if logger is not None:
             logger.warn(

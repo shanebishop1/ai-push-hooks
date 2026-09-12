@@ -33,9 +33,13 @@ def collect_context(context) -> CollectorResult:
         barrier.mkdir(parents=True, exist_ok=True)
         (barrier / f"{context.module_id}.ready").touch()
         expected = tuple(
-            item for item in os.environ.get("AI_PUSH_HOOKS_COLLECT_MODULES", "").split(",") if item
+            item
+            for item in os.environ.get("AI_PUSH_HOOKS_COLLECT_MODULES", "").split(",")
+            if item
         )
-        while expected and not all((barrier / f"{item}.ready").exists() for item in expected):
+        while expected and not all(
+            (barrier / f"{item}.ready").exists() for item in expected
+        ):
             time.sleep(0.005)
 
     parsed = tomli.loads("source = 'installed-interpreter'")
@@ -54,11 +58,17 @@ def collect_context(context) -> CollectorResult:
 
 def exec_context(context) -> dict[str, object]:
     payload = json.loads(context.inputs["context.json"].read_text(encoding="utf-8"))
-    return {"callback": "exec_context", "module": context.module_id, "input": payload["module"]}
+    return {
+        "callback": "exec_context",
+        "module": context.module_id,
+        "input": payload["module"],
+    }
 
 
 def assert_context(context) -> dict[str, object]:
-    payload = json.loads(context.inputs["command/result.json"].read_text(encoding="utf-8"))
+    payload = json.loads(
+        context.inputs["command/result.json"].read_text(encoding="utf-8")
+    )
     return {
         "ok": payload.get("returncode") == 0,
         "message": "command did not succeed" if payload.get("returncode") != 0 else "",

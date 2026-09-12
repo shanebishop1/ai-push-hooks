@@ -91,6 +91,9 @@ jobs:
       - name: Run Ruff
         run: python -m ruff check .
 
+      - name: Check Ruff formatting
+        run: python -m ruff format --check src tests scripts
+
       - name: Build the immutable release set once
         env:
           VERSION: ${{ steps.release.outputs.version }}

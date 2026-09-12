@@ -113,8 +113,12 @@ output = "answer.txt"
     result = WorkflowEngine(context, ArtifactStore(context.run_dir)).run()
 
     assert result.modules == {"a": "completed", "b": "completed"}
-    assert (context.run_dir / "a" / "00-query" / "answer.txt").read_text(encoding="utf-8") == "a.query\n"
-    assert (context.run_dir / "b" / "00-query" / "answer.txt").read_text(encoding="utf-8") == "b.query\n"
+    assert (context.run_dir / "a" / "00-query" / "answer.txt").read_text(
+        encoding="utf-8"
+    ) == "a.query\n"
+    assert (context.run_dir / "b" / "00-query" / "answer.txt").read_text(
+        encoding="utf-8"
+    ) == "b.query\n"
 
 
 def test_custom_apply_is_serialized_against_all_other_side_effect_work(
@@ -222,7 +226,11 @@ def test_module_local_sequencing_is_preserved(tmp_path: pathlib.Path) -> None:
                     StepConfig(id="exec", type="exec", executor="stub"),
                 ),
             ),
-            ModuleConfig(id="b", enabled=True, steps=(StepConfig(id="collect", type="collect", collector="stub"),)),
+            ModuleConfig(
+                id="b",
+                enabled=True,
+                steps=(StepConfig(id="collect", type="collect", collector="stub"),),
+            ),
         ]
     )
     repo = init_repo(tmp_path / "three", branch="feature/a")
@@ -234,8 +242,16 @@ def test_module_local_sequencing_is_preserved(tmp_path: pathlib.Path) -> None:
         exec_handlers={"stub": exec_handler},
     )
     engine.run()
-    a_collect_end = next(stamp for module, label, stamp in events if module == "a" and label == "collect-end")
-    a_exec_start = next(stamp for module, label, stamp in events if module == "a" and label == "exec-start")
+    a_collect_end = next(
+        stamp
+        for module, label, stamp in events
+        if module == "a" and label == "collect-end"
+    )
+    a_exec_start = next(
+        stamp
+        for module, label, stamp in events
+        if module == "a" and label == "exec-start"
+    )
     assert a_exec_start >= a_collect_end
 
 
@@ -256,7 +272,9 @@ def test_local_callbacks_overlap_but_commands_serialize_and_gates_skip_imports(
     monkeypatch.setenv("AI_PUSH_HOOKS_PLUGIN_IMPORT_MARKER", str(marker))
     monkeypatch.setenv("AI_PUSH_HOOKS_COLLECT_BARRIER", str(barrier))
     monkeypatch.setenv("AI_PUSH_HOOKS_COLLECT_MODULES", "a,b")
-    monkeypatch.setenv("AI_PUSH_HOOKS_SERIAL_COMMAND_LOCK", str(tmp_path / "command.lock"))
+    monkeypatch.setenv(
+        "AI_PUSH_HOOKS_SERIAL_COMMAND_LOCK", str(tmp_path / "command.lock")
+    )
     monkeypatch.setenv("AI_PUSH_HOOKS_SERIAL_COMMAND_EVENTS", str(events))
     repo.joinpath("ai-push-hooks.toml").write_text(
         """

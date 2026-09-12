@@ -30,7 +30,9 @@ Usage: claude [options] [prompt]
 """
 
 
-def request(tmp_path: pathlib.Path, *, mode: str = "ask", **overrides: object) -> RunnerRequest:
+def request(
+    tmp_path: pathlib.Path, *, mode: str = "ask", **overrides: object
+) -> RunnerRequest:
     values: dict[str, object] = {
         "profile_id": "claude-review",
         "runner_type": "claude",
@@ -54,7 +56,9 @@ def install_fake_cli(
     calls: list[dict[str, object]] = []
     executable = "/usr/local/bin/claude"
 
-    monkeypatch.setattr(claude.shutil, "which", lambda name: executable if name == "claude" else None)
+    monkeypatch.setattr(
+        claude.shutil, "which", lambda name: executable if name == "claude" else None
+    )
 
     def fake_run_process(
         argv: list[str],
@@ -83,7 +87,9 @@ def help_result() -> ProcessResult:
     return ProcessResult(0, HELP, "")
 
 
-def success_result(*, text: str = "done", session_id: str = "session-123") -> ProcessResult:
+def success_result(
+    *, text: str = "done", session_id: str = "session-123"
+) -> ProcessResult:
     return ProcessResult(
         0,
         '{"type":"result","subtype":"success","is_error":false,'
@@ -93,7 +99,9 @@ def success_result(*, text: str = "done", session_id: str = "session-123") -> Pr
     )
 
 
-def test_create_runner_checks_help_without_model_or_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+def test_create_runner_checks_help_without_model_or_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     calls, executable = install_fake_cli(monkeypatch, [help_result()])
     runner = claude.create_runner()
 
@@ -193,7 +201,10 @@ def test_error_result_subtype_fails_closed_and_redacts_diagnostics(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "env-secret")
     install_fake_cli(
         monkeypatch,
-        [help_result(), ProcessResult(0, payload, '{"ANTHROPIC_API_KEY":"env-secret"}')],
+        [
+            help_result(),
+            ProcessResult(0, payload, '{"ANTHROPIC_API_KEY":"env-secret"}'),
+        ],
     )
 
     with pytest.raises(RunnerProtocolError) as error:
@@ -213,10 +224,26 @@ def test_error_result_subtype_fails_closed_and_redacts_diagnostics(
     [
         ("not json", False, "valid JSON"),
         ('["not an object"]', False, "object"),
-        ('{"type":"result","subtype":"success","is_error":false}', False, "result was not a string"),
-        ('{"type":"result","subtype":"success","is_error":false,"result":"partial"}', True, "truncated"),
-        ('{"type":"result","subtype":"success","is_error":false,"result":"partial"}', True, "stderr"),
-        ('{"type":"result","subtype":"success","is_error":false,"result":"ok"}\nnoise', False, "valid JSON"),
+        (
+            '{"type":"result","subtype":"success","is_error":false}',
+            False,
+            "result was not a string",
+        ),
+        (
+            '{"type":"result","subtype":"success","is_error":false,"result":"partial"}',
+            True,
+            "truncated",
+        ),
+        (
+            '{"type":"result","subtype":"success","is_error":false,"result":"partial"}',
+            True,
+            "stderr",
+        ),
+        (
+            '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\nnoise',
+            False,
+            "valid JSON",
+        ),
     ],
 )
 def test_malformed_or_truncated_protocol_is_rejected(
@@ -269,7 +296,10 @@ def test_nonzero_exit_is_normalized_and_redacted(
 ) -> None:
     install_fake_cli(
         monkeypatch,
-        [help_result(), ProcessResult(9, "prompt-secret", "Authorization: Bearer token-secret")],
+        [
+            help_result(),
+            ProcessResult(9, "prompt-secret", "Authorization: Bearer token-secret"),
+        ],
     )
 
     with pytest.raises(RunnerNonzeroExitError) as error:
@@ -280,7 +310,9 @@ def test_nonzero_exit_is_normalized_and_redacted(
     assert "claude-review" in message
 
 
-def test_process_timeout_is_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+def test_process_timeout_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     executable = "/usr/local/bin/claude"
     monkeypatch.setattr(claude.shutil, "which", lambda _name: executable)
     # Construction still needs capability evidence; restore one capability
@@ -324,7 +356,11 @@ def test_capability_unavailable_fails_closed(
         monkeypatch.setattr(claude.shutil, "which", lambda _name: None)
     else:
         monkeypatch.setattr(claude.shutil, "which", lambda _name: executable)
-        output = HELP.replace("acceptEdits", "unsupportedMode") if which_help == "missing-accept-edits" else HELP
+        output = (
+            HELP.replace("acceptEdits", "unsupportedMode")
+            if which_help == "missing-accept-edits"
+            else HELP
+        )
 
         def fake_help(
             argv: list[str],
@@ -334,7 +370,9 @@ def test_capability_unavailable_fails_closed(
             timeout_seconds: float,
             env: object = None,
         ) -> ProcessResult:
-            return ProcessResult(2 if which_help == "nonzero" else 0, output, "help failure")
+            return ProcessResult(
+                2 if which_help == "nonzero" else 0, output, "help failure"
+            )
 
         monkeypatch.setattr(claude, "run_process", fake_help)
 

@@ -6,7 +6,9 @@ from ai_push_hooks import cli
 
 
 @pytest.mark.parametrize("status", [0, 1, 17])
-def test_hook_forwards_arguments_and_status(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+def test_hook_forwards_arguments_and_status(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
     called_with: list[tuple[str, str]] = []
 
     def _run_hook(remote_name: str, remote_url: str) -> int:

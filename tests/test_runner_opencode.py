@@ -26,7 +26,9 @@ from ai_push_hooks.types import HookError, HookLogger
 from .conftest import build_context, init_repo
 
 
-def _request(context, *, project_access: str = "artifacts", **overrides: object) -> RunnerRequest:
+def _request(
+    context, *, project_access: str = "artifacts", **overrides: object
+) -> RunnerRequest:
     artifact = context.run_dir / "input.txt"
     artifact.write_text("artifact body\n", encoding="utf-8")
     values: dict[str, object] = {
@@ -104,7 +106,15 @@ def test_project_request_uses_effective_model_variant_and_rooted_read_policy(
     assert permissions["edit"] == "deny"
     for tool in ("read", "list", "glob", "grep"):
         assert permissions[tool] == "allow"
-    for tool in ("bash", "task", "webfetch", "websearch", "skill", "todowrite", "question"):
+    for tool in (
+        "bash",
+        "task",
+        "webfetch",
+        "websearch",
+        "skill",
+        "todowrite",
+        "question",
+    ):
         assert permissions[tool] == "deny"
     assert security["plugin"] == []
     assert security["mcp"] == {}
@@ -113,7 +123,7 @@ def test_project_request_uses_effective_model_variant_and_rooted_read_policy(
 @pytest.mark.parametrize(
     "stdout, expected",
     [
-        ('not json\n', RunnerProtocolError),
+        ("not json\n", RunnerProtocolError),
         ('{"type":"step_start"}\n', RunnerMissingOutputError),
     ],
 )
@@ -285,11 +295,16 @@ def test_opencode_still_rejects_symlinked_or_escaping_source_artifacts(
 
     with pytest.raises(HookError, match="symlink"):
         OpenCodeRunner().run(
-            _request(context, artifacts=(RunnerArtifact("linked.txt", "snapshot", linked),))
+            _request(
+                context, artifacts=(RunnerArtifact("linked.txt", "snapshot", linked),)
+            )
         )
     with pytest.raises(HookError, match="not a hook-owned artifact"):
         OpenCodeRunner().run(
-            _request(context, artifacts=(RunnerArtifact("external.txt", "snapshot", external),))
+            _request(
+                context,
+                artifacts=(RunnerArtifact("external.txt", "snapshot", external),),
+            )
         )
 
 
@@ -444,7 +459,9 @@ def test_finalize_reports_deleted_session_and_private_transcript(
     monkeypatch.setattr(
         "ai_push_hooks.executors.runners.opencode.run_process", fake_run_process
     )
-    result = RunnerResult("[]", 0, "", "", SessionMetadata("session-1", "persisted", True))
+    result = RunnerResult(
+        "[]", 0, "", "", SessionMetadata("session-1", "persisted", True)
+    )
 
     finalized = OpenCodeRunner().finalize(_request(context), result)
 
@@ -453,8 +470,14 @@ def test_finalize_reports_deleted_session_and_private_transcript(
     assert finalized.session.resumable is False
     assert finalized.session.transcript is not None
     assert pathlib.Path(finalized.session.transcript).is_relative_to(context.git_dir)
-    assert pathlib.Path(finalized.session.transcript).read_text(encoding="utf-8") == '{"session":"session-1"}\n'
-    assert [call[1:3] for call in calls] == [["export", "session-1"], ["session", "delete"]]
+    assert (
+        pathlib.Path(finalized.session.transcript).read_text(encoding="utf-8")
+        == '{"session":"session-1"}\n'
+    )
+    assert [call[1:3] for call in calls] == [
+        ["export", "session-1"],
+        ["session", "delete"],
+    ]
 
 
 def test_finalize_never_persists_truncated_export(
@@ -626,8 +649,15 @@ def test_apply_run_uses_allowlisted_edit_permissions_for_staging(
         )
     )
 
-    assert captured["argv"][2:6] == ["--agent", "ai-push-hooks-apply", "--pure", "--format"]
-    assert (staging / "README.md").read_text(encoding="utf-8") == "updated in isolated staging\n"
+    assert captured["argv"][2:6] == [
+        "--agent",
+        "ai-push-hooks-apply",
+        "--pure",
+        "--format",
+    ]
+    assert (staging / "README.md").read_text(
+        encoding="utf-8"
+    ) == "updated in isolated staging\n"
     permissions = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])["agent"][
         "ai-push-hooks-apply"
     ]["permission"]
@@ -659,7 +689,9 @@ def test_apply_run_rejects_missing_or_non_directory_cwd(
 
     with pytest.raises(RunnerContractError, match="existing directory"):
         OpenCodeRunner().run(
-            _request(context, mode="apply", artifacts=(), cwd=cwd, allow_paths=("README.md",))
+            _request(
+                context, mode="apply", artifacts=(), cwd=cwd, allow_paths=("README.md",)
+            )
         )
 
 
@@ -713,7 +745,9 @@ def test_finalize_warns_and_deletes_when_export_has_no_transcript(
     monkeypatch.setattr(
         "ai_push_hooks.executors.runners.opencode.run_process", fake_run_process
     )
-    result = RunnerResult("[]", 0, "", "", SessionMetadata("session-failed", "persisted", True))
+    result = RunnerResult(
+        "[]", 0, "", "", SessionMetadata("session-failed", "persisted", True)
+    )
 
     finalized = OpenCodeRunner().finalize(_request(context), result)
 
@@ -724,7 +758,10 @@ def test_finalize_warns_and_deletes_when_export_has_no_transcript(
         ["export", "session-failed"],
         ["session", "delete"],
     ]
-    assert "Could not capture or delete the OpenCode session cleanly" in capsys.readouterr().err
+    assert (
+        "Could not capture or delete the OpenCode session cleanly"
+        in capsys.readouterr().err
+    )
 
 
 def test_finalize_export_process_exception_still_deletes_session(
@@ -803,16 +840,23 @@ def test_finalize_deletes_when_transcript_write_fails(
     )
     monkeypatch.setattr(
         "ai_push_hooks.executors.runners.opencode.write_text_no_follow",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("simulated transcript failure")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("simulated transcript failure")
+        ),
     )
 
     OpenCodeRunner().finalize(
         _request(context),
-        RunnerResult("[]", 0, "", "", SessionMetadata("session-write", "persisted", True)),
+        RunnerResult(
+            "[]", 0, "", "", SessionMetadata("session-write", "persisted", True)
+        ),
     )
 
     assert [argv[1:3] for argv in calls] == [
         ["export", "session-write"],
         ["session", "delete"],
     ]
-    assert "Could not capture or delete the OpenCode session cleanly" in capsys.readouterr().err
+    assert (
+        "Could not capture or delete the OpenCode session cleanly"
+        in capsys.readouterr().err
+    )

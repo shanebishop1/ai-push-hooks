@@ -98,7 +98,9 @@ def resolve_contained_path(base: pathlib.Path, raw: str, label: str) -> pathlib.
     resolved_base = lexical_base.resolve(strict=False)
     resolved_candidate = lexical_candidate.resolve(strict=False)
     if not is_path_within(resolved_candidate, resolved_base):
-        raise HookError(f"{label} escapes its intended directory through a symlink: {raw}")
+        raise HookError(
+            f"{label} escapes its intended directory through a symlink: {raw}"
+        )
     return resolved_candidate
 
 
@@ -178,5 +180,7 @@ def atomic_write_bytes(
             pass
 
 
-def write_text_no_follow(path: pathlib.Path, content: str, *, encoding: str = "utf-8") -> None:
+def write_text_no_follow(
+    path: pathlib.Path, content: str, *, encoding: str = "utf-8"
+) -> None:
     atomic_write_bytes(path, content.encode(encoding))

@@ -95,9 +95,14 @@ def test_apply_runs_in_minimal_staging_and_propagates_allowed_changes(
 ) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     (repo / ".gitignore").write_text("secret.env\n", encoding="utf-8")
-    subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", "ignore secret"], cwd=repo, check=True, capture_output=True
+        ["git", "add", ".gitignore"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "ignore secret"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
     )
     (repo / "secret.env").write_text("TOKEN=secret\n", encoding="utf-8")
     config, _ = load_config(repo)
@@ -158,7 +163,9 @@ def test_apply_preserves_dirty_allowed_content_as_staging_baseline(
     def fake_call(*args, **kwargs):
         staged_readme = kwargs["working_directory"] / "README.md"
         assert staged_readme.read_text(encoding="utf-8") == "# Dirty user content\n"
-        staged_readme.write_text("# Dirty user content\n\nAgent addition.\n", encoding="utf-8")
+        staged_readme.write_text(
+            "# Dirty user content\n\nAgent addition.\n", encoding="utf-8"
+        )
         return ApplyResult()
 
     monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
@@ -168,7 +175,9 @@ def test_apply_preserves_dirty_allowed_content_as_staging_baseline(
     assert "Dirty user content" in (repo / "README.md").read_text(encoding="utf-8")
 
 
-def test_apply_rejects_non_allowlisted_staging_output_before_copy(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_non_allowlisted_staging_output_before_copy(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -176,7 +185,9 @@ def test_apply_rejects_non_allowlisted_staging_output_before_copy(tmp_path, monk
     input_path = _issues_artifact(context)
 
     def fake_call(*args, **kwargs):
-        (kwargs["working_directory"] / "escape.txt").write_text("bad\n", encoding="utf-8")
+        (kwargs["working_directory"] / "escape.txt").write_text(
+            "bad\n", encoding="utf-8"
+        )
         return ApplyResult()
 
     monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
@@ -186,7 +197,9 @@ def test_apply_rejects_non_allowlisted_staging_output_before_copy(tmp_path, monk
     assert not (repo / "escape.txt").exists()
 
 
-def test_apply_rejects_staging_symlink_escape_before_copy(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_staging_symlink_escape_before_copy(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     outside = tmp_path / "outside.txt"
     outside.write_text("outside\n", encoding="utf-8")
@@ -231,7 +244,9 @@ def test_apply_never_propagates_staged_git_metadata_with_broad_allowlist(
     assert (repo / ".git" / "config").read_bytes() == original_git_config
 
 
-def test_apply_rejects_outputs_ignored_by_staged_gitignore(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_outputs_ignored_by_staged_gitignore(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -253,7 +268,9 @@ def test_apply_rejects_outputs_ignored_by_staged_gitignore(tmp_path, monkeypatch
     assert not (repo / ".gitignore").exists()
 
 
-def test_apply_verifies_real_checkout_matches_validated_staging(tmp_path, monkeypatch) -> None:
+def test_apply_verifies_real_checkout_matches_validated_staging(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -275,7 +292,8 @@ def test_apply_verifies_real_checkout_matches_validated_staging(tmp_path, monkey
 
     monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
     monkeypatch.setattr(
-        "ai_push_hooks.executors.apply._propagate_staging_changes", corrupt_after_propagation
+        "ai_push_hooks.executors.apply._propagate_staging_changes",
+        corrupt_after_propagation,
     )
 
     with pytest.raises(HookError, match="does not match validated staging output"):
@@ -302,7 +320,9 @@ def test_apply_does_not_attach_symlinked_agents_file(tmp_path, monkeypatch) -> N
     assert _run_apply(context, step, input_path)["changed"] is False
 
 
-def test_apply_rejects_external_or_symlinked_input_artifacts(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_external_or_symlinked_input_artifacts(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -321,7 +341,9 @@ def test_apply_rejects_external_or_symlinked_input_artifacts(tmp_path, monkeypat
         _run_apply(context, step, symlink)
 
 
-def test_apply_default_logging_succeeds_in_linked_worktree(tmp_path, monkeypatch) -> None:
+def test_apply_default_logging_succeeds_in_linked_worktree(
+    tmp_path, monkeypatch
+) -> None:
     primary = init_repo(tmp_path, branch="main")
     linked = tmp_path / "linked"
     subprocess.run(
@@ -340,7 +362,9 @@ def test_apply_default_logging_succeeds_in_linked_worktree(tmp_path, monkeypatch
 
     def fake_call(*args, **kwargs):
         context.logger.llm_call("docs.apply", "apply:apply", context.config.llm.model)
-        (kwargs["working_directory"] / "README.md").write_text("# Updated\n", encoding="utf-8")
+        (kwargs["working_directory"] / "README.md").write_text(
+            "# Updated\n", encoding="utf-8"
+        )
         return ApplyResult()
 
     monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
@@ -350,7 +374,9 @@ def test_apply_default_logging_succeeds_in_linked_worktree(tmp_path, monkeypatch
     assert log_path.exists()
 
 
-def test_apply_detects_linked_worktree_common_control_metadata_change(tmp_path, monkeypatch) -> None:
+def test_apply_detects_linked_worktree_common_control_metadata_change(
+    tmp_path, monkeypatch
+) -> None:
     primary = init_repo(tmp_path, branch="main")
     linked = tmp_path / "linked"
     subprocess.run(
@@ -409,7 +435,9 @@ def test_apply_fails_closed_on_symlinked_shared_git_config_before_opencode(
         lambda *args, **kwargs: calls.append("called"),
     )
 
-    with pytest.raises(HookError, match="symlinked monitored Git metadata.*shared:config"):
+    with pytest.raises(
+        HookError, match="symlinked monitored Git metadata.*shared:config"
+    ):
         _run_apply(context, step, input_path)
 
     assert calls == []
@@ -574,7 +602,9 @@ def test_apply_rejects_case_variant_protected_staging_paths(
     input_path = _issues_artifact(context)
 
     def fake_call(*args, **kwargs):
-        target = kwargs["working_directory"].joinpath(*pathlib.PurePosixPath(protected_path).parts)
+        target = kwargs["working_directory"].joinpath(
+            *pathlib.PurePosixPath(protected_path).parts
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("malicious\n", encoding="utf-8")
         return ApplyResult()
@@ -585,7 +615,9 @@ def test_apply_rejects_case_variant_protected_staging_paths(
         _run_apply(context, step, input_path)
 
 
-def test_apply_rejects_destination_inside_actual_nonstandard_git_dir(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_destination_inside_actual_nonstandard_git_dir(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     (repo / ".git").rename(repo / "repo-metadata")
     (repo / ".git").write_text("gitdir: repo-metadata\n", encoding="utf-8")
@@ -608,7 +640,9 @@ def test_apply_rejects_destination_inside_actual_nonstandard_git_dir(tmp_path, m
     assert (repo / "repo-metadata" / "config").read_bytes() == original_config
 
 
-def test_session_finalization_tamper_is_detected_before_propagation(tmp_path, monkeypatch) -> None:
+def test_session_finalization_tamper_is_detected_before_propagation(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -637,7 +671,9 @@ def test_session_finalization_tamper_is_detected_before_propagation(tmp_path, mo
     assert (repo / "README.md").read_text(encoding="utf-8") == "# Example\n"
 
 
-def test_unrelated_linked_worktree_metadata_does_not_block_propagation(tmp_path, monkeypatch) -> None:
+def test_unrelated_linked_worktree_metadata_does_not_block_propagation(
+    tmp_path, monkeypatch
+) -> None:
     primary = init_repo(tmp_path, branch="main")
     current = tmp_path / "current"
     unrelated = tmp_path / "unrelated"
@@ -696,7 +732,9 @@ def test_apply_failure_does_not_copy_staging_changes(tmp_path, monkeypatch) -> N
         stderr = "failed"
 
     def fake_call(*args, **kwargs):
-        (kwargs["working_directory"] / "README.md").write_text("# Must not copy\n", encoding="utf-8")
+        (kwargs["working_directory"] / "README.md").write_text(
+            "# Must not copy\n", encoding="utf-8"
+        )
         return FailedResult()
 
     monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
@@ -736,7 +774,9 @@ def test_docs_apply_blocks_push_until_manual_commit(tmp_path: pathlib.Path) -> N
         engine.run()
 
 
-def test_apply_requires_single_pushed_branch_at_checked_out_head(tmp_path, monkeypatch) -> None:
+def test_apply_requires_single_pushed_branch_at_checked_out_head(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -759,7 +799,9 @@ def test_apply_requires_single_pushed_branch_at_checked_out_head(tmp_path, monke
     assert calls == []
 
 
-def test_apply_skips_empty_issues_without_a_pushed_branch(tmp_path, monkeypatch) -> None:
+def test_apply_skips_empty_issues_without_a_pushed_branch(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path)
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -780,14 +822,18 @@ def test_apply_skips_empty_issues_without_a_pushed_branch(tmp_path, monkeypatch)
     assert calls == []
 
 
-def test_apply_rejects_push_commit_that_is_not_checked_out_head(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_push_commit_that_is_not_checked_out_head(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
     step = config.modules["docs"].steps[3]
     input_path = _issues_artifact(context)
     (repo / "later.txt").write_text("later\n", encoding="utf-8")
-    subprocess.run(["git", "add", "later.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "later.txt"], cwd=repo, check=True, capture_output=True
+    )
     subprocess.run(
         ["git", "commit", "-m", "later"], cwd=repo, check=True, capture_output=True
     )
@@ -803,7 +849,9 @@ def test_apply_rejects_push_commit_that_is_not_checked_out_head(tmp_path, monkey
     assert calls == []
 
 
-def test_apply_rejects_oversized_checkout_file_before_opencode(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_oversized_checkout_file_before_opencode(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -822,7 +870,9 @@ def test_apply_rejects_oversized_checkout_file_before_opencode(tmp_path, monkeyp
     assert calls == []
 
 
-def test_apply_rejects_oversized_staging_output_before_hashing(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_oversized_staging_output_before_hashing(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -872,7 +922,9 @@ def test_apply_source_must_resolve_inside_repository(tmp_path, monkeypatch) -> N
         _run_apply(context, step, input_path)
 
 
-def test_apply_propagation_error_reports_already_applied_paths(tmp_path, monkeypatch) -> None:
+def test_apply_propagation_error_reports_already_applied_paths(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
@@ -892,7 +944,9 @@ def test_apply_propagation_error_reports_already_applied_paths(tmp_path, monkeyp
         return real_atomic_write(path, content, **kwargs)
 
     monkeypatch.setattr("ai_push_hooks.executors.apply.run_runner_once", fake_call)
-    monkeypatch.setattr(apply_executor, "atomic_write_bytes", fail_second_checkout_write)
+    monkeypatch.setattr(
+        apply_executor, "atomic_write_bytes", fail_second_checkout_write
+    )
 
     with pytest.raises(HookError, match="already-applied paths: README.md"):
         _run_apply(context, step, input_path)
@@ -928,7 +982,9 @@ def test_apply_monitors_configured_external_hooks_path(tmp_path, monkeypatch) ->
         _run_apply(context, step, input_path)
 
 
-def test_apply_rejects_hooks_path_inside_runtime_metadata(tmp_path, monkeypatch) -> None:
+def test_apply_rejects_hooks_path_inside_runtime_metadata(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     subprocess.run(
         ["git", "config", "core.hooksPath", ".git/ai-push-hooks/custom-hooks"],

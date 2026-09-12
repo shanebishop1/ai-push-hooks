@@ -53,13 +53,17 @@ def _profiled_context(tmp_path: pathlib.Path, profile: RunnerProfile):
 def test_run_runner_once_dispatches_profile_with_ordered_logical_artifacts_and_finalizes(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    profile = RunnerProfile(name="review", type="codex", model="review-model", project_access="project")
+    profile = RunnerProfile(
+        name="review", type="codex", model="review-model", project_access="project"
+    )
     repo, context = _profiled_context(tmp_path, profile)
     input_one = context.run_dir / "first.txt"
     input_two = context.run_dir / "second.txt"
     input_one.write_text("first body", encoding="utf-8")
     input_two.write_text("second body", encoding="utf-8")
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=("first.logical", "second.logical"))
     calls, completions = _logger_boundary(context, monkeypatch)
     finalized = []
@@ -81,7 +85,9 @@ def test_run_runner_once_dispatches_profile_with_ordered_logical_artifacts_and_f
             finalized.append(result)
             return result
 
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
     result = run_runner_once(
         context,
         step,
@@ -103,7 +109,9 @@ def test_run_runner_once_wraps_missing_output_and_finalizes_failure(
 ) -> None:
     profile = RunnerProfile(name="review", type="codex")
     repo, context = _profiled_context(tmp_path, profile)
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=())
     _logger_boundary(context, monkeypatch)
     finalized = []
@@ -118,9 +126,13 @@ def test_run_runner_once_wraps_missing_output_and_finalizes_failure(
             finalized.append(result)
             return result
 
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
     with pytest.raises(HookError, match=r"review.*codex.*docs\.query"):
-        run_runner_once(context, step, "instruction", [], "docs.query", working_directory=repo)
+        run_runner_once(
+            context, step, "instruction", [], "docs.query", working_directory=repo
+        )
     assert len(finalized) == 1
 
 
@@ -129,7 +141,9 @@ def test_runner_error_session_id_is_finalized_without_inventing_resume_command(
 ) -> None:
     profile = RunnerProfile(name="opencode-review", type="opencode")
     repo, context = _profiled_context(tmp_path, profile)
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=())
     _logger_boundary(context, monkeypatch)
     finalized = []
@@ -152,9 +166,13 @@ def test_runner_error_session_id_is_finalized_without_inventing_resume_command(
                 session=SessionMetadata("session-1", "persisted", True),
             )
 
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
     with pytest.raises(HookError, match=r"opencode-review.*opencode.*docs\.query"):
-        run_runner_once(context, step, "instruction", [], "docs.query", working_directory=repo)
+        run_runner_once(
+            context, step, "instruction", [], "docs.query", working_directory=repo
+        )
     assert finalized[0].session is not None
     assert finalized[0].session.session_id == "session-1"
 
@@ -167,7 +185,9 @@ def test_runner_rejects_aggregate_oversized_inputs_before_reading(
     input_path = context.run_dir / "large.txt"
     input_path.touch()
     os.truncate(input_path, runner_workflow.RUNNER_INPUT_MAX_BYTES + 1)
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=("large.txt",))
     _logger_boundary(context, monkeypatch)
     called = False
@@ -199,7 +219,9 @@ def test_runner_rechecks_parents_and_rejects_leaf_replacement_before_open(
     input_path.write_text("hook-owned", encoding="utf-8")
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=("input.txt",))
     _logger_boundary(context, monkeypatch)
     original_path_has_symlink = runner_workflow.path_has_symlink
@@ -242,7 +264,9 @@ def test_runner_error_redacts_attached_partial_process_output(
 ) -> None:
     profile = RunnerProfile(name="review", type="codex")
     repo, context = _profiled_context(tmp_path, profile)
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=())
     _logger_boundary(context, monkeypatch)
 
@@ -306,7 +330,9 @@ def test_real_command_timeout_and_signal_diagnostics_are_bounded_and_redacted(
         context.config,
         llm=replace(context.config.llm, timeout_seconds=timeout_seconds),
     )
-    step = next(step for step in context.config.modules["docs"].steps if step.id == "query")
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
     step = replace(step, inputs=())
     _logger_boundary(context, monkeypatch)
 

@@ -93,7 +93,9 @@ def _url_origin(url: str) -> tuple[str, str, int | None]:
     except ValueError as exc:
         raise ReleaseValidationError("request URL is malformed") from exc
     if parsed.username is not None or parsed.password is not None:
-        raise ReleaseValidationError("request URL must not contain embedded credentials")
+        raise ReleaseValidationError(
+            "request URL must not contain embedded credentials"
+        )
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
         raise ReleaseValidationError("request URL must use HTTP or HTTPS")
     try:
@@ -142,11 +144,15 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def _default_read_opener(request: urllib.request.Request, timeout: float) -> Any:
-    return urllib.request.build_opener(_SafeRedirectHandler()).open(request, timeout=timeout)
+    return urllib.request.build_opener(_SafeRedirectHandler()).open(
+        request, timeout=timeout
+    )
 
 
 def _default_write_opener(request: urllib.request.Request, timeout: float) -> Any:
-    return urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+    return urllib.request.build_opener(_NoRedirectHandler()).open(
+        request, timeout=timeout
+    )
 
 
 def _validate_github_api_url(url: str, *, repo: str | None = None) -> None:
@@ -176,7 +182,9 @@ def _validate_github_api_url(url: str, *, repo: str | None = None) -> None:
     if any(part in {".", ".."} for part in parts[1:]):
         raise ReleaseValidationError("GitHub API URL contains an unsafe path")
     if repo is not None and "/".join(parts[2:4]) != repo:
-        raise ReleaseValidationError("GitHub API URL repository does not match the request")
+        raise ReleaseValidationError(
+            "GitHub API URL repository does not match the request"
+        )
 
 
 def _validate_github_asset_url(
@@ -205,7 +213,9 @@ def _validate_github_asset_url(
         and path[7] == "zip"
     )
     if not is_release_asset and not (allow_actions_artifact and is_actions_asset):
-        raise ReleaseValidationError("GitHub asset URL is not an approved API asset endpoint")
+        raise ReleaseValidationError(
+            "GitHub asset URL is not an approved API asset endpoint"
+        )
 
 
 def response_class(status: int) -> str:
@@ -267,7 +277,9 @@ def _request_read(
         try:
             with open_request(request, timeout=timeout) as response:
                 status = int(response.status)
-                response_headers = {key: value for key, value in response.headers.items()}
+                response_headers = {
+                    key: value for key, value in response.headers.items()
+                }
                 body = _bounded_read(response, max_bytes)
             category = response_class(status)
             if category == "ok" or category == "not_found":
@@ -277,7 +289,9 @@ def _request_read(
                     f"registry/API read rejected credentials (HTTP {status})"
                 )
             if category != "transient":
-                raise ReleaseValidationError(f"registry/API read failed (HTTP {status})")
+                raise ReleaseValidationError(
+                    f"registry/API read failed (HTTP {status})"
+                )
             last_error = ReleaseValidationError(
                 f"transient registry/API read failure (HTTP {status})"
             )
@@ -375,12 +389,21 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
-_PEP_PRERELEASE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?P<kind>a|b|rc)(?P<number>\d+)$")
+_PEP_PRERELEASE = re.compile(
+    r"^(?P<base>\d+\.\d+\.\d+)(?P<kind>a|b|rc)(?P<number>\d+)$"
+)
 _PEP_STABLE = re.compile(r"^\d+\.\d+\.\d+$")
-_CHANNEL_DIST_TAGS = {"stable": "latest", "alpha": "alpha", "beta": "beta", "rc": "next"}
+_CHANNEL_DIST_TAGS = {
+    "stable": "latest",
+    "alpha": "alpha",
+    "beta": "beta",
+    "rc": "next",
+}
 _CHANNEL_CLASSIFIERS = {
     "stable": "Development Status :: 5 - Production/Stable",
     "alpha": "Development Status :: 3 - Alpha",
@@ -407,21 +430,33 @@ def load_release_channel(path: Path) -> ReleaseChannel:
             pypi_channel=values["pypi_channel"],
         )
     except (KeyError, OSError, TypeError, UnicodeDecodeError, ValueError) as exc:
-        raise ReleaseValidationError(f"invalid release channel metadata: {path}") from exc
+        raise ReleaseValidationError(
+            f"invalid release channel metadata: {path}"
+        ) from exc
     if values.get("version") != channel.version or not isinstance(channel.version, str):
         raise ReleaseValidationError("release channel version must be a string")
     if channel.channel not in _CHANNEL_DIST_TAGS:
         raise ReleaseValidationError(f"unsupported release channel: {channel.channel}")
-    if not isinstance(channel.npm_dist_tag, str) or not isinstance(channel.github_prerelease, bool):
-        raise ReleaseValidationError("release channel registry settings have invalid types")
+    if not isinstance(channel.npm_dist_tag, str) or not isinstance(
+        channel.github_prerelease, bool
+    ):
+        raise ReleaseValidationError(
+            "release channel registry settings have invalid types"
+        )
     if channel.npm_dist_tag != _CHANNEL_DIST_TAGS[channel.channel]:
         raise ReleaseValidationError("release channel npm dist-tag is inconsistent")
     if channel.github_prerelease != (channel.channel != "stable"):
-        raise ReleaseValidationError("release channel GitHub prerelease setting is inconsistent")
+        raise ReleaseValidationError(
+            "release channel GitHub prerelease setting is inconsistent"
+        )
     if channel.python_classifier != _CHANNEL_CLASSIFIERS[channel.channel]:
-        raise ReleaseValidationError("release channel Python classifier is inconsistent")
+        raise ReleaseValidationError(
+            "release channel Python classifier is inconsistent"
+        )
     if channel.pypi_channel != "none":
-        raise ReleaseValidationError("PyPI does not provide package channels; pypi_channel must be none")
+        raise ReleaseValidationError(
+            "PyPI does not provide package channels; pypi_channel must be none"
+        )
     return channel
 
 
@@ -478,16 +513,27 @@ def map_versions(
             raise ReleaseValidationError("release channel npm dist-tag is inconsistent")
     dist_tag = _CHANNEL_DIST_TAGS[channel]
     github_prerelease = channel != "stable"
-    if release_channel is not None and release_channel.github_prerelease != github_prerelease:
-        raise ReleaseValidationError("release channel GitHub prerelease is inconsistent")
-    return VersionInfo(python_version, npm_version, tag, channel, dist_tag, github_prerelease)
+    if (
+        release_channel is not None
+        and release_channel.github_prerelease != github_prerelease
+    ):
+        raise ReleaseValidationError(
+            "release channel GitHub prerelease is inconsistent"
+        )
+    return VersionInfo(
+        python_version, npm_version, tag, channel, dist_tag, github_prerelease
+    )
 
 
 def _run_git(*args: str) -> str:
     try:
-        return subprocess.check_output(["git", *args], text=True, stderr=subprocess.STDOUT).strip()
+        return subprocess.check_output(
+            ["git", *args], text=True, stderr=subprocess.STDOUT
+        ).strip()
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise ReleaseValidationError(f"git validation failed: {' '.join(args)}") from exc
+        raise ReleaseValidationError(
+            f"git validation failed: {' '.join(args)}"
+        ) from exc
 
 
 def validate_source(tag: str, commit: str) -> None:
@@ -515,11 +561,19 @@ def _read_versions(pyproject: Path, package_json: Path) -> tuple[str, str, list[
         classifiers = project["project"].get("classifiers", [])
         package = json.loads(package_json.read_text(encoding="utf-8"))
         npm_version = package["version"]
-    except (KeyError, OSError, UnicodeDecodeError, TypeError, json.JSONDecodeError) as exc:
+    except (
+        KeyError,
+        OSError,
+        UnicodeDecodeError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise ReleaseValidationError("package version metadata is incomplete") from exc
     if not isinstance(python_version, str) or not isinstance(npm_version, str):
         raise ReleaseValidationError("package versions must be strings")
-    if not isinstance(classifiers, list) or not all(isinstance(item, str) for item in classifiers):
+    if not isinstance(classifiers, list) or not all(
+        isinstance(item, str) for item in classifiers
+    ):
         raise ReleaseValidationError("Python classifiers must be a list of strings")
     return python_version, npm_version, classifiers
 
@@ -572,11 +626,17 @@ def create_manifest(root: Path, info: VersionInfo, commit: str) -> dict[str, Any
     npm = by_kind["npm"]
     normalized = PROJECT_NAME.replace("-", "_")
     if not wheel.name.startswith(f"{normalized}-{info.python_version}-"):
-        raise ReleaseValidationError(f"wheel does not identify version {info.python_version}")
+        raise ReleaseValidationError(
+            f"wheel does not identify version {info.python_version}"
+        )
     if sdist.name != f"{normalized}-{info.python_version}.tar.gz":
-        raise ReleaseValidationError(f"sdist name is not for version {info.python_version}")
+        raise ReleaseValidationError(
+            f"sdist name is not for version {info.python_version}"
+        )
     if npm.name != f"{PROJECT_NAME}-{info.npm_version}.tgz":
-        raise ReleaseValidationError(f"npm tarball name is not for version {info.npm_version}")
+        raise ReleaseValidationError(
+            f"npm tarball name is not for version {info.npm_version}"
+        )
     manifest = {
         "schema": 1,
         "project": PROJECT_NAME,
@@ -617,10 +677,14 @@ def _validate_artifact_descriptor(
     index: int,
 ) -> dict[str, Any]:
     if not isinstance(artifact, dict):
-        raise ReleaseValidationError(f"release manifest artifact {index} is not an object")
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} is not an object"
+        )
     expected_keys = {"name", "path", "kind", "size", "sha256", "sha512_integrity"}
     if set(artifact) != expected_keys:
-        raise ReleaseValidationError(f"release manifest artifact {index} has invalid fields")
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has invalid fields"
+        )
     name = artifact["name"]
     if (
         not isinstance(name, str)
@@ -629,21 +693,31 @@ def _validate_artifact_descriptor(
         or "\\" in name
         or name in {".", ".."}
     ):
-        raise ReleaseValidationError(f"release manifest artifact {index} has an unsafe name")
-    path = _safe_relative_path(artifact["path"], f"release manifest artifact {index} path")
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an unsafe name"
+        )
+    path = _safe_relative_path(
+        artifact["path"], f"release manifest artifact {index} path"
+    )
     if PurePosixPath(path).name != name:
         raise ReleaseValidationError(
             f"release manifest artifact {index} path does not end in its name"
         )
     kind = artifact["kind"]
     if not isinstance(kind, str) or kind not in {"wheel", "sdist", "npm"}:
-        raise ReleaseValidationError(f"release manifest artifact {index} has an unknown kind")
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an unknown kind"
+        )
     size = artifact["size"]
     if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-        raise ReleaseValidationError(f"release manifest artifact {index} has an invalid size")
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an invalid size"
+        )
     sha256 = artifact["sha256"]
     if not isinstance(sha256, str) or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
-        raise ReleaseValidationError(f"release manifest artifact {index} has an invalid sha256")
+        raise ReleaseValidationError(
+            f"release manifest artifact {index} has an invalid sha256"
+        )
     integrity = artifact["sha512_integrity"]
     if not isinstance(integrity, str) or not integrity.startswith("sha512-"):
         raise ReleaseValidationError(
@@ -666,7 +740,9 @@ def _validate_artifact_descriptor(
 
 def _artifacts(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts):
+    if not isinstance(artifacts, list) or not all(
+        isinstance(item, dict) for item in artifacts
+    ):
         raise ReleaseValidationError("checksum manifest has no valid artifacts")
     return artifacts
 
@@ -712,18 +788,31 @@ def validate_manifest(
         or manifest["npm_dist_tag"] != info.npm_dist_tag
         or manifest["github_prerelease"] is not info.github_prerelease
     ):
-        raise ReleaseValidationError("release manifest does not match checked-out source metadata")
+        raise ReleaseValidationError(
+            "release manifest does not match checked-out source metadata"
+        )
 
     artifacts = manifest["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != 3:
-        raise ReleaseValidationError("release manifest must contain exactly three artifacts")
-    normalized = [_validate_artifact_descriptor(item, index) for index, item in enumerate(artifacts)]
+        raise ReleaseValidationError(
+            "release manifest must contain exactly three artifacts"
+        )
+    normalized = [
+        _validate_artifact_descriptor(item, index)
+        for index, item in enumerate(artifacts)
+    ]
     if {item["kind"] for item in normalized} != {"wheel", "sdist", "npm"}:
-        raise ReleaseValidationError("release manifest must contain wheel, sdist, and npm artifacts")
+        raise ReleaseValidationError(
+            "release manifest must contain wheel, sdist, and npm artifacts"
+        )
     if len({item["name"] for item in normalized}) != len(normalized):
-        raise ReleaseValidationError("release manifest contains duplicate artifact names")
+        raise ReleaseValidationError(
+            "release manifest contains duplicate artifact names"
+        )
     if len({item["path"] for item in normalized}) != len(normalized):
-        raise ReleaseValidationError("release manifest contains duplicate artifact paths")
+        raise ReleaseValidationError(
+            "release manifest contains duplicate artifact paths"
+        )
 
     by_kind = {item["kind"]: item for item in normalized}
     normalized_name = PROJECT_NAME.replace("-", "_")
@@ -731,11 +820,17 @@ def validate_manifest(
         by_kind["wheel"]["name"].startswith(f"{normalized_name}-{info.python_version}-")
         and by_kind["wheel"]["name"].endswith(".whl")
     ):
-        raise ReleaseValidationError(f"wheel does not identify version {info.python_version}")
+        raise ReleaseValidationError(
+            f"wheel does not identify version {info.python_version}"
+        )
     if by_kind["sdist"]["name"] != f"{normalized_name}-{info.python_version}.tar.gz":
-        raise ReleaseValidationError(f"sdist name is not for version {info.python_version}")
+        raise ReleaseValidationError(
+            f"sdist name is not for version {info.python_version}"
+        )
     if by_kind["npm"]["name"] != f"{PROJECT_NAME}-{info.npm_version}.tgz":
-        raise ReleaseValidationError(f"npm tarball name is not for version {info.npm_version}")
+        raise ReleaseValidationError(
+            f"npm tarball name is not for version {info.npm_version}"
+        )
 
     if root is None:
         return
@@ -744,22 +839,36 @@ def validate_manifest(
     resolved_root = root.resolve()
     approved_paths = {artifact["path"] for artifact in normalized}
     for artifact in normalized:
-        path = _safe_artifact_path(resolved_root, artifact["path"], "release artifact path")
+        path = _safe_artifact_path(
+            resolved_root, artifact["path"], "release artifact path"
+        )
         try:
             metadata = path.lstat()
         except OSError as exc:
-            raise ReleaseValidationError(f"manifest artifact is missing: {path}") from exc
+            raise ReleaseValidationError(
+                f"manifest artifact is missing: {path}"
+            ) from exc
         if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
-            raise ReleaseValidationError(f"manifest artifact is not a regular file: {path}")
+            raise ReleaseValidationError(
+                f"manifest artifact is not a regular file: {path}"
+            )
         try:
             data = path.read_bytes()
         except OSError as exc:
-            raise ReleaseValidationError(f"cannot read release artifact {path}") from exc
+            raise ReleaseValidationError(
+                f"cannot read release artifact {path}"
+            ) from exc
         if len(data) != artifact["size"]:
-            raise ReleaseValidationError(f"manifest artifact size mismatch: {artifact['name']}")
+            raise ReleaseValidationError(
+                f"manifest artifact size mismatch: {artifact['name']}"
+            )
         if hashlib.sha256(data).hexdigest() != artifact["sha256"]:
-            raise ReleaseValidationError(f"manifest artifact hash mismatch: {artifact['name']}")
-        integrity = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode("ascii")
+            raise ReleaseValidationError(
+                f"manifest artifact hash mismatch: {artifact['name']}"
+            )
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode(
+            "ascii"
+        )
         if integrity != artifact["sha512_integrity"]:
             raise ReleaseValidationError(
                 f"manifest artifact integrity mismatch: {artifact['name']}"
@@ -768,9 +877,15 @@ def validate_manifest(
         if not path.is_file() or path.is_symlink():
             continue
         relative = path.relative_to(resolved_root).as_posix()
-        if path.suffix == ".whl" or path.name.endswith(".tar.gz") or path.suffix == ".tgz":
+        if (
+            path.suffix == ".whl"
+            or path.name.endswith(".tar.gz")
+            or path.suffix == ".tgz"
+        ):
             if relative not in approved_paths:
-                raise ReleaseValidationError(f"unapproved release artifact is present: {relative}")
+                raise ReleaseValidationError(
+                    f"unapproved release artifact is present: {relative}"
+                )
 
 
 def _manifest_artifact(manifest: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -780,13 +895,21 @@ def _manifest_artifact(manifest: dict[str, Any], kind: str) -> dict[str, Any]:
     return matches[0]
 
 
-def _pypi_decision(manifest: dict[str, Any], payload: dict[str, Any] | None) -> tuple[str, list[str]]:
-    expected = {item["name"]: item for item in _artifacts(manifest) if item.get("kind") in {"wheel", "sdist"}}
+def _pypi_decision(
+    manifest: dict[str, Any], payload: dict[str, Any] | None
+) -> tuple[str, list[str]]:
+    expected = {
+        item["name"]: item
+        for item in _artifacts(manifest)
+        if item.get("kind") in {"wheel", "sdist"}
+    }
     if payload is None:
         return "absent", sorted(expected)
     info = payload.get("info", {})
     if not isinstance(info, dict) or info.get("name") != PROJECT_NAME:
-        raise ReleaseValidationError("PyPI metadata package identity does not match manifest")
+        raise ReleaseValidationError(
+            "PyPI metadata package identity does not match manifest"
+        )
     if info.get("version") != manifest.get("version"):
         raise ReleaseValidationError("PyPI metadata version does not match manifest")
     observed: dict[str, dict[str, Any]] = {}
@@ -808,19 +931,28 @@ def _pypi_decision(manifest: dict[str, Any], payload: dict[str, Any] | None) -> 
     return ("complete" if not missing else "partial"), sorted(missing)
 
 
-def _npm_decision(manifest: dict[str, Any], payload: dict[str, Any] | None) -> tuple[str, list[str]]:
+def _npm_decision(
+    manifest: dict[str, Any], payload: dict[str, Any] | None
+) -> tuple[str, list[str]]:
     artifact = _manifest_artifact(manifest, "npm")
     if payload is None:
         return "absent", [artifact["name"]]
-    if payload.get("name") != PROJECT_NAME or payload.get("version") != manifest.get("npm_version"):
-        raise ReleaseValidationError("npm metadata package identity does not match manifest")
+    if payload.get("name") != PROJECT_NAME or payload.get("version") != manifest.get(
+        "npm_version"
+    ):
+        raise ReleaseValidationError(
+            "npm metadata package identity does not match manifest"
+        )
     dist = payload.get("dist")
     if not isinstance(dist, dict):
         raise ReleaseValidationError("npm metadata has no dist identity")
     if dist.get("integrity") != artifact["sha512_integrity"]:
         raise ReleaseValidationError("npm tarball integrity does not match manifest")
     tarball = dist.get("tarball")
-    if not isinstance(tarball, str) or Path(urllib.parse.urlparse(tarball).path).name != artifact["name"]:
+    if (
+        not isinstance(tarball, str)
+        or Path(urllib.parse.urlparse(tarball).path).name != artifact["name"]
+    ):
         raise ReleaseValidationError("npm tarball name does not match manifest")
     return "complete", []
 
@@ -843,7 +975,11 @@ def registry_decision(
         payload = None
     else:
         payload = _json_result(result, f"{registry} metadata")
-    return _pypi_decision(manifest, payload) if registry == "pypi" else _npm_decision(manifest, payload)
+    return (
+        _pypi_decision(manifest, payload)
+        if registry == "pypi"
+        else _npm_decision(manifest, payload)
+    )
 
 
 def verify_registry_after_publish(
@@ -916,7 +1052,9 @@ def verify_registry_after_publish(
     )
 
 
-def stage_missing(manifest: dict[str, Any], root: Path, destination: Path, names: Iterable[str]) -> None:
+def stage_missing(
+    manifest: dict[str, Any], root: Path, destination: Path, names: Iterable[str]
+) -> None:
     wanted = set(names)
     destination.mkdir(parents=True, exist_ok=True)
     for artifact in _artifacts(manifest):
@@ -926,12 +1064,18 @@ def stage_missing(manifest: dict[str, Any], root: Path, destination: Path, names
         if name not in wanted:
             continue
         if Path(name).name != name or "\\" in name:
-            raise ReleaseValidationError(f"manifest artifact has an unsafe name: {name}")
-        source = _safe_artifact_path(root, artifact.get("path"), "manifest artifact path")
+            raise ReleaseValidationError(
+                f"manifest artifact has an unsafe name: {name}"
+            )
+        source = _safe_artifact_path(
+            root, artifact.get("path"), "manifest artifact path"
+        )
         try:
             metadata = source.lstat()
         except OSError as exc:
-            raise ReleaseValidationError(f"manifest artifact is missing: {source}") from exc
+            raise ReleaseValidationError(
+                f"manifest artifact is missing: {source}"
+            ) from exc
         if not stat.S_ISREG(metadata.st_mode) or source.is_symlink():
             raise ReleaseValidationError(f"manifest artifact is missing: {source}")
         shutil.copyfile(source, destination / artifact["name"])
@@ -942,7 +1086,9 @@ def verify_staged(manifest: dict[str, Any], root: Path, destination: Path) -> No
     observed = []
     for path in destination.iterdir():
         if path.is_symlink():
-            raise ReleaseValidationError(f"staged artifact is not a regular file: {path.name}")
+            raise ReleaseValidationError(
+                f"staged artifact is not a regular file: {path.name}"
+            )
         if path.is_file():
             observed.append(path.name)
     for name in observed:
@@ -953,7 +1099,9 @@ def verify_staged(manifest: dict[str, Any], root: Path, destination: Path) -> No
             raise ReleaseValidationError(f"staged artifact hash mismatch: {name}")
 
 
-def _auth_headers(token: str, accept: str = "application/vnd.github+json") -> dict[str, str]:
+def _auth_headers(
+    token: str, accept: str = "application/vnd.github+json"
+) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
         "Accept": accept,
@@ -969,7 +1117,9 @@ def _validate_manifest_binding(manifest: dict[str, Any], tag: str, commit: str) 
     if manifest.get("project") != PROJECT_NAME:
         raise ReleaseValidationError("release manifest has the wrong project")
     if manifest.get("tag") != tag or manifest.get("commit") != commit:
-        raise ReleaseValidationError("release manifest does not bind to the expected tag and commit")
+        raise ReleaseValidationError(
+            "release manifest does not bind to the expected tag and commit"
+        )
 
 
 def _github_get(
@@ -994,10 +1144,18 @@ def _github_get(
     return value
 
 
-def _github_write(url: str, token: str, payload: dict[str, Any], *, content_type: str = "application/json") -> dict[str, Any]:
+def _github_write(
+    url: str,
+    token: str,
+    payload: dict[str, Any],
+    *,
+    content_type: str = "application/json",
+) -> dict[str, Any]:
     headers = _auth_headers(token)
     headers["Content-Type"] = content_type
-    result = _request_write(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    result = _request_write(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers
+    )
     return _json_result(result, "GitHub API write")
 
 
@@ -1045,15 +1203,21 @@ def _load_release_manifest(
     if not isinstance(release, dict):
         raise ReleaseValidationError("expected GitHub release was not found")
     if release.get("tag_name") != tag or release.get("draft") is True:
-        raise ReleaseValidationError("GitHub release identity/state does not match recovery tag")
+        raise ReleaseValidationError(
+            "GitHub release identity/state does not match recovery tag"
+        )
     assets = release.get("assets", [])
     if not isinstance(assets, list):
         raise ReleaseValidationError("GitHub release assets are malformed")
     matches = [
-        asset for asset in assets if isinstance(asset, dict) and asset.get("name") == MANIFEST_NAME
+        asset
+        for asset in assets
+        if isinstance(asset, dict) and asset.get("name") == MANIFEST_NAME
     ]
     if len(matches) != 1:
-        raise ReleaseValidationError("GitHub release has no unique checksum manifest asset")
+        raise ReleaseValidationError(
+            "GitHub release has no unique checksum manifest asset"
+        )
     asset = matches[0]
     asset_url = asset.get("url")
     if not isinstance(asset_url, str):
@@ -1077,27 +1241,39 @@ def _load_release_manifest(
     if not isinstance(manifest, dict):
         raise ReleaseValidationError("checksum manifest asset is not an object")
     if release.get("prerelease") != manifest.get("github_prerelease"):
-        raise ReleaseValidationError("GitHub release prerelease state does not match manifest")
+        raise ReleaseValidationError(
+            "GitHub release prerelease state does not match manifest"
+        )
     return manifest
 
 
-def _verify_release(release: dict[str, Any], manifest: dict[str, Any], token: str) -> dict[str, Any]:
+def _verify_release(
+    release: dict[str, Any], manifest: dict[str, Any], token: str
+) -> dict[str, Any]:
     if release.get("tag_name") != manifest.get("tag"):
         raise ReleaseValidationError("existing GitHub release has the wrong tag")
-    if release.get("draft") is True or release.get("prerelease") != manifest.get("github_prerelease"):
-        raise ReleaseValidationError("existing GitHub release has the wrong release state")
+    if release.get("draft") is True or release.get("prerelease") != manifest.get(
+        "github_prerelease"
+    ):
+        raise ReleaseValidationError(
+            "existing GitHub release has the wrong release state"
+        )
     _artifacts(manifest)
     return release
 
 
-def ensure_github_release(repo: str, manifest: dict[str, Any], manifest_path: Path, token: str) -> None:
+def ensure_github_release(
+    repo: str, manifest: dict[str, Any], manifest_path: Path, token: str
+) -> None:
     tag = str(manifest["tag"])
     validate_source(tag, str(manifest["commit"]))
     url = f"{GITHUB_API_URL}/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}"
     existing = _github_get(url, token)
     if existing is not None:
         if not isinstance(existing, dict):
-            raise ReleaseValidationError("GitHub release lookup returned an invalid object")
+            raise ReleaseValidationError(
+                "GitHub release lookup returned an invalid object"
+            )
         _verify_release(existing, manifest, token)
         release = existing
     else:
@@ -1109,7 +1285,9 @@ def ensure_github_release(repo: str, manifest: dict[str, Any], manifest_path: Pa
             "draft": False,
         }
         try:
-            release = _github_write(f"{GITHUB_API_URL}/repos/{repo}/releases", token, payload)
+            release = _github_write(
+                f"{GITHUB_API_URL}/repos/{repo}/releases", token, payload
+            )
         except ReleaseValidationError as exc:
             # A concurrent creator may have won.  Re-read and accept only an
             # exactly matching release; never repeat the POST.
@@ -1127,16 +1305,26 @@ def ensure_github_release(repo: str, manifest: dict[str, Any], manifest_path: Pa
         "size": manifest_path.stat().st_size,
         "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
     }
-    matching = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == MANIFEST_NAME]
+    matching = [
+        asset
+        for asset in assets
+        if isinstance(asset, dict) and asset.get("name") == MANIFEST_NAME
+    ]
     if matching:
-        if len(matching) != 1 or not _asset_matches(matching[0], expected, token, repo=repo):
-            raise ReleaseValidationError("existing checksum manifest asset does not match")
+        if len(matching) != 1 or not _asset_matches(
+            matching[0], expected, token, repo=repo
+        ):
+            raise ReleaseValidationError(
+                "existing checksum manifest asset does not match"
+            )
         return
     upload_url = release.get("upload_url")
     release_id = release.get("id")
     if not isinstance(upload_url, str) or not isinstance(release_id, int):
         raise ReleaseValidationError("GitHub release has no upload endpoint")
-    upload_url = upload_url.split("{", 1)[0] + "?name=" + urllib.parse.quote(MANIFEST_NAME)
+    upload_url = (
+        upload_url.split("{", 1)[0] + "?name=" + urllib.parse.quote(MANIFEST_NAME)
+    )
     data = manifest_path.read_bytes()
     headers = _auth_headers(token)
     headers["Content-Type"] = "application/json"
@@ -1144,13 +1332,21 @@ def ensure_github_release(repo: str, manifest: dict[str, Any], manifest_path: Pa
         uploaded = _request_write(upload_url, data=data, headers=headers)
         uploaded_asset = _json_result(uploaded, "GitHub asset upload")
         if not _asset_matches(uploaded_asset, expected, token, repo=repo):
-            raise ReleaseValidationError("uploaded checksum manifest asset does not match")
+            raise ReleaseValidationError(
+                "uploaded checksum manifest asset does not match"
+            )
     except ReleaseValidationError as exc:
         reread = _github_get(url, token)
         if isinstance(reread, dict):
             reread_assets = reread.get("assets", [])
-            matches = [item for item in reread_assets if isinstance(item, dict) and item.get("name") == MANIFEST_NAME]
-            if len(matches) == 1 and _asset_matches(matches[0], expected, token, repo=repo):
+            matches = [
+                item
+                for item in reread_assets
+                if isinstance(item, dict) and item.get("name") == MANIFEST_NAME
+            ]
+            if len(matches) == 1 and _asset_matches(
+                matches[0], expected, token, repo=repo
+            ):
                 return
         raise exc
 
@@ -1216,7 +1412,9 @@ def record_deployment(
     if ambiguous:
         raise ReleaseValidationError("existing npm deployment has mismatched identity")
     if len(candidates) > 1:
-        raise ReleaseValidationError("multiple ambiguous npm deployments require manual recovery")
+        raise ReleaseValidationError(
+            "multiple ambiguous npm deployments require manual recovery"
+        )
     if candidates:
         deployment = candidates[0]
         deployment_id = _validate_deployment(deployment, tag, commit)
@@ -1237,7 +1435,8 @@ def record_deployment(
     statuses_url = f"{_deployment_url(repo)}/{deployment_id}/statuses?per_page=100"
     statuses = _github_get(statuses_url, token)
     if isinstance(statuses, list) and any(
-        isinstance(status, dict) and status.get("state") == "success" for status in statuses
+        isinstance(status, dict) and status.get("state") == "success"
+        for status in statuses
     ):
         return deployment_id
     _github_write(
@@ -1268,10 +1467,13 @@ def recover_deployment_status(
     if not isinstance(deployment, dict):
         raise ReleaseValidationError("deployment to recover was not found")
     if _validate_deployment(deployment, tag, commit) != deployment_id:
-        raise ReleaseValidationError("deployment id does not match the requested recovery")
+        raise ReleaseValidationError(
+            "deployment id does not match the requested recovery"
+        )
     statuses = _github_get(f"{deployment_url}/statuses?per_page=100", token)
     if isinstance(statuses, list) and any(
-        isinstance(status, dict) and status.get("state") == "success" for status in statuses
+        isinstance(status, dict) and status.get("state") == "success"
+        for status in statuses
     ):
         return
     _github_write(
@@ -1301,7 +1503,9 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--commit", required=True)
     validate.add_argument("--pyproject", type=Path, default=Path("pyproject.toml"))
     validate.add_argument("--package-json", type=Path, default=Path("package.json"))
-    validate.add_argument("--release-channel", type=Path, default=Path("release-channel.toml"))
+    validate.add_argument(
+        "--release-channel", type=Path, default=Path("release-channel.toml")
+    )
     validate.add_argument("--output", type=Path)
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--root", type=Path, required=True)
@@ -1309,7 +1513,9 @@ def _parser() -> argparse.ArgumentParser:
     manifest.add_argument("--npm-version", required=True)
     manifest.add_argument("--tag", required=True)
     manifest.add_argument("--commit", required=True)
-    manifest.add_argument("--release-channel", type=Path, default=Path("release-channel.toml"))
+    manifest.add_argument(
+        "--release-channel", type=Path, default=Path("release-channel.toml")
+    )
     manifest.add_argument("--output", type=Path, required=True)
     check = sub.add_parser("registry-check")
     check.add_argument("--registry", choices=("pypi", "npm"), required=True)
@@ -1361,7 +1567,9 @@ def main(argv: list[str] | None = None) -> int:
             policy = load_release_channel(args.release_channel)
             info = map_versions(python_version, npm_version, args.tag, policy)
             status_classifiers = [
-                item for item in classifiers if item.startswith("Development Status :: ")
+                item
+                for item in classifiers
+                if item.startswith("Development Status :: ")
             ]
             if status_classifiers != [policy.python_classifier]:
                 raise ReleaseValidationError(
@@ -1398,7 +1606,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "stage-missing":
             manifest = _read_json(args.manifest)
             decision = _read_json(args.decision)
-            stage_missing(manifest, args.root, args.destination, decision.get("missing", []))
+            stage_missing(
+                manifest, args.root, args.destination, decision.get("missing", [])
+            )
             verify_staged(manifest, args.root, args.destination)
         elif args.command == "registry-verify":
             manifest = _read_json(args.manifest)
@@ -1408,13 +1618,17 @@ def main(argv: list[str] | None = None) -> int:
             manifest = _read_json(args.manifest)
             token = os.environ.get(args.token_env)
             if not token:
-                raise ReleaseValidationError(f"missing GitHub token environment variable {args.token_env}")
+                raise ReleaseValidationError(
+                    f"missing GitHub token environment variable {args.token_env}"
+                )
             ensure_github_release(args.repo, manifest, args.manifest, token)
             print("GitHub release and checksum asset verified")
         elif args.command == "record-deployment":
             token = os.environ.get(args.token_env)
             if not token:
-                raise ReleaseValidationError(f"missing GitHub token environment variable {args.token_env}")
+                raise ReleaseValidationError(
+                    f"missing GitHub token environment variable {args.token_env}"
+                )
             manifest = _read_json(args.manifest)
             deployment_id = record_deployment(
                 args.repo, args.tag, args.commit, args.run_url, token, manifest
@@ -1423,7 +1637,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "recover-deployment":
             token = os.environ.get(args.token_env)
             if not token:
-                raise ReleaseValidationError(f"missing GitHub token environment variable {args.token_env}")
+                raise ReleaseValidationError(
+                    f"missing GitHub token environment variable {args.token_env}"
+                )
             recover_deployment_status(
                 args.repo,
                 args.deployment_id,
@@ -1437,7 +1653,9 @@ def main(argv: list[str] | None = None) -> int:
             manifest = _read_json(args.manifest)
             value = manifest.get(args.key)
             if not isinstance(value, (str, int, bool)):
-                raise ReleaseValidationError(f"manifest value is not scalar: {args.key}")
+                raise ReleaseValidationError(
+                    f"manifest value is not scalar: {args.key}"
+                )
             print(str(value).lower() if isinstance(value, bool) else value)
         elif args.command == "manifest-artifact":
             manifest = _read_json(args.manifest)

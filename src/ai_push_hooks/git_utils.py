@@ -82,9 +82,7 @@ def run_command(
             else:
                 merged_env[key] = value
 
-    effective_timeout = (
-        COMMAND_DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
-    )
+    effective_timeout = COMMAND_DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
     result = _run_bounded_text_command(
         args,
         cwd,
@@ -199,7 +197,14 @@ def _command_diagnostics(
     if input_text:
         secret_values.append(input_text)
     if env is not None:
-        secret_markers = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
+        secret_markers = (
+            "API_KEY",
+            "TOKEN",
+            "SECRET",
+            "PASSWORD",
+            "AUTH",
+            "CREDENTIAL",
+        )
         secret_values.extend(
             value
             for name, value in env.items()
@@ -233,7 +238,9 @@ def resolve_git_common_dir(repo_root: pathlib.Path) -> pathlib.Path:
     return (repo_root / path).resolve()
 
 
-def resolve_storage_path(repo_root: pathlib.Path, git_dir: pathlib.Path, raw: str) -> pathlib.Path:
+def resolve_storage_path(
+    repo_root: pathlib.Path, git_dir: pathlib.Path, raw: str
+) -> pathlib.Path:
     parts = relative_path_parts(raw, "Configured storage path")
     posix_raw = raw.replace("\\", "/")
     if parts[0] == ".git":
@@ -241,7 +248,9 @@ def resolve_storage_path(repo_root: pathlib.Path, git_dir: pathlib.Path, raw: st
             return pathlib.Path(git_dir).resolve(strict=False)
         lexical_path = pathlib.Path(git_dir).joinpath(*parts[1:])
         if path_has_symlink(pathlib.Path(git_dir), lexical_path):
-            raise HookError(f"Configured Git storage path must not traverse a symlink: {raw}")
+            raise HookError(
+                f"Configured Git storage path must not traverse a symlink: {raw}"
+            )
         return resolve_contained_path(
             git_dir,
             "/".join(parts[1:]),
@@ -249,8 +258,12 @@ def resolve_storage_path(repo_root: pathlib.Path, git_dir: pathlib.Path, raw: st
         )
     lexical_path = repo_root.joinpath(*parts)
     if path_has_symlink(repo_root, lexical_path):
-        raise HookError(f"Configured repository storage path must not traverse a symlink: {raw}")
-    return resolve_contained_path(repo_root, posix_raw, "Configured repository storage path")
+        raise HookError(
+            f"Configured repository storage path must not traverse a symlink: {raw}"
+        )
+    return resolve_contained_path(
+        repo_root, posix_raw, "Configured repository storage path"
+    )
 
 
 def ensure_dir(path: pathlib.Path) -> pathlib.Path | None:
@@ -322,9 +335,13 @@ def path_matches(path: str, pattern: str) -> bool:
                 path_index < len(path_parts) and matches(path_index + 1, pattern_index)
             )
         else:
-            result = path_index < len(path_parts) and fnmatch.fnmatchcase(
-                path_parts[path_index], pattern_parts[pattern_index]
-            ) and matches(path_index + 1, pattern_index + 1)
+            result = (
+                path_index < len(path_parts)
+                and fnmatch.fnmatchcase(
+                    path_parts[path_index], pattern_parts[pattern_index]
+                )
+                and matches(path_index + 1, pattern_index + 1)
+            )
         memo[key] = result
         return result
 
@@ -350,7 +367,9 @@ def list_repo_changes(repo_root: pathlib.Path) -> set[str]:
         changes.add(record[3:])
         if "R" in status or "C" in status:
             if index >= len(records) or not records[index]:
-                raise HookError("Malformed rename output from `git status --porcelain=v1 -z`")
+                raise HookError(
+                    "Malformed rename output from `git status --porcelain=v1 -z`"
+                )
             changes.add(records[index])
             index += 1
     return changes
@@ -389,7 +408,11 @@ def parse_push_updates(stdin_lines: list[str]) -> list[PushRefUpdate]:
 
 
 def _resolve_commit(repo_root: pathlib.Path, oid: str) -> str:
-    return git(repo_root, ["rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}"], check=False)
+    return git(
+        repo_root,
+        ["rev-parse", "--verify", "--quiet", f"{oid}^{{commit}}"],
+        check=False,
+    )
 
 
 def _configured_base_commit(
@@ -431,7 +454,9 @@ def _fallback_range(
 ) -> tuple[str, str]:
     base_commit = _configured_base_commit(repo_root, remote_name, base_branch)
     if base_commit:
-        merge_base = git(repo_root, ["merge-base", local_commit, base_commit], check=False)
+        merge_base = git(
+            repo_root, ["merge-base", local_commit, base_commit], check=False
+        )
         if merge_base:
             return f"{merge_base}..{local_commit}", f"{reason}:configured-base"
     return f"{_empty_tree_oid(repo_root)}..{local_commit}", f"{reason}:empty-tree"
@@ -537,7 +562,11 @@ def _collect_bounded_git_diff(
             process_result.stdout if process_result else "",
             process_result.stderr if process_result else "",
         )
-        reason = "timed out" if isinstance(exc, RunnerTimeoutError) else "terminated by signal"
+        reason = (
+            "timed out"
+            if isinstance(exc, RunnerTimeoutError)
+            else "terminated by signal"
+        )
         suffix = f": {details}" if details else ""
         raise HookError(f"Git diff command {reason}{suffix}") from exc
     except RunnerError as exc:
@@ -688,7 +717,9 @@ def _github_repository_from_url(remote_url: str) -> str:
     value = remote_url.strip()
     if not value or "\x00" in value or any(ord(character) < 32 for character in value):
         return ""
-    scp_match = re.fullmatch(r"(?:[^@/:\s]+@)?github\.com:([^/\s]+)/([^/\s]+)", value, re.IGNORECASE)
+    scp_match = re.fullmatch(
+        r"(?:[^@/:\s]+@)?github\.com:([^/\s]+)/([^/\s]+)", value, re.IGNORECASE
+    )
     if scp_match:
         owner, repository = scp_match.groups()
     else:
@@ -729,13 +760,17 @@ def resolve_github_repository(
     if repository:
         return repository
     if remote_url.strip():
-        raise HookError("Cannot safely determine GitHub repository from push remote URL")
+        raise HookError(
+            "Cannot safely determine GitHub repository from push remote URL"
+        )
     repository = _github_repository_from_url(remote_name)
     if repository:
         return repository
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", remote_name):
         raise HookError("Cannot safely resolve push remote name")
-    configured_url = git(repo_root, ["remote", "get-url", "--push", remote_name], check=False)
+    configured_url = git(
+        repo_root, ["remote", "get-url", "--push", remote_name], check=False
+    )
     repository = _github_repository_from_url(configured_url)
     if not repository:
         raise HookError(
@@ -775,7 +810,9 @@ def lookup_open_pr_url(
         check=False,
     )
     if completed.returncode != 0:
-        details = _command_diagnostics(args, completed.stdout or "", completed.stderr or "")
+        details = _command_diagnostics(
+            args, completed.stdout or "", completed.stderr or ""
+        )
         raise HookError(details or "`gh pr list` failed")
     try:
         payload = json.loads((completed.stdout or "").strip() or "[]")

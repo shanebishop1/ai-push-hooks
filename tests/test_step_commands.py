@@ -78,19 +78,25 @@ def test_explicit_bash_awk_and_python_programs_receive_braces_unchanged(
     assert python.stdout == b"{'a': 1}\n"
 
 
-def test_rejects_unknown_and_embedded_reserved_placeholders(tmp_path: pathlib.Path) -> None:
+def test_rejects_unknown_and_embedded_reserved_placeholders(
+    tmp_path: pathlib.Path,
+) -> None:
     for argument in ("{repos}", "--path={repo}", "prefix-{input:file.txt}"):
         with pytest.raises(StepCommandError, match="placeholder"):
             resolve_step_command_argv(_python("pass", argument), tmp_path)
 
 
-def test_stdin_streams_exact_bytes_and_default_stdin_is_eof(tmp_path: pathlib.Path) -> None:
+def test_stdin_streams_exact_bytes_and_default_stdin_is_eof(
+    tmp_path: pathlib.Path,
+) -> None:
     input_path = tmp_path / "stdin.bin"
     input_bytes = "Résumé ✓\n第二行\n".encode()
     input_path.write_bytes(input_bytes)
     command = _python("import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())")
 
-    streamed = run_step_command(command, tmp_path, inputs={"stdin.bin": input_path}, stdin="stdin.bin")
+    streamed = run_step_command(
+        command, tmp_path, inputs={"stdin.bin": input_path}, stdin="stdin.bin"
+    )
     empty = run_step_command(command, tmp_path)
 
     assert streamed.stdout == input_bytes
@@ -102,23 +108,31 @@ def test_command_uses_repo_cwd_and_inherited_environment(
 ) -> None:
     monkeypatch.setenv("STEP_COMMAND_TEST_ENV", "inherited-value")
     result = run_step_command(
-        _python("import os; print(os.getcwd() + '|' + os.environ['STEP_COMMAND_TEST_ENV'], end='')"),
+        _python(
+            "import os; print(os.getcwd() + '|' + os.environ['STEP_COMMAND_TEST_ENV'], end='')"
+        ),
         tmp_path,
     )
 
     assert result.stdout == f"{tmp_path}|inherited-value".encode()
 
 
-def test_preserves_valid_unicode_and_rejects_invalid_utf8_bytes(tmp_path: pathlib.Path) -> None:
+def test_preserves_valid_unicode_and_rejects_invalid_utf8_bytes(
+    tmp_path: pathlib.Path,
+) -> None:
     valid = "Résumé ✓\n第二行"
     result = run_step_command(
-        _python("import sys; sys.stdout.buffer.write('Résumé ✓\\n第二行'.encode('utf-8'))"),
+        _python(
+            "import sys; sys.stdout.buffer.write('Résumé ✓\\n第二行'.encode('utf-8'))"
+        ),
         tmp_path,
     )
     assert result.stdout == valid.encode("utf-8")
 
     with pytest.raises(StepCommandEncodingError) as raised:
-        run_step_command(_python("import sys; sys.stdout.buffer.write(b'good\\xff')"), tmp_path)
+        run_step_command(
+            _python("import sys; sys.stdout.buffer.write(b'good\\xff')"), tmp_path
+        )
     captured = raised.value._step_command_result
     assert isinstance(captured, StepCommandResult)
     assert captured.stdout == b"good\xff"
@@ -130,7 +144,9 @@ def test_truncation_is_bounded_and_retains_both_exact_captured_streams(
 ) -> None:
     with pytest.raises(StepCommandTruncatedError) as raised:
         run_step_command(
-            _python("import sys; sys.stdout.buffer.write(b'123456'); sys.stderr.buffer.write(b'abcdef')"),
+            _python(
+                "import sys; sys.stdout.buffer.write(b'123456'); sys.stderr.buffer.write(b'abcdef')"
+            ),
             tmp_path,
             max_output_bytes=4,
         )
@@ -145,7 +161,9 @@ def test_process_failures_are_named_and_capture_started_streams_without_leaking_
 ) -> None:
     with pytest.raises(RunnerTimeoutError) as timeout:
         run_step_command(
-            _python("import sys, time; sys.stderr.write('timeout-secret'); sys.stderr.flush(); time.sleep(10)"),
+            _python(
+                "import sys, time; sys.stderr.write('timeout-secret'); sys.stderr.flush(); time.sleep(10)"
+            ),
             tmp_path,
             timeout_seconds=0.5,
         )
@@ -171,7 +189,9 @@ def test_zero_empty_exec_and_nonzero_exec_normalization(tmp_path: pathlib.Path) 
 
     context = SimpleNamespace(repo_root=tmp_path, run_dir=tmp_path / "run")
     with pytest.raises(StepCommandExecutionError):
-        execute_step_command(context, state, step, {}, artifacts=ArtifactStore(context.run_dir))
+        execute_step_command(
+            context, state, step, {}, artifacts=ArtifactStore(context.run_dir)
+        )
     assert (context.run_dir / "docs" / "00-exec" / "result.json").exists()
 
 
@@ -209,7 +229,9 @@ def test_mapping_inputs_reject_extra_references_but_duplicate_lists_remain_valid
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO test requires POSIX mkfifo")
-def test_process_input_fifo_is_rejected_without_blocking(tmp_path: pathlib.Path) -> None:
+def test_process_input_fifo_is_rejected_without_blocking(
+    tmp_path: pathlib.Path,
+) -> None:
     fifo = tmp_path / "input.fifo"
     os.mkfifo(fifo)
     source_root = pathlib.Path(__file__).resolve().parents[1] / "src"
@@ -244,13 +266,17 @@ else:
 
 
 def test_assert_report_is_saved_before_failure_and_message_is_bounded_redacted(
-    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    repo: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("STEP_COMMAND_TOKEN", "assert-secret")
     step = StepConfig(
         id="policy",
         type="assert",
-        command=_python("import os, sys; print('token=' + os.environ['STEP_COMMAND_TOKEN'], file=sys.stderr); raise SystemExit(3)"),
+        command=_python(
+            "import os, sys; print('token=' + os.environ['STEP_COMMAND_TOKEN'], file=sys.stderr); raise SystemExit(3)"
+        ),
     )
     state = ModuleRuntimeState(ModuleConfig("docs", True, (step,)))
     from types import SimpleNamespace
@@ -276,7 +302,9 @@ def test_started_process_errors_persist_bounded_streams(
     step = StepConfig(
         id="timeout",
         type="assert",
-        command=_python("import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(10)"),
+        command=_python(
+            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(10)"
+        ),
         timeout_seconds=0.5,
     )
     state = ModuleRuntimeState(ModuleConfig("docs", True, (step,)))
@@ -288,6 +316,7 @@ def test_started_process_errors_persist_bounded_streams(
         execute_step_command(context, state, step, {}, artifacts=ArtifactStore(run_dir))
     persisted = raised.value._step_command_persisted
     assert persisted.artifacts["stdout.txt"].read_bytes() == b"partial"
-    assert json.loads(persisted.artifacts["result.json"].read_text())[
-        "stdout_artifact"
-    ] == "stdout.txt"
+    assert (
+        json.loads(persisted.artifacts["result.json"].read_text())["stdout_artifact"]
+        == "stdout.txt"
+    )

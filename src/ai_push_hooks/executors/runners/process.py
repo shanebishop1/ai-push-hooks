@@ -226,8 +226,13 @@ def run_process(
     timeout and signal termination are raised as distinct fail-closed errors.
     """
 
-    if not isinstance(argv, (tuple, list)) or not argv or any(
-        not isinstance(argument, str) or not argument or "\x00" in argument for argument in argv
+    if (
+        not isinstance(argv, (tuple, list))
+        or not argv
+        or any(
+            not isinstance(argument, str) or not argument or "\x00" in argument
+            for argument in argv
+        )
     ):
         raise RunnerError("runner command must be a non-empty NUL-free argv vector")
     if not isinstance(cwd, pathlib.Path):
@@ -261,7 +266,9 @@ def run_process(
         if not isinstance(input_path, pathlib.Path):
             input_path = pathlib.Path(input_path)
         if path_is_link_or_reparse(input_path):
-            raise RunnerError("runner input file must not be a symlink or reparse point")
+            raise RunnerError(
+                "runner input file must not be a symlink or reparse point"
+            )
         descriptor = -1
         try:
             # O_NONBLOCK prevents opening a FIFO from waiting for a writer;
@@ -312,7 +319,9 @@ def run_process(
     except OSError as exc:
         if input_file is not None:
             input_file.close()
-        raise RunnerError("runner process could not be started", details=type(exc).__name__) from exc
+        raise RunnerError(
+            "runner process could not be started", details=type(exc).__name__
+        ) from exc
 
     if process.stdout is None or process.stderr is None or process.stdin is None:
         _stop_process(process, time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS)
@@ -354,7 +363,11 @@ def run_process(
     stdout_thread.start()
     stderr_thread.start()
 
-    input_bytes = None if input_text is None else input_text.encode("utf-8", errors="surrogateescape")
+    input_bytes = (
+        None
+        if input_text is None
+        else input_text.encode("utf-8", errors="surrogateescape")
+    )
 
     def write_input() -> None:
         try:
@@ -427,9 +440,15 @@ def run_process(
         )
 
     if returncode is None:
-        returncode = process_returncode[0] if process_returncode[0] is not None else process.poll()
+        returncode = (
+            process_returncode[0]
+            if process_returncode[0] is not None
+            else process.poll()
+        )
     if timeout_cause is not None:
-        timeout_returncode = returncode if returncode is not None else -getattr(signal, "SIGKILL", 9)
+        timeout_returncode = (
+            returncode if returncode is not None else -getattr(signal, "SIGKILL", 9)
+        )
         process_result = _captured_result(
             timeout_returncode,
             stdout,

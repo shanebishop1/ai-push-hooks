@@ -44,13 +44,19 @@ def _github_list(
             value = core._github_get(page_url, token, opener=opener)
         if value is None:
             break
-        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
-            raise core.ReleaseValidationError("GitHub API collection returned invalid JSON")
+        if not isinstance(value, list) or not all(
+            isinstance(item, dict) for item in value
+        ):
+            raise core.ReleaseValidationError(
+                "GitHub API collection returned invalid JSON"
+            )
         values.extend(value)
         if len(value) < 100:
             break
     else:
-        raise core.ReleaseValidationError("GitHub API collection exceeded pagination bound")
+        raise core.ReleaseValidationError(
+            "GitHub API collection exceeded pagination bound"
+        )
     return values
 
 
@@ -71,7 +77,9 @@ def _asset_bytes(
     ):
         raise core.ReleaseValidationError("release asset has an invalid size")
     if expected_size is not None and expected_size > MAX_ARCHIVE_BYTES:
-        raise core.ReleaseValidationError("release asset exceeds the recovery size bound")
+        raise core.ReleaseValidationError(
+            "release asset exceeds the recovery size bound"
+        )
     core._validate_github_asset_url(
         asset_url,
         repo=repo,
@@ -87,7 +95,10 @@ def _asset_bytes(
     if expected_size is not None and len(result.body) != expected_size:
         raise core.ReleaseValidationError("release asset size mismatch")
     digest = asset.get("digest")
-    if digest is not None and digest != f"sha256:{hashlib.sha256(result.body).hexdigest()}":
+    if (
+        digest is not None
+        and digest != f"sha256:{hashlib.sha256(result.body).hexdigest()}"
+    ):
         raise core.ReleaseValidationError("release asset digest mismatch")
     return result.body
 
@@ -101,23 +112,31 @@ def _write_file(root: Path, relative: object, data: bytes) -> None:
             f"cannot create recovery artifact directory: {relative}"
         ) from exc
     if path.exists() or path.is_symlink():
-        raise core.ReleaseValidationError(f"recovery artifact path is duplicated: {relative}")
+        raise core.ReleaseValidationError(
+            f"recovery artifact path is duplicated: {relative}"
+        )
     try:
         with path.open("xb") as stream:
             stream.write(data)
     except OSError as exc:
-        raise core.ReleaseValidationError(f"cannot write recovery artifact: {relative}") from exc
+        raise core.ReleaseValidationError(
+            f"cannot write recovery artifact: {relative}"
+        ) from exc
 
 
 def _extract_archive(data: bytes, root: Path) -> None:
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except (OSError, zipfile.BadZipFile) as exc:
-        raise core.ReleaseValidationError("Actions release artifact is not a valid ZIP") from exc
+        raise core.ReleaseValidationError(
+            "Actions release artifact is not a valid ZIP"
+        ) from exc
     with archive:
         infos = archive.infolist()
         if len(infos) > MAX_ARCHIVE_ENTRIES:
-            raise core.ReleaseValidationError("Actions release artifact has too many entries")
+            raise core.ReleaseValidationError(
+                "Actions release artifact has too many entries"
+            )
         total_size = sum(info.file_size for info in infos if not info.is_dir())
         if total_size > MAX_EXTRACTED_BYTES:
             raise core.ReleaseValidationError(
@@ -129,17 +148,25 @@ def _extract_archive(data: bytes, root: Path) -> None:
             mode = (info.external_attr >> 16) & 0o170000
             if info.is_dir():
                 if mode not in {0, stat.S_IFDIR}:
-                    raise core.ReleaseValidationError("Actions archive contains an unsafe directory")
+                    raise core.ReleaseValidationError(
+                        "Actions archive contains an unsafe directory"
+                    )
                 if path.is_symlink() or (path.exists() and not path.is_dir()):
-                    raise core.ReleaseValidationError("Actions archive contains a conflicting path")
+                    raise core.ReleaseValidationError(
+                        "Actions archive contains a conflicting path"
+                    )
                 path.mkdir(parents=True, exist_ok=True)
                 continue
             if mode not in {0, stat.S_IFREG}:
-                raise core.ReleaseValidationError("Actions archive contains a non-regular file")
+                raise core.ReleaseValidationError(
+                    "Actions archive contains a non-regular file"
+                )
             try:
                 content = archive.read(info)
             except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
-                raise core.ReleaseValidationError("cannot read Actions release artifact") from exc
+                raise core.ReleaseValidationError(
+                    "cannot read Actions release artifact"
+                ) from exc
             if len(content) != info.file_size:
                 raise core.ReleaseValidationError("Actions archive entry size mismatch")
             _write_file(root, relative, content)
@@ -149,20 +176,34 @@ def _validate_actions_artifact(
     artifact: dict[str, Any], artifact_id: int, tag: str, commit: str
 ) -> None:
     if artifact.get("id") != artifact_id:
-        raise core.ReleaseValidationError("Actions artifact identity does not match the requested ID")
+        raise core.ReleaseValidationError(
+            "Actions artifact identity does not match the requested ID"
+        )
     if artifact.get("name") != f"release-set-{tag}":
-        raise core.ReleaseValidationError("Actions artifact name does not match the recovery tag")
+        raise core.ReleaseValidationError(
+            "Actions artifact name does not match the recovery tag"
+        )
     if artifact.get("expired") is not False:
-        raise core.ReleaseValidationError("Actions release artifact is expired or has unknown state")
+        raise core.ReleaseValidationError(
+            "Actions release artifact is expired or has unknown state"
+        )
     workflow_run = artifact.get("workflow_run")
     if not isinstance(workflow_run, dict):
-        raise core.ReleaseValidationError("Actions artifact has no workflow run identity")
+        raise core.ReleaseValidationError(
+            "Actions artifact has no workflow run identity"
+        )
     if not isinstance(workflow_run.get("id"), int) or workflow_run["id"] <= 0:
-        raise core.ReleaseValidationError("Actions artifact has no valid workflow run ID")
+        raise core.ReleaseValidationError(
+            "Actions artifact has no valid workflow run ID"
+        )
     if workflow_run.get("event") != "push":
-        raise core.ReleaseValidationError("Actions artifact was not produced by a push workflow")
+        raise core.ReleaseValidationError(
+            "Actions artifact was not produced by a push workflow"
+        )
     if workflow_run.get("head_sha") != commit:
-        raise core.ReleaseValidationError("Actions artifact head SHA does not match the recovery commit")
+        raise core.ReleaseValidationError(
+            "Actions artifact head SHA does not match the recovery commit"
+        )
 
 
 def _download_actions_release_set(
@@ -198,10 +239,14 @@ def _draft_release(repo: str, tag: str, token: str) -> dict[str, Any]:
         if item.get("tag_name") == tag
     ]
     if len(releases) != 1:
-        raise core.ReleaseValidationError("expected one GitHub draft release for the recovery tag")
+        raise core.ReleaseValidationError(
+            "expected one GitHub draft release for the recovery tag"
+        )
     release = releases[0]
     if release.get("draft") is not True:
-        raise core.ReleaseValidationError("draft asset recovery requires a draft GitHub release")
+        raise core.ReleaseValidationError(
+            "draft asset recovery requires a draft GitHub release"
+        )
     if not isinstance(release.get("assets"), list):
         raise core.ReleaseValidationError("GitHub draft release assets are malformed")
     return release
@@ -214,7 +259,9 @@ def _release_asset(release: dict[str, Any], name: str) -> dict[str, Any]:
         if isinstance(asset, dict) and asset.get("name") == name
     ]
     if len(matches) != 1:
-        raise core.ReleaseValidationError(f"GitHub draft release has no unique asset: {name}")
+        raise core.ReleaseValidationError(
+            f"GitHub draft release has no unique asset: {name}"
+        )
     return matches[0]
 
 
@@ -236,7 +283,9 @@ def _download_draft_release_set(
     try:
         manifest = json.loads(manifest_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise core.ReleaseValidationError("checksum manifest asset is invalid JSON") from exc
+        raise core.ReleaseValidationError(
+            "checksum manifest asset is invalid JSON"
+        ) from exc
     if not isinstance(manifest, dict):
         raise core.ReleaseValidationError("checksum manifest asset is not an object")
     core.validate_manifest(manifest, info, commit)
@@ -265,12 +314,16 @@ def recover_artifacts(
     info = _source_release_info(source_root, tag, commit, release_channel)
     if root.exists():
         if not root.is_dir() or any(root.iterdir()):
-            raise core.ReleaseValidationError("recovery root must be a new empty directory")
+            raise core.ReleaseValidationError(
+                "recovery root must be a new empty directory"
+            )
     else:
         root.mkdir(parents=True)
     if artifact_id:
         if not artifact_id.isdecimal() or int(artifact_id) <= 0:
-            raise core.ReleaseValidationError("artifact ID must be a positive decimal number")
+            raise core.ReleaseValidationError(
+                "artifact ID must be a positive decimal number"
+            )
         _download_actions_release_set(repo, int(artifact_id), tag, commit, root, token)
     else:
         _download_draft_release_set(repo, tag, commit, info, root, token)

@@ -44,7 +44,13 @@ def opener_for(*responses):
 
 @pytest.mark.parametrize(
     ("status", "category"),
-    [(200, "ok"), (404, "not_found"), (401, "auth"), (429, "transient"), (503, "transient")],
+    [
+        (200, "ok"),
+        (404, "not_found"),
+        (401, "auth"),
+        (429, "transient"),
+        (503, "transient"),
+    ],
 )
 def test_response_classification_is_explicit(status, category):
     assert release.response_class(status) == category
@@ -175,7 +181,10 @@ def test_manifest_binds_version_channel_prerelease_and_source(tmp_path):
         ("project", "other-project"),
     ):
         candidate = {**manifest, field: value}
-        with pytest.raises(release.ReleaseValidationError, match="source metadata|fields|does not match"):
+        with pytest.raises(
+            release.ReleaseValidationError,
+            match="source metadata|fields|does not match",
+        ):
             release.validate_manifest(candidate, info, "a" * 40, root=tmp_path)
 
 
@@ -214,9 +223,7 @@ def test_stage_missing_rejects_manifest_path_traversal(tmp_path):
     }
 
     with pytest.raises(release.ReleaseValidationError, match="safe relative path"):
-        release.stage_missing(
-            manifest, root, destination, ["ai-push-hooks-1.2.3.tgz"]
-        )
+        release.stage_missing(manifest, root, destination, ["ai-push-hooks-1.2.3.tgz"])
 
 
 def test_actions_artifact_requires_immutable_run_head_binding():
@@ -271,7 +278,8 @@ def test_draft_asset_recovery_uses_manifest_names_and_paths(tmp_path, monkeypatc
                 "kind": "wheel",
                 "size": 5,
                 "sha256": hashlib.sha256(b"wheel").hexdigest(),
-                "sha512_integrity": "sha512-" + base64.b64encode(hashlib.sha512(b"wheel").digest()).decode("ascii"),
+                "sha512_integrity": "sha512-"
+                + base64.b64encode(hashlib.sha512(b"wheel").digest()).decode("ascii"),
             },
             {
                 "name": "ai_push_hooks-1.2.3.tar.gz",
@@ -279,7 +287,8 @@ def test_draft_asset_recovery_uses_manifest_names_and_paths(tmp_path, monkeypatc
                 "kind": "sdist",
                 "size": 5,
                 "sha256": hashlib.sha256(b"sdist").hexdigest(),
-                "sha512_integrity": "sha512-" + base64.b64encode(hashlib.sha512(b"sdist").digest()).decode("ascii"),
+                "sha512_integrity": "sha512-"
+                + base64.b64encode(hashlib.sha512(b"sdist").digest()).decode("ascii"),
             },
             {
                 "name": "ai-push-hooks-1.2.3.tgz",
@@ -287,7 +296,8 @@ def test_draft_asset_recovery_uses_manifest_names_and_paths(tmp_path, monkeypatc
                 "kind": "npm",
                 "size": 3,
                 "sha256": hashlib.sha256(b"npm").hexdigest(),
-                "sha512_integrity": "sha512-" + base64.b64encode(hashlib.sha512(b"npm").digest()).decode("ascii"),
+                "sha512_integrity": "sha512-"
+                + base64.b64encode(hashlib.sha512(b"npm").digest()).decode("ascii"),
             },
         ],
     }
@@ -320,10 +330,14 @@ def test_draft_asset_recovery_uses_manifest_names_and_paths(tmp_path, monkeypatc
 
     root = tmp_path / "recovery"
     root.mkdir()
-    recovery._download_draft_release_set("owner/repo", "v1.2.3", "a" * 40, info, root, "token")
+    recovery._download_draft_release_set(
+        "owner/repo", "v1.2.3", "a" * 40, info, root, "token"
+    )
 
     assert (root / "checksum-manifest.json").read_bytes() == manifest_body
-    assert (root / "python/ai_push_hooks-1.2.3-py3-none-any.whl").read_bytes() == b"wheel"
+    assert (
+        root / "python/ai_push_hooks-1.2.3-py3-none-any.whl"
+    ).read_bytes() == b"wheel"
     assert (root / "npm/ai-push-hooks-1.2.3.tgz").read_bytes() == b"npm"
 
 
@@ -337,7 +351,9 @@ def test_github_release_lookup_paginates_without_jq_input_interpolation(monkeypa
         return [{"tag_name": "v1.2.3"}]
 
     monkeypatch.setattr(recovery.core, "_github_get", get)
-    result = recovery._github_list("https://api.github.com/repos/owner/repo/releases", "token")
+    result = recovery._github_list(
+        "https://api.github.com/repos/owner/repo/releases", "token"
+    )
 
     assert len(result) == 101
     assert requests == [
@@ -488,7 +504,9 @@ def test_post_publication_verification_retries_partial_then_complete(monkeypatch
     names = [item["name"] for item in manifest["artifacts"]]
     partial = json.dumps(_pypi_payload(manifest, names[:1])).encode()
     complete = json.dumps(_pypi_payload(manifest, names)).encode()
-    opener, remaining = opener_for(MockResponse(200, partial), MockResponse(200, complete))
+    opener, remaining = opener_for(
+        MockResponse(200, partial), MockResponse(200, complete)
+    )
     monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
 
     release.verify_registry_after_publish(
@@ -533,13 +551,17 @@ def test_post_publication_default_budget_allows_extended_propagation(monkeypatch
 def test_post_publication_verification_exhausts_incomplete_state(state, monkeypatch):
     manifest = _pypi_manifest()
     names = [item["name"] for item in manifest["artifacts"]]
-    response = MockResponse(404) if state == "404" else MockResponse(
-        200, json.dumps(_pypi_payload(manifest, names[:1])).encode()
+    response = (
+        MockResponse(404)
+        if state == "404"
+        else MockResponse(200, json.dumps(_pypi_payload(manifest, names[:1])).encode())
     )
     opener, remaining = opener_for(response, response)
     monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
 
-    with pytest.raises(release.ReleaseValidationError, match="exhausted after 2 attempts"):
+    with pytest.raises(
+        release.ReleaseValidationError, match="exhausted after 2 attempts"
+    ):
         release.verify_registry_after_publish(
             "pypi",
             manifest,
@@ -559,7 +581,9 @@ def test_post_publication_verification_stops_at_deadline(monkeypatch):
     opener, remaining = opener_for(MockResponse(404), MockResponse(404))
     monkeypatch.setattr(release, "PYPI_URL", "https://fixture.invalid/pypi")
 
-    with pytest.raises(release.ReleaseValidationError, match="exhausted after 1 attempts"):
+    with pytest.raises(
+        release.ReleaseValidationError, match="exhausted after 1 attempts"
+    ):
         release.verify_registry_after_publish(
             "pypi",
             manifest,
@@ -668,13 +692,24 @@ def test_record_deployment_validates_registry_and_writes_one_status(monkeypatch)
     monkeypatch.setattr(
         release,
         "_github_get",
-        lambda url, _token: [] if url.endswith("?environment=npm&ref=v1.2.3&per_page=100") else [],
+        lambda url, _token: []
+        if url.endswith("?environment=npm&ref=v1.2.3&per_page=100")
+        else [],
     )
-    monkeypatch.setattr(release, "_github_write", lambda url, _token, payload: writes.append((url, payload)) or deployment)
+    monkeypatch.setattr(
+        release,
+        "_github_write",
+        lambda url, _token, payload: writes.append((url, payload)) or deployment,
+    )
 
     # A create response must also carry the exact identity before status is written.
     result = release.record_deployment(
-        "owner/repo", manifest["tag"], manifest["commit"], "https://run", "token", manifest
+        "owner/repo",
+        manifest["tag"],
+        manifest["commit"],
+        "https://run",
+        "token",
+        manifest,
     )
     assert result == 17
     assert len(writes) == 2
@@ -698,7 +733,12 @@ def test_record_deployment_rejects_mismatched_existing_deployment(monkeypatch):
     monkeypatch.setattr(release, "_github_write", lambda *args: writes.append(args))
     with pytest.raises(release.ReleaseValidationError, match="mismatched identity"):
         release.record_deployment(
-            "owner/repo", manifest["tag"], manifest["commit"], "https://run", "token", manifest
+            "owner/repo",
+            manifest["tag"],
+            manifest["commit"],
+            "https://run",
+            "token",
+            manifest,
         )
     assert writes == []
 
@@ -721,7 +761,11 @@ def test_recover_deployment_requires_exact_registry_and_deployment(monkeypatch):
         "_github_get",
         lambda url, _token: deployment if url.endswith("/deployments/17") else [],
     )
-    monkeypatch.setattr(release, "_github_write", lambda url, _token, payload: writes.append((url, payload)) or {})
+    monkeypatch.setattr(
+        release,
+        "_github_write",
+        lambda url, _token, payload: writes.append((url, payload)) or {},
+    )
 
     release.recover_deployment_status(
         "owner/repo", 17, manifest["tag"], manifest["commit"], "https://run", "token"
@@ -754,7 +798,10 @@ def test_recovery_manifest_is_loaded_from_matching_release_asset(monkeypatch):
         "_request_read",
         lambda *_args, **_kwargs: release.HttpResult(200, {}, body),
     )
-    assert release._load_release_manifest("owner/repo", manifest["tag"], "token") == manifest
+    assert (
+        release._load_release_manifest("owner/repo", manifest["tag"], "token")
+        == manifest
+    )
 
 
 def test_recovery_asset_rejects_arbitrary_url_before_request(monkeypatch):
@@ -806,7 +853,9 @@ def test_pagination_rejects_non_github_api_before_request(monkeypatch):
     )
 
     with pytest.raises(release.ReleaseValidationError, match="api.github.com"):
-        recovery._github_list("https://attacker.invalid/repos/owner/repo/releases", "token")
+        recovery._github_list(
+            "https://attacker.invalid/repos/owner/repo/releases", "token"
+        )
     assert called == []
 
 
@@ -927,11 +976,18 @@ def test_recover_deployment_rejects_registry_mismatch_without_status_write(monke
     manifest = _deployment_manifest()
     writes = []
     monkeypatch.setattr(release, "_load_release_manifest", lambda *_args: manifest)
-    monkeypatch.setattr(release, "registry_decision", lambda *_args: ("partial", ["artifact"]))
+    monkeypatch.setattr(
+        release, "registry_decision", lambda *_args: ("partial", ["artifact"])
+    )
     monkeypatch.setattr(release, "_github_write", lambda *args: writes.append(args))
     with pytest.raises(release.ReleaseValidationError, match="refusing recovery"):
         release.recover_deployment_status(
-            "owner/repo", 17, manifest["tag"], manifest["commit"], "https://run", "token"
+            "owner/repo",
+            17,
+            manifest["tag"],
+            manifest["commit"],
+            "https://run",
+            "token",
         )
     assert writes == []
 
@@ -964,7 +1020,12 @@ def test_recover_deployment_rejects_unrelated_identity(monkeypatch, field, value
     monkeypatch.setattr(release, "_github_write", lambda *args: writes.append(args))
     with pytest.raises(release.ReleaseValidationError, match="deployment identity"):
         release.recover_deployment_status(
-            "owner/repo", 17, manifest["tag"], manifest["commit"], "https://run", "token"
+            "owner/repo",
+            17,
+            manifest["tag"],
+            manifest["commit"],
+            "https://run",
+            "token",
         )
     assert writes == []
 
@@ -980,9 +1041,11 @@ def test_recover_deployment_404_fails_without_status_write(monkeypatch):
     assert writes == []
 
 
-def test_ensure_github_release_handles_404_and_uploads_manifest_once(tmp_path, monkeypatch):
+def test_ensure_github_release_handles_404_and_uploads_manifest_once(
+    tmp_path, monkeypatch
+):
     manifest_path = tmp_path / release.MANIFEST_NAME
-    manifest_path.write_text("{\"tag\": \"v1.2.3\"}\n", encoding="utf-8")
+    manifest_path.write_text('{"tag": "v1.2.3"}\n', encoding="utf-8")
     manifest = {
         "tag": "v1.2.3",
         "commit": "a" * 40,
@@ -1027,7 +1090,9 @@ def test_ensure_github_release_handles_404_and_uploads_manifest_once(tmp_path, m
 
 
 @pytest.mark.parametrize("message", ["credentials", "transient"])
-def test_ensure_github_release_propagates_auth_or_outage(tmp_path, monkeypatch, message):
+def test_ensure_github_release_propagates_auth_or_outage(
+    tmp_path, monkeypatch, message
+):
     monkeypatch.setattr(release, "validate_source", lambda *_args: None)
     monkeypatch.setattr(
         release,
@@ -1037,7 +1102,12 @@ def test_ensure_github_release_propagates_auth_or_outage(tmp_path, monkeypatch, 
     with pytest.raises(release.ReleaseValidationError, match=message):
         release.ensure_github_release(
             "owner/repo",
-            {"tag": "v1.2.3", "commit": "a" * 40, "github_prerelease": False, "artifacts": []},
+            {
+                "tag": "v1.2.3",
+                "commit": "a" * 40,
+                "github_prerelease": False,
+                "artifacts": [],
+            },
             tmp_path / "checksum-manifest.json",
             "token",
         )
@@ -1055,7 +1125,12 @@ def test_ensure_github_release_rejects_existing_mismatch(tmp_path, monkeypatch):
     with pytest.raises(release.ReleaseValidationError, match="wrong tag"):
         release.ensure_github_release(
             "owner/repo",
-            {"tag": "v1.2.3", "commit": "a" * 40, "github_prerelease": False, "artifacts": []},
+            {
+                "tag": "v1.2.3",
+                "commit": "a" * 40,
+                "github_prerelease": False,
+                "artifacts": [],
+            },
             manifest_path,
             "token",
         )

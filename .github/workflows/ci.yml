@@ -105,6 +105,9 @@ jobs:
       - name: Run Ruff
         run: ruff check .
 
+      - name: Check Ruff formatting
+        run: python -m ruff format --check src tests scripts
+
   package:
     name: Package validation
     runs-on: ubuntu-latest

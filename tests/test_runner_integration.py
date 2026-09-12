@@ -208,7 +208,9 @@ def test_config_engine_neutral_orchestration_reaches_mixed_real_adapters(
 
     _reset_runner_cache("codex", "claude", "command")
     monkeypatch.setattr("ai_push_hooks.executors.runners.codex.run_process", fake_codex)
-    monkeypatch.setattr("ai_push_hooks.executors.runners.claude.run_process", fake_claude)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.claude.run_process", fake_claude
+    )
     monkeypatch.setattr(
         "ai_push_hooks.executors.runners.claude.shutil.which",
         lambda name: "claude" if name == "claude" else None,
@@ -216,7 +218,10 @@ def test_config_engine_neutral_orchestration_reaches_mixed_real_adapters(
 
     def collect(_context, _state):
         return CollectorResult(
-            artifacts={"first.txt": "first artifact-secret", "second.txt": "second body"}
+            artifacts={
+                "first.txt": "first artifact-secret",
+                "second.txt": "second body",
+            }
         )
 
     result = WorkflowEngine(
@@ -226,7 +231,9 @@ def test_config_engine_neutral_orchestration_reaches_mixed_real_adapters(
     ).run()
 
     assert result.modules == {"docs": "completed"}
-    assert (repo / "README.md").read_text(encoding="utf-8") == "# Applied by custom runner\n"
+    assert (repo / "README.md").read_text(
+        encoding="utf-8"
+    ) == "# Applied by custom runner\n"
 
     codex_packet = str(codex_calls[0]["input_text"])
     assert codex_packet.index("first.txt") < codex_packet.index("second.txt")
@@ -274,18 +281,24 @@ def test_config_engine_neutral_orchestration_reaches_mixed_real_adapters(
     ]
     assert pathlib.Path(custom_record["cwd"]).name.startswith("ai-push-hooks-apply-")
     assert custom_record["cwd"] != str(repo.resolve())
-    assert custom_record["stdin"].index("first.txt") < custom_record["stdin"].index("claude.txt")
+    assert custom_record["stdin"].index("first.txt") < custom_record["stdin"].index(
+        "claude.txt"
+    )
 
     docs_dir = context.run_dir / "docs"
-    assert (docs_dir / "01-codex" / "codex.txt").read_text(encoding="utf-8").startswith(
-        "codex prompt-secret"
+    assert (
+        (docs_dir / "01-codex" / "codex.txt")
+        .read_text(encoding="utf-8")
+        .startswith("codex prompt-secret")
     )
-    assert (docs_dir / "02-claude" / "claude.txt").read_text(encoding="utf-8").startswith(
-        "claude artifact-secret"
+    assert (
+        (docs_dir / "02-claude" / "claude.txt")
+        .read_text(encoding="utf-8")
+        .startswith("claude artifact-secret")
     )
-    assert json.loads((docs_dir / "03-apply" / "result.json").read_text(encoding="utf-8"))[
-        "changed_files"
-    ] == ["README.md"]
+    assert json.loads(
+        (docs_dir / "03-apply" / "result.json").read_text(encoding="utf-8")
+    )["changed_files"] == ["README.md"]
 
     captured = capsys.readouterr()
     output = captured.out + captured.err
@@ -299,7 +312,10 @@ def test_config_engine_neutral_orchestration_reaches_mixed_real_adapters(
     ):
         assert secret not in output
     assert output.count("[REDACTED]") >= 3
-    assert [(call["runner_profile"], call["runner_type"], call["model"]) for call in context.logger.llm_calls] == [
+    assert [
+        (call["runner_profile"], call["runner_type"], call["model"])
+        for call in context.logger.llm_calls
+    ] == [
         ("codex-global", "codex", "opaque/env-override-model::exact"),
         ("claude-step", "claude", "opaque/env-override-model::exact"),
         ("custom-apply", "command", "opaque/env-override-model::exact"),
@@ -345,7 +361,9 @@ def test_full_engine_json_retries_use_fresh_ephemeral_runner_invocations(
     repo = init_repo(tmp_path, branch="feature/retry")
     runner_name = f"retry-{runner_type}"
     model = "opaque/retry-model::no-parsing"
-    claude_profile = f"\n[runners.{runner_name}]\ntype = \"{runner_type}\"\nmodel = {model!r}\n"
+    claude_profile = (
+        f'\n[runners.{runner_name}]\ntype = "{runner_type}"\nmodel = {model!r}\n'
+    )
     repo.joinpath("ai-push-hooks.toml").write_text(
         f"""
 [llm]
@@ -391,7 +409,9 @@ output = "result.json"
             text = "not-json" if len(calls) == 1 else '["accepted"]'
             return ProcessResult(0, _codex_stream(text, f"thread-{len(calls)}"), "")
 
-        monkeypatch.setattr("ai_push_hooks.executors.runners.codex.run_process", fake_process)
+        monkeypatch.setattr(
+            "ai_push_hooks.executors.runners.codex.run_process", fake_process
+        )
     else:
         _reset_runner_cache("claude")
         monkeypatch.setattr(
@@ -404,7 +424,9 @@ output = "result.json"
             inputs.append(input_text)
             if list(argv) == ["claude", "--help"]:
                 return ProcessResult(0, CLAUDE_HELP, "")
-            invocation_number = len([call for call in calls if call != ["claude", "--help"]])
+            invocation_number = len(
+                [call for call in calls if call != ["claude", "--help"]]
+            )
             text = "not-json" if invocation_number == 1 else '["accepted"]'
             return ProcessResult(
                 0,
@@ -420,13 +442,17 @@ output = "result.json"
                 "",
             )
 
-        monkeypatch.setattr("ai_push_hooks.executors.runners.claude.run_process", fake_process)
+        monkeypatch.setattr(
+            "ai_push_hooks.executors.runners.claude.run_process", fake_process
+        )
 
     WorkflowEngine(context, ArtifactStore(context.run_dir)).run()
 
     invocation_calls = [call for call in calls if call != ["claude", "--help"]]
     assert len(invocation_calls) == 2
-    assert all("--session" not in call and "--resume" not in call for call in invocation_calls)
+    assert all(
+        "--session" not in call and "--resume" not in call for call in invocation_calls
+    )
     assert len(completions) == 2
     assert all(fields["session_state"] == "ephemeral" for fields in completions)
     assert all(fields["resumable"] is False for fields in completions)
@@ -480,14 +506,18 @@ output = "result.json"
             0,
             "\n".join(
                 [
-                    json.dumps({"type": "session.created", "sessionID": "session-opaque-42"}),
+                    json.dumps(
+                        {"type": "session.created", "sessionID": "session-opaque-42"}
+                    ),
                     json.dumps({"type": "text", "part": {"text": text}}),
                 ]
             ),
             "",
         )
 
-    monkeypatch.setattr("ai_push_hooks.executors.runners.opencode.run_process", fake_process)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.opencode.run_process", fake_process
+    )
 
     WorkflowEngine(context, ArtifactStore(context.run_dir)).run()
 
@@ -497,5 +527,7 @@ output = "result.json"
     assert calls[1][calls[1].index("--session") + 1] == "session-opaque-42"
     assert "--title" not in calls[1]
     assert json.loads(
-        context.run_dir.joinpath("docs/00-query/result.json").read_text(encoding="utf-8")
+        context.run_dir.joinpath("docs/00-query/result.json").read_text(
+            encoding="utf-8"
+        )
     ) == ["accepted"]

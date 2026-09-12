@@ -88,7 +88,9 @@ def _validate_text(
     if allow_controls:
         return value
     allowed_controls = "\r\n\t" if allow_line_breaks else ""
-    if "\x00" in value or any(ord(character) < 32 and character not in allowed_controls for character in value):
+    if "\x00" in value or any(
+        ord(character) < 32 and character not in allowed_controls for character in value
+    ):
         raise RunnerContractError(f"{label} contains control characters")
     return value
 
@@ -156,7 +158,9 @@ class PromptPacket:
         if not isinstance(self.artifacts, (tuple, list)):
             raise RunnerContractError("prompt packet artifacts must be ordered")
         if not all(isinstance(item, RunnerArtifact) for item in self.artifacts):
-            raise RunnerContractError("prompt packet artifacts must contain RunnerArtifact values")
+            raise RunnerContractError(
+                "prompt packet artifacts must contain RunnerArtifact values"
+            )
         object.__setattr__(self, "artifacts", tuple(self.artifacts))
 
     def render(self) -> str:
@@ -208,13 +212,17 @@ class RunnerRequest:
         _validate_text(self.purpose, "purpose")
         if self.mode not in {"ask", "apply"}:
             raise RunnerContractError("mode must be 'ask' or 'apply'")
-        _validate_text(self.instruction, "instruction", allow_empty=True, allow_line_breaks=True)
+        _validate_text(
+            self.instruction, "instruction", allow_empty=True, allow_line_breaks=True
+        )
         if not isinstance(self.artifacts, (tuple, list)):
             raise RunnerContractError("artifacts must be an ordered sequence")
         normalized_artifacts: list[RunnerArtifact] = []
         for artifact in self.artifacts:
             if not isinstance(artifact, RunnerArtifact):
-                raise RunnerContractError("artifacts must contain RunnerArtifact values")
+                raise RunnerContractError(
+                    "artifacts must contain RunnerArtifact values"
+                )
             normalized_artifacts.append(artifact)
         object.__setattr__(self, "artifacts", tuple(normalized_artifacts))
         if not isinstance(self.cwd, pathlib.Path):
@@ -310,7 +318,9 @@ class RunnerResult:
     transcript: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        _validate_text(self.final_text, "final_text", allow_empty=True, allow_controls=True)
+        _validate_text(
+            self.final_text, "final_text", allow_empty=True, allow_controls=True
+        )
         if isinstance(self.returncode, bool) or not isinstance(self.returncode, int):
             raise RunnerContractError("returncode must be an integer")
         _validate_text(self.stdout, "stdout", allow_empty=True, allow_controls=True)
@@ -318,7 +328,9 @@ class RunnerResult:
         if self.session is not None and not isinstance(self.session, SessionMetadata):
             raise RunnerContractError("session must be SessionMetadata or None")
         if self.transcript is not None:
-            _validate_text(self.transcript, "transcript", allow_empty=True, allow_line_breaks=True)
+            _validate_text(
+                self.transcript, "transcript", allow_empty=True, allow_line_breaks=True
+            )
 
     def __repr__(self) -> str:
         return (
@@ -342,18 +354,20 @@ class Runner(Protocol):
 
     capabilities: RunnerCapabilities
 
-    def run(self, request: RunnerRequest) -> RunnerResult:
-        ...
+    def run(self, request: RunnerRequest) -> RunnerResult: ...
 
 
 class RunnerLifecycle(Protocol):
     """Optional lifecycle API, implemented only by adapters that need it."""
 
-    def finalize(self, request: RunnerRequest, result: RunnerResult) -> RunnerResult:
-        ...
+    def finalize(
+        self, request: RunnerRequest, result: RunnerResult
+    ) -> RunnerResult: ...
 
 
-def finalize_runner(runner: Runner, request: RunnerRequest, result: RunnerResult) -> RunnerResult:
+def finalize_runner(
+    runner: Runner, request: RunnerRequest, result: RunnerResult
+) -> RunnerResult:
     """Finalize a result when the adapter explicitly advertises that capability."""
 
     capabilities = getattr(runner, "capabilities", RunnerCapabilities())
@@ -396,9 +410,7 @@ def redact_diagnostic(value: str, *, secrets: Sequence[str] = ()) -> str:
     for pattern in _SECRET_PATTERNS:
         redacted = pattern.sub(
             lambda match: (
-                f"{match.group(1)}[REDACTED]"
-                if match.lastindex
-                else "[REDACTED]"
+                f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]"
             ),
             redacted,
         )
@@ -450,7 +462,10 @@ def bounded_diagnostic(
         return safe
     if max_chars <= len(DIAGNOSTIC_TRUNCATION_MARKER):
         return DIAGNOSTIC_TRUNCATION_MARKER[:max_chars]
-    return safe[: max_chars - len(DIAGNOSTIC_TRUNCATION_MARKER)] + DIAGNOSTIC_TRUNCATION_MARKER
+    return (
+        safe[: max_chars - len(DIAGNOSTIC_TRUNCATION_MARKER)]
+        + DIAGNOSTIC_TRUNCATION_MARKER
+    )
 
 
 def bounded_redacted_diagnostics(
@@ -465,7 +480,9 @@ def bounded_redacted_diagnostics(
     parts: list[str] = []
     for label, value in (("stdout", stdout), ("stderr", stderr)):
         if value:
-            parts.append(f"{label}: {bounded_diagnostic(value, max_chars=max_chars, secrets=secrets)}")
+            parts.append(
+                f"{label}: {bounded_diagnostic(value, max_chars=max_chars, secrets=secrets)}"
+            )
     combined = "\n".join(parts)
     return bounded_diagnostic(combined, max_chars=max_chars, secrets=secrets)
 
@@ -473,7 +490,14 @@ def bounded_redacted_diagnostics(
 def _credential_environment_values(env: Mapping[str, str] | None) -> tuple[str, ...]:
     if env is None:
         return ()
-    credential_markers = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
+    credential_markers = (
+        "API_KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "AUTH",
+        "CREDENTIAL",
+    )
     return tuple(
         value
         for name, value in env.items()
@@ -582,14 +606,17 @@ def require_zero_exit(
     """Raise a bounded non-zero diagnostic while preserving normalized results."""
 
     if result.returncode != 0:
-        details = request_sensitive_diagnostics(
-            request,
-            result.stdout,
-            result.stderr,
-            max_chars=diagnostic_limit,
-            env=env,
-            extra=secrets,
-        ) or f"exit code {result.returncode}"
+        details = (
+            request_sensitive_diagnostics(
+                request,
+                result.stdout,
+                result.stderr,
+                max_chars=diagnostic_limit,
+                env=env,
+                extra=secrets,
+            )
+            or f"exit code {result.returncode}"
+        )
         raise RunnerNonzeroExitError(
             f"runner {request.profile_id!r} ({request.runner_type}) failed at {request.stage!r}",
             details=details,

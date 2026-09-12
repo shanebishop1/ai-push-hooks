@@ -71,7 +71,9 @@ def opencode_isolation_env(
         context.run_dir / "opencode-isolation" / sanitize_filename_component(stage_name)
     )
     if path_has_symlink(context.run_dir, lexical_isolation_root):
-        raise HookError(f"OpenCode isolation directory must not traverse a symlink: {stage_name}")
+        raise HookError(
+            f"OpenCode isolation directory must not traverse a symlink: {stage_name}"
+        )
     isolation_root = resolve_contained_path(
         context.run_dir,
         f"opencode-isolation/{sanitize_filename_component(stage_name)}",
@@ -184,7 +186,9 @@ def build_opencode_security_config(
         description = "Read-only ai-push-hooks analysis agent"
     elif agent_policy == "apply":
         if not allow_paths:
-            raise HookError("OpenCode apply agent requires an explicit non-empty allow_paths")
+            raise HookError(
+                "OpenCode apply agent requires an explicit non-empty allow_paths"
+            )
         agent_name = OPENCODE_APPLY_AGENT
         description = "Path-restricted ai-push-hooks apply agent"
         permissions["read"] = "allow"
@@ -266,11 +270,17 @@ def validate_hook_owned_artifacts(
     for file_path in files:
         lexical_path = pathlib.Path(os.path.abspath(file_path))
         if not is_path_within(lexical_path, run_root):
-            raise HookError(f"OpenCode attachment is not a hook-owned artifact: {file_path}")
+            raise HookError(
+                f"OpenCode attachment is not a hook-owned artifact: {file_path}"
+            )
         if path_has_symlink(run_root, lexical_path):
-            raise HookError(f"OpenCode attachment must not traverse a symlink: {file_path}")
+            raise HookError(
+                f"OpenCode attachment must not traverse a symlink: {file_path}"
+            )
         resolved_path = lexical_path.resolve(strict=True)
         if not is_path_within(resolved_path, run_root) or not resolved_path.is_file():
-            raise HookError(f"OpenCode attachment must be a regular hook-owned file: {file_path}")
+            raise HookError(
+                f"OpenCode attachment must be a regular hook-owned file: {file_path}"
+            )
         validated.append(resolved_path)
     return validated

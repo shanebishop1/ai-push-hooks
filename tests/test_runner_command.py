@@ -31,13 +31,19 @@ def _request(tmp_path: pathlib.Path, **overrides: object) -> RunnerRequest:
         "cwd": tmp_path,
         "timeout_seconds": 2,
         "model": "test-model",
-        "command": (sys.executable, "-c", "import sys; print(sys.stdin.read(), end='')"),
+        "command": (
+            sys.executable,
+            "-c",
+            "import sys; print(sys.stdin.read(), end='')",
+        ),
     }
     values.update(overrides)
     return RunnerRequest(**values)
 
 
-def _script_request(tmp_path: pathlib.Path, script: str, **overrides: object) -> RunnerRequest:
+def _script_request(
+    tmp_path: pathlib.Path, script: str, **overrides: object
+) -> RunnerRequest:
     if "command" in overrides:
         return _request(tmp_path, **overrides)
     return _request(
@@ -61,12 +67,19 @@ def test_stdin_transport_sends_exact_packet_and_eof(tmp_path: pathlib.Path) -> N
     assert result.stderr == ""
 
 
-def test_argv_transport_replaces_prompt_and_explicitly_closes_stdin(tmp_path: pathlib.Path) -> None:
+def test_argv_transport_replaces_prompt_and_explicitly_closes_stdin(
+    tmp_path: pathlib.Path,
+) -> None:
     request = _script_request(
         tmp_path,
         "import sys; print(repr(sys.argv[1:]), end=''); assert sys.stdin.buffer.read() == b''",
         prompt_transport="argv",
-        command=(sys.executable, "-c", "import sys; print(repr(sys.argv[1:]), end=''); assert sys.stdin.buffer.read() == b''", "{prompt}"),
+        command=(
+            sys.executable,
+            "-c",
+            "import sys; print(repr(sys.argv[1:]), end=''); assert sys.stdin.buffer.read() == b''",
+            "{prompt}",
+        ),
     )
 
     result = create_runner().run(request)
@@ -74,7 +87,9 @@ def test_argv_transport_replaces_prompt_and_explicitly_closes_stdin(tmp_path: pa
     assert result.final_text == repr([request.prompt_packet().render()])
 
 
-def test_substitutes_model_cwd_and_stage_as_whole_argv_values(tmp_path: pathlib.Path) -> None:
+def test_substitutes_model_cwd_and_stage_as_whole_argv_values(
+    tmp_path: pathlib.Path,
+) -> None:
     request = _script_request(
         tmp_path,
         "import os, sys; print(repr(sys.argv[1:]), end=''); print(os.getcwd(), end='')",
@@ -95,7 +110,9 @@ def test_substitutes_model_cwd_and_stage_as_whole_argv_values(tmp_path: pathlib.
     assert "docs.query" in result.final_text
 
 
-def test_inherits_user_environment_and_does_not_expand_shell_syntax(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inherits_user_environment_and_does_not_expand_shell_syntax(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("COMMAND_RUNNER_TEST_ENV", "inherited-value")
     request = _script_request(
         tmp_path,
@@ -110,14 +127,24 @@ def test_inherits_user_environment_and_does_not_expand_shell_syntax(tmp_path: pa
 
     result = create_runner().run(request)
 
-    assert result.final_text == "inherited-value|$COMMAND_RUNNER_TEST_ENV && echo expanded"
+    assert (
+        result.final_text == "inherited-value|$COMMAND_RUNNER_TEST_ENV && echo expanded"
+    )
 
 
-def test_pi_shaped_profile_is_only_an_argv_configuration(tmp_path: pathlib.Path) -> None:
+def test_pi_shaped_profile_is_only_an_argv_configuration(
+    tmp_path: pathlib.Path,
+) -> None:
     request = _script_request(
         tmp_path,
         "import sys; print(sys.argv[1], end='')",
-        command=(sys.executable, "-c", "import sys; print(sys.argv[1], end='')", "--print", "{model}"),
+        command=(
+            sys.executable,
+            "-c",
+            "import sys; print(sys.argv[1], end='')",
+            "--print",
+            "{model}",
+        ),
     )
 
     assert create_runner().run(request).final_text == "--print"
@@ -151,7 +178,9 @@ def test_rejects_malformed_placeholder_requests(
         create_runner().run(request)
 
 
-def test_rejects_malformed_programmatic_request_even_after_construction(tmp_path: pathlib.Path) -> None:
+def test_rejects_malformed_programmatic_request_even_after_construction(
+    tmp_path: pathlib.Path,
+) -> None:
     request = _request(tmp_path)
     object.__setattr__(request, "command", ("agent", "--prompt={prompt}"))
 
@@ -159,7 +188,9 @@ def test_rejects_malformed_programmatic_request_even_after_construction(tmp_path
         create_runner().run(request)
 
 
-def test_preserves_plain_unicode_multiline_stdout_and_separates_stderr(tmp_path: pathlib.Path) -> None:
+def test_preserves_plain_unicode_multiline_stdout_and_separates_stderr(
+    tmp_path: pathlib.Path,
+) -> None:
     text = "Résumé ✓\n第二行\nlast line"
     request = _script_request(
         tmp_path,
@@ -200,12 +231,19 @@ def test_nonzero_exit_is_classified_and_redacts_prompt_model_and_environment(
 
     message = str(error.value)
     assert "pi-shaped" in message and "docs.query" in message
-    for secret in ("prompt-secret", "artifact-secret", "environment-secret", "model-secret"):
+    for secret in (
+        "prompt-secret",
+        "artifact-secret",
+        "environment-secret",
+        "model-secret",
+    ):
         assert secret not in message
     assert "[REDACTED]" in message
 
 
-def test_propagates_timeout_signal_and_missing_executable(tmp_path: pathlib.Path) -> None:
+def test_propagates_timeout_signal_and_missing_executable(
+    tmp_path: pathlib.Path,
+) -> None:
     with pytest.raises(RunnerTimeoutError):
         create_runner().run(
             _request(
@@ -219,7 +257,11 @@ def test_propagates_timeout_signal_and_missing_executable(tmp_path: pathlib.Path
         create_runner().run(
             _request(
                 tmp_path,
-                command=(sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"),
+                command=(
+                    sys.executable,
+                    "-c",
+                    "import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
+                ),
             )
         )
 
@@ -227,14 +269,18 @@ def test_propagates_timeout_signal_and_missing_executable(tmp_path: pathlib.Path
         create_runner().run(_request(tmp_path, command=(str(tmp_path / "missing"),)))
 
 
-def test_rejects_truncated_stdout_and_stderr(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rejects_truncated_stdout_and_stderr(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from ai_push_hooks.executors.runners import ProcessResult
     import ai_push_hooks.executors.runners.command as command_module
 
     monkeypatch.setattr(
         command_module,
         "run_process",
-        lambda *_args, **_kwargs: ProcessResult(0, "partial", "diagnostic", stdout_truncated=True),
+        lambda *_args, **_kwargs: ProcessResult(
+            0, "partial", "diagnostic", stdout_truncated=True
+        ),
     )
 
     with pytest.raises(RunnerProtocolError, match="capture limit"):

@@ -128,7 +128,9 @@ def _validate_model(model: str) -> str:
     if not isinstance(model, str) or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,127}", model
     ):
-        raise LiveProbeError("model must be a selected provider/model identifier, not a command")
+        raise LiveProbeError(
+            "model must be a selected provider/model identifier, not a command"
+        )
     if model.startswith("-"):
         raise LiveProbeError("model must not be an option")
     return model
@@ -191,7 +193,9 @@ def create_disposable_project(root: pathlib.Path) -> tuple[pathlib.Path, str]:
     return project, nonce
 
 
-def _context(project: pathlib.Path, profile: RunnerProfile, timeout: int) -> RuntimeContext:
+def _context(
+    project: pathlib.Path, profile: RunnerProfile, timeout: int
+) -> RuntimeContext:
     git_dir = project / ".git"
     run_dir = git_dir / "ai-push-hooks-live-probe"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -254,13 +258,18 @@ def run_live_probe(
     require_live_opt_in(env)
     reject_model_override(env)
     if timeout_seconds <= 0 or timeout_seconds > MAX_TIMEOUT_SECONDS:
-        raise LiveProbeError(f"timeout must be between 1 and {MAX_TIMEOUT_SECONDS} seconds")
+        raise LiveProbeError(
+            f"timeout must be between 1 and {MAX_TIMEOUT_SECONDS} seconds"
+        )
     if apply:
         if _env(env).get(LIVE_APPLY_OPT_IN) != "1":
             raise LiveProbeError(
                 f"apply probe disabled; set {LIVE_APPLY_OPT_IN}=1 separately"
             )
-        if apply_budget_seconds is None or not 1 <= apply_budget_seconds <= MAX_TIMEOUT_SECONDS:
+        if (
+            apply_budget_seconds is None
+            or not 1 <= apply_budget_seconds <= MAX_TIMEOUT_SECONDS
+        ):
             raise LiveProbeError(
                 f"apply requires an explicit budget between 1 and {MAX_TIMEOUT_SECONDS} seconds"
             )
@@ -287,12 +296,16 @@ def run_live_probe(
         if _git_visible_state(project) != git_state_before_read:
             raise LiveProbeError("read-only probe modified Git-visible project files")
         if nonce not in str(response).strip():
-            raise LiveProbeError("selected runner did not return the disposable project nonce")
+            raise LiveProbeError(
+                "selected runner did not return the disposable project nonce"
+            )
 
         changed_files: tuple[str, ...] = ()
         if apply:
             apply_profile = build_profile(profile, model, apply=True)
-            apply_context = _context(project, apply_profile, apply_budget_seconds or timeout_seconds)
+            apply_context = _context(
+                project, apply_profile, apply_budget_seconds or timeout_seconds
+            )
             apply_module = ModuleConfig("live-probe", True, ())
             apply_step = StepConfig(
                 id="allowlisted-edit",
@@ -314,10 +327,18 @@ def run_live_probe(
             )
             changed_files = tuple(str(path) for path in result.get("changed_files", []))
             if changed_files != (README_FILENAME,):
-                raise LiveProbeError("live apply did not produce exactly one allowlisted README edit")
-            if APPLY_MARKER not in (project / README_FILENAME).read_text(encoding="utf-8"):
-                raise LiveProbeError("live apply did not propagate the expected README marker")
-            if (project / OUTSIDE_FILENAME).read_text(encoding="utf-8") != "must remain unchanged\n":
+                raise LiveProbeError(
+                    "live apply did not produce exactly one allowlisted README edit"
+                )
+            if APPLY_MARKER not in (project / README_FILENAME).read_text(
+                encoding="utf-8"
+            ):
+                raise LiveProbeError(
+                    "live apply did not propagate the expected README marker"
+                )
+            if (project / OUTSIDE_FILENAME).read_text(
+                encoding="utf-8"
+            ) != "must remain unchanged\n":
                 raise LiveProbeError("live apply changed the outside-allowlist fixture")
 
         return ProbeResult(profile, model, True, apply, changed_files)
@@ -331,7 +352,9 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="one user-selected provider/model identifier; never a command or credential",
     )
-    parser.add_argument("--apply", action="store_true", help="request the separate apply probe")
+    parser.add_argument(
+        "--apply", action="store_true", help="request the separate apply probe"
+    )
     parser.add_argument("--apply-budget-seconds", type=int)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     return parser

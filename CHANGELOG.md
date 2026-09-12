@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Changed
 
+- Added a pinned Ruff 0.13.3 formatting policy for Python sources, tests, and scripts.
 - Updated the default OpenCode model and README positioning to
   `openai/gpt-5.6-luna`.
 - Clarified that built-in mutating steps are serialized, while trusted custom

@@ -44,7 +44,9 @@ def test_file_prompt_wins_over_builtin(tmp_path: pathlib.Path) -> None:
 
 def test_oversized_prompt_file_is_rejected(tmp_path: pathlib.Path) -> None:
     (tmp_path / "prompt.txt").write_bytes(b"x" * (config_module.PROMPT_MAX_BYTES + 1))
-    step = StepConfig(id="query", type="ask", output="result.json", prompt_file="prompt.txt")
+    step = StepConfig(
+        id="query", type="ask", output="result.json", prompt_file="prompt.txt"
+    )
 
     with pytest.raises(HookError, match="exceeds maximum size"):
         resolve_prompt_text(tmp_path, step)
@@ -63,16 +65,22 @@ def test_missing_file_falls_back_to_builtin(tmp_path: pathlib.Path) -> None:
 
 
 def test_missing_all_prompt_sources_fails(tmp_path: pathlib.Path) -> None:
-    step = StepConfig(id="query", type="ask", output="queries.json", schema="string_array")
+    step = StepConfig(
+        id="query", type="ask", output="queries.json", schema="string_array"
+    )
     with pytest.raises(HookError, match="No prompt source available"):
         resolve_prompt_text(tmp_path, step)
 
 
-@pytest.mark.parametrize("prompt_file", ["/tmp/prompt.txt", "../prompt.txt", "C:\\prompt.txt"])
+@pytest.mark.parametrize(
+    "prompt_file", ["/tmp/prompt.txt", "../prompt.txt", "C:\\prompt.txt"]
+)
 def test_prompt_file_rejects_absolute_or_traversing_paths(
     tmp_path: pathlib.Path, prompt_file: str
 ) -> None:
-    step = StepConfig(id="query", type="ask", output="result.json", prompt_file=prompt_file)
+    step = StepConfig(
+        id="query", type="ask", output="result.json", prompt_file=prompt_file
+    )
 
     with pytest.raises(HookError, match="Prompt file"):
         resolve_prompt_text(tmp_path, step)
@@ -82,7 +90,9 @@ def test_prompt_file_rejects_symlink_escape(tmp_path: pathlib.Path) -> None:
     outside = tmp_path.parent / "outside-prompt.txt"
     outside.write_text("unsafe", encoding="utf-8")
     (tmp_path / "prompt.txt").symlink_to(outside)
-    step = StepConfig(id="query", type="ask", output="result.json", prompt_file="prompt.txt")
+    step = StepConfig(
+        id="query", type="ask", output="result.json", prompt_file="prompt.txt"
+    )
 
     with pytest.raises(HookError, match="symlink"):
         resolve_prompt_text(tmp_path, step)
@@ -128,7 +138,9 @@ def test_prompt_file_rejects_git_component_in_linked_worktree(tmp_path) -> None:
         check=True,
         capture_output=True,
     )
-    step = StepConfig(id="query", type="ask", output="result.json", prompt_file=".GIT/HEAD")
+    step = StepConfig(
+        id="query", type="ask", output="result.json", prompt_file=".GIT/HEAD"
+    )
 
     with pytest.raises(HookError, match="Git metadata"):
         resolve_prompt_text(linked, step)

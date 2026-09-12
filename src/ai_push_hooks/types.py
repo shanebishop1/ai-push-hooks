@@ -325,7 +325,9 @@ class HookLogger:
             call_number = cls._safe_text(fields.get("call_number", ""))
             stage = cls._stage_for_console(fields.get("stage_name", ""), colors_enabled)
             purpose = cls._style(
-                cls._safe_text(fields.get("purpose", "")).replace("\n", "\\n").replace("\t", " "),
+                cls._safe_text(fields.get("purpose", ""))
+                .replace("\n", "\\n")
+                .replace("\t", " "),
                 "34",
                 colors_enabled,
             )
@@ -348,12 +350,16 @@ class HookLogger:
             call_number = cls._safe_text(fields.get("call_number", ""))
             stage = cls._stage_for_console(fields.get("stage_name", ""), colors_enabled)
             profile = cls._style(
-                cls._safe_text(fields.get("runner_profile", "")).replace("\n", "\\n").replace("\t", " "),
+                cls._safe_text(fields.get("runner_profile", ""))
+                .replace("\n", "\\n")
+                .replace("\t", " "),
                 "34",
                 colors_enabled,
             )
             runner_type = cls._style(
-                cls._safe_text(fields.get("runner_type", "")).replace("\n", "\\n").replace("\t", " "),
+                cls._safe_text(fields.get("runner_type", ""))
+                .replace("\n", "\\n")
+                .replace("\t", " "),
                 "34",
                 colors_enabled,
             )
@@ -374,7 +380,9 @@ class HookLogger:
                 + cls._style(")", "2", colors_enabled)
             )
             if "; " in safe_message:
-                body += cls._style("; " + safe_message.split("; ", 1)[1], "2", colors_enabled)
+                body += cls._style(
+                    "; " + safe_message.split("; ", 1)[1], "2", colors_enabled
+                )
             return body
 
         return safe_message
@@ -445,13 +453,16 @@ class HookLogger:
                 if initial_metadata is not None:
                     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
                     if stat.S_ISLNK(initial_metadata.st_mode) or bool(
-                        getattr(initial_metadata, "st_file_attributes", 0) & reparse_flag
+                        getattr(initial_metadata, "st_file_attributes", 0)
+                        & reparse_flag
                     ):
                         raise HookError(
                             "JSONL log target must not be a symlink or reparse point: "
                             f"{self.jsonl_path}"
                         )
-                flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+                flags = (
+                    os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+                )
                 flags |= getattr(os, "O_NOFOLLOW", 0)
                 descriptor = os.open(self.jsonl_path, flags, 0o600)
                 try:
@@ -462,12 +473,15 @@ class HookLogger:
                         not stat.S_ISREG(descriptor_metadata.st_mode)
                         or stat.S_ISLNK(path_metadata.st_mode)
                         or bool(
-                            getattr(path_metadata, "st_file_attributes", 0) & reparse_flag
+                            getattr(path_metadata, "st_file_attributes", 0)
+                            & reparse_flag
                         )
                         or (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
                         != (path_metadata.st_dev, path_metadata.st_ino)
                     ):
-                        raise HookError(f"JSONL log target is not a regular file: {self.jsonl_path}")
+                        raise HookError(
+                            f"JSONL log target is not a regular file: {self.jsonl_path}"
+                        )
                     os.fchmod(descriptor, 0o600)
                     os.write(
                         descriptor,
@@ -519,7 +533,9 @@ class HookLogger:
                 "purpose": safe_purpose,
                 "model": self._safe_text(model),
                 "module": safe_stage.split(".", 1)[0],
-                "step": safe_stage.split(".", 1)[1] if "." in safe_stage else safe_stage,
+                "step": safe_stage.split(".", 1)[1]
+                if "." in safe_stage
+                else safe_stage,
             }
             if attempt is not None:
                 record["attempt"] = attempt
@@ -556,16 +572,20 @@ class HookLogger:
         safe_stage = self._safe_text(stage_name)
         safe_profile = self._safe_text(runner_profile)
         safe_type = self._safe_text(runner_type)
-        safe_state = self._safe_text(session_state) if session_state is not None else None
-        safe_session_id = self._safe_text(session_id) if session_id is not None else None
-        safe_transcript = self._safe_text(transcript) if transcript is not None else None
+        safe_state = (
+            self._safe_text(session_state) if session_state is not None else None
+        )
+        safe_session_id = (
+            self._safe_text(session_id) if session_id is not None else None
+        )
+        safe_transcript = (
+            self._safe_text(transcript) if transcript is not None else None
+        )
         safe_resume_command = (
             self._safe_text(resume_command) if resume_command is not None else None
         )
         effective_resume_command = (
-            safe_resume_command
-            if safe_state == "persisted" and resumable
-            else None
+            safe_resume_command if safe_state == "persisted" and resumable else None
         )
         session_details: list[str] = []
         if safe_state == "persisted":
@@ -619,15 +639,18 @@ class HookLogger:
             fields["transcript"] = safe_transcript
         if effective_resume_command is not None:
             fields["resume_command"] = effective_resume_command
-        if any(
-            value is not None
-            for value in (
-                safe_session_id,
-                safe_state,
-                safe_transcript,
-                effective_resume_command,
+        if (
+            any(
+                value is not None
+                for value in (
+                    safe_session_id,
+                    safe_state,
+                    safe_transcript,
+                    effective_resume_command,
+                )
             )
-        ) or resumable:
+            or resumable
+        ):
             fields["resumable"] = resumable
         self.status("llm.complete", message, **fields)
 

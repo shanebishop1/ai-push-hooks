@@ -61,10 +61,14 @@ def test_project_apply_projection_is_broad_but_propagation_stays_allowlisted(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
-    (repo / ".gitignore").write_text("ignored.txt\nnested/ignored.txt\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(
+        "ignored.txt\nnested/ignored.txt\n", encoding="utf-8"
+    )
     (repo / "ignored.txt").write_text("ignored\n", encoding="utf-8")
     (repo / "nested").mkdir()
-    (repo / "nested" / "ignored.txt").write_text("tracked but ignored\n", encoding="utf-8")
+    (repo / "nested" / "ignored.txt").write_text(
+        "tracked but ignored\n", encoding="utf-8"
+    )
     (repo / "nested" / "AGENTS.md").write_text("instructions\n", encoding="utf-8")
     os.mkfifo(repo / "special.fifo")
     outside = tmp_path / "outside.txt"
@@ -123,7 +127,9 @@ def test_project_apply_projection_is_broad_but_propagation_stays_allowlisted(
     result = _run(context, step, input_path)
 
     assert result["changed_files"] == ["README.md"]
-    assert (repo / "README.md").read_text(encoding="utf-8") == "# Project-aware update\n"
+    assert (repo / "README.md").read_text(
+        encoding="utf-8"
+    ) == "# Project-aware update\n"
     assert observed["staging"] != repo
 
 
@@ -139,7 +145,9 @@ def test_project_apply_rejects_nonallowlisted_mutation_before_propagation(
 
     def fake_runner(*args, **kwargs):
         staging = kwargs["working_directory"]
-        (staging / "src" / "app.py").write_text("must not propagate\n", encoding="utf-8")
+        (staging / "src" / "app.py").write_text(
+            "must not propagate\n", encoding="utf-8"
+        )
         return _success()
 
     monkeypatch.setattr(apply_executor, "run_runner_once", fake_runner)
@@ -162,7 +170,9 @@ def test_compatibility_apply_projection_remains_minimal(
         staging = kwargs["working_directory"]
         prompt = args[2]
         assert "only eligible readable files selected by the allowlist" in prompt
-        assert "may include readable repository files beyond the allowlist" not in prompt
+        assert (
+            "may include readable repository files beyond the allowlist" not in prompt
+        )
         assert "Only changes to paths matching the allowlist" in prompt
         assert "Any other staging change fails" in prompt
         assert "Tool availability is controlled by runner and user policy" in prompt

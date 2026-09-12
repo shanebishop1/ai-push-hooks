@@ -78,7 +78,9 @@ def _run(
         ) from None
     except OSError as exc:
         detail = exc.strerror or exc.__class__.__name__
-        raise AssertionError(f"could not start command {_safe_command(args)}: {detail}") from None
+        raise AssertionError(
+            f"could not start command {_safe_command(args)}: {detail}"
+        ) from None
 
     if check and completed.returncode != 0:
         diagnostic = _failure_diagnostic(completed.stdout, completed.stderr)
@@ -161,7 +163,9 @@ def _isolated_env(home: pathlib.Path) -> dict[str, str]:
     return env
 
 
-def test_installed_harness_environment_excludes_credentials(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_installed_harness_environment_excludes_credentials(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "test-github-token")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("AI_PUSH_HOOKS_TEST_TOKEN", "test-hook-token")
@@ -178,7 +182,9 @@ def test_installed_harness_environment_excludes_credentials(tmp_path: pathlib.Pa
     assert "AI_PUSH_HOOKS_TEST_TOKEN" not in env
 
 
-def test_installed_harness_failure_is_bounded_and_redacted(tmp_path: pathlib.Path) -> None:
+def test_installed_harness_failure_is_bounded_and_redacted(
+    tmp_path: pathlib.Path,
+) -> None:
     env = _isolated_env(tmp_path / "home")
     secret = "test-command-secret"
     output = f"GITHUB_TOKEN={secret} " + ("payload " * 1200)
@@ -308,7 +314,9 @@ inputs = ["apply/result.json"]
 
 
 @pytest.fixture(scope="session")
-def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, pathlib.Path]:
+def installed_artifacts(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, pathlib.Path]:
     configured = {
         "wheel": os.environ.get("AI_PUSH_HOOKS_RELEASE_WHEEL"),
         "npm": os.environ.get("AI_PUSH_HOOKS_RELEASE_NPM_TARBALL"),
@@ -316,7 +324,9 @@ def installed_artifacts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, p
     if any(configured.values()):
         if not all(configured.values()):
             raise AssertionError("both exact release artifact paths must be provided")
-        artifacts = {kind: pathlib.Path(path).resolve() for kind, path in configured.items()}
+        artifacts = {
+            kind: pathlib.Path(path).resolve() for kind, path in configured.items()
+        }
         assert artifacts["wheel"].is_file() and artifacts["wheel"].suffix == ".whl"
         assert artifacts["npm"].is_file() and artifacts["npm"].suffix == ".tgz"
         return artifacts
@@ -352,7 +362,9 @@ def _install_repo_fixtures(repo: pathlib.Path) -> None:
     checks.mkdir()
     fixture_root = pathlib.Path(__file__).parent / "fixtures"
     shutil.copyfile(fixture_root / "integration_hooks.py", checks / "hooks.py")
-    shutil.copyfile(fixture_root / "installed_command.py", checks / "installed_command.py")
+    shutil.copyfile(
+        fixture_root / "installed_command.py", checks / "installed_command.py"
+    )
 
 
 def _latest_run(repo: pathlib.Path) -> pathlib.Path:
@@ -429,7 +441,9 @@ def _prepare_npm_command(
         env,
         timeout=120,
     )
-    installed_source = package_dir / "node_modules" / "ai-push-hooks" / "src" / "ai_push_hooks"
+    installed_source = (
+        package_dir / "node_modules" / "ai-push-hooks" / "src" / "ai_push_hooks"
+    )
     assert installed_source.is_dir()
     command = package_dir / "node_modules" / ".bin" / "ai-push-hooks"
     _run([str(command), "--help"], package_dir, env)
@@ -456,8 +470,13 @@ def test_npm_works_without_site_packages(
     python.chmod(0o755)
     env["PATH"] = str(tools)
     _run(
-        [str(python), "-c", "import importlib.util; assert importlib.util.find_spec('tomli') is None"],
-        repo, env,
+        [
+            str(python),
+            "-c",
+            "import importlib.util; assert importlib.util.find_spec('tomli') is None",
+        ],
+        repo,
+        env,
     )
     _run([str(command), "init", "--template", "minimal-docs"], repo, env)
     _git(repo, env, "init", "-b", "main", ".")
@@ -470,21 +489,33 @@ def test_npm_works_without_site_packages(
     _run([str(command), "install"], repo, env)
     _run([str(repo / ".git/hooks/pre-push")], repo, env, input_text="")
     report = json.loads(
-        (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(encoding="utf-8")
+        (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert report["dependency"] == "installed-interpreter"
     # The shipped archive is self-contained and retains its upstream license.
     package_root = repo / "node_modules" / "ai-push-hooks"
-    probe_env = {**env, "PYTHONPATH": str(package_root / "vendor/tomli-2.4.0-py3-none-any.whl")}
+    probe_env = {
+        **env,
+        "PYTHONPATH": str(package_root / "vendor/tomli-2.4.0-py3-none-any.whl"),
+    }
     _run(
         [str(python), "-c", "import tomli; assert tomli.loads('ok = true')['ok']"],
-        repo, probe_env,
+        repo,
+        probe_env,
     )
     wheel = package_root / "vendor/tomli-2.4.0-py3-none-any.whl"
     digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-    assert f"--hash=sha256:{digest}" in (package_root / "vendor/requirements.txt").read_text()
+    assert (
+        f"--hash=sha256:{digest}"
+        in (package_root / "vendor/requirements.txt").read_text()
+    )
     with zipfile.ZipFile(wheel) as archive:
-        assert "MIT License" in archive.read("tomli-2.4.0.dist-info/licenses/LICENSE").decode()
+        assert (
+            "MIT License"
+            in archive.read("tomli-2.4.0.dist-info/licenses/LICENSE").decode()
+        )
 
 
 @pytest.mark.parametrize("distribution", ["wheel", "npm"])
@@ -531,7 +562,9 @@ def test_installed_hook_runs_real_local_push_scenario(
     else:
         _run([str(command), "install"], repo, env)
     env["PATH"] = f"{python_dir}:{node_dir}:{git_dir}:/usr/bin:/bin"
-    hook_path = pathlib.Path(_git(repo, env, "rev-parse", "--git-path", "hooks")) / "pre-push"
+    hook_path = (
+        pathlib.Path(_git(repo, env, "rev-parse", "--git-path", "hooks")) / "pre-push"
+    )
     if not hook_path.is_absolute():
         hook_path = (repo / hook_path).resolve()
     assert hook_path.is_file() and os.access(hook_path, os.X_OK)
@@ -545,7 +578,9 @@ def test_installed_hook_runs_real_local_push_scenario(
     zero_oid = "0" * FULL_OID_LENGTH
     remote_url = _git(repo, env, "config", "--get", "remote.origin.url")
 
-    def invoke(stdin_text: str, *, expected: int, overrides: dict[str, str] | None = None) -> None:
+    def invoke(
+        stdin_text: str, *, expected: int, overrides: dict[str, str] | None = None
+    ) -> None:
         hook_env = {**env, **(overrides or {})}
         completed = _run(
             [str(hook_path), "origin", remote_url],
@@ -559,29 +594,50 @@ def test_installed_hook_runs_real_local_push_scenario(
             completed.stdout, completed.stderr
         )
 
-    valid_branch = f"refs/heads/main {baseline_oid} refs/heads/main {remote_baseline_oid}\n"
+    valid_branch = (
+        f"refs/heads/main {baseline_oid} refs/heads/main {remote_baseline_oid}\n"
+    )
     invoke("", expected=0)
     collect_report = json.loads(
-        (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(encoding="utf-8")
+        (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert collect_report["dependency"] == "installed-interpreter"
     assert pathlib.Path(collect_report["package_origin"]).is_relative_to(
-        (root / ("wheel-install" if distribution == "wheel" else "client repo/node_modules/ai-push-hooks/src")).resolve()
+        (
+            root
+            / (
+                "wheel-install"
+                if distribution == "wheel"
+                else "client repo/node_modules/ai-push-hooks/src"
+            )
+        ).resolve()
     )
     assert (repo / ".git" / "ai-push-hooks" / "runs").is_dir()
     invoke(f"refs/tags/v1 {baseline_oid} refs/tags/v1 {zero_oid}\n", expected=0)
-    invoke(valid_branch + f"refs/tags/v1 {baseline_oid} refs/tags/v1 {zero_oid}\n", expected=0)
+    invoke(
+        valid_branch + f"refs/tags/v1 {baseline_oid} refs/tags/v1 {zero_oid}\n",
+        expected=0,
+    )
     invoke(f"refs/tags/v1 {zero_oid} refs/tags/v1 {baseline_oid}\n", expected=0)
     invoke("malformed stdin\n", expected=1)
-    invoke(f"refs/heads/main {baseline_oid} refs/heads/main {'a' * FULL_OID_LENGTH}\n", expected=1)
+    invoke(
+        f"refs/heads/main {baseline_oid} refs/heads/main {'a' * FULL_OID_LENGTH}\n",
+        expected=1,
+    )
     invoke(
         valid_branch + f"refs/heads/other {baseline_oid} refs/heads/other {zero_oid}\n",
         expected=1,
     )
 
-    (repo / "ai-push-hooks.toml").write_text(_scenario_config(reject=True), encoding="utf-8")
+    (repo / "ai-push-hooks.toml").write_text(
+        _scenario_config(reject=True), encoding="utf-8"
+    )
     invoke(valid_branch, expected=1)
-    invoke(valid_branch, expected=0, overrides={"AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR": "1"})
+    invoke(
+        valid_branch, expected=0, overrides={"AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR": "1"}
+    )
     (repo / "ai-push-hooks.toml").write_text(_scenario_config(), encoding="utf-8")
     invoke("malformed stdin\n", expected=0, overrides={"AI_PUSH_HOOKS_SKIP": "1"})
     (repo / "ai-push-hooks.toml").write_text(_disabled_config(), encoding="utf-8")
@@ -593,7 +649,7 @@ def test_installed_hook_runs_real_local_push_scenario(
     fake_opencode = fake_bin / "opencode"
     fake_opencode.write_text(
         "#!/bin/sh\nprintf '# Applied\\n' > README.md\n"
-        "printf '%s\\n' '{\"type\":\"text\",\"sessionID\":\"fake-session\",\"part\":{\"text\":\"{}\"}}'\n",
+        'printf \'%s\\n\' \'{"type":"text","sessionID":"fake-session","part":{"text":"{}"}}\'\n',
         encoding="utf-8",
     )
     fake_opencode.chmod(0o755)
@@ -604,7 +660,9 @@ def test_installed_hook_runs_real_local_push_scenario(
     _run(["git", "add", "README.md"], repo, apply_env)
     _run(["git", "commit", "-m", "review applied docs"], repo, apply_env)
     reviewed_oid = _git(repo, apply_env, "rev-parse", "HEAD")
-    reviewed_branch = f"refs/heads/main {reviewed_oid} refs/heads/main {remote_baseline_oid}\n"
+    reviewed_branch = (
+        f"refs/heads/main {reviewed_oid} refs/heads/main {remote_baseline_oid}\n"
+    )
     invoke(reviewed_branch, expected=0, overrides={"PATH": apply_env["PATH"]})
     (repo / "ai-push-hooks.toml").write_text(_scenario_config(), encoding="utf-8")
 
@@ -625,16 +683,28 @@ def test_installed_hook_runs_real_local_push_scenario(
     )
     assert direct.returncode == 0, _failure_diagnostic(direct.stdout, direct.stderr)
     _run(["git", "push", "origin", "main"], repo, env, timeout=45)
-    assert _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main") == local_oid
+    assert (
+        _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main")
+        == local_oid
+    )
 
-    (repo / "ai-push-hooks.toml").write_text(_scenario_config(reject=True), encoding="utf-8")
+    (repo / "ai-push-hooks.toml").write_text(
+        _scenario_config(reject=True), encoding="utf-8"
+    )
     (repo / "rejected.txt").write_text("must not arrive\n", encoding="utf-8")
     _run(["git", "add", "ai-push-hooks.toml", "rejected.txt"], repo, env)
     _run(["git", "commit", "-m", "rejected"], repo, env)
-    remote_before_rejection = _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main")
-    rejected = _run(["git", "push", "origin", "main"], repo, env, check=False, timeout=45)
+    remote_before_rejection = _git(
+        repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main"
+    )
+    rejected = _run(
+        ["git", "push", "origin", "main"], repo, env, check=False, timeout=45
+    )
     assert rejected.returncode != 0
-    assert _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main") == remote_before_rejection
+    assert (
+        _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main")
+        == remote_before_rejection
+    )
 
 
 def test_real_lefthook_install_uses_installed_runner(
@@ -691,6 +761,6 @@ def test_real_lefthook_install_uses_installed_runner(
     _run(["git", "add", "change.md"], repo, env)
     _run(["git", "commit", "-m", "lefthook push"], repo, env)
     _run(["git", "push", "origin", "main"], repo, env, timeout=45)
-    assert _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main") == _git(
-        repo, env, "rev-parse", "HEAD"
-    )
+    assert _git(
+        repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main"
+    ) == _git(repo, env, "rev-parse", "HEAD")

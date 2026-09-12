@@ -31,8 +31,12 @@ from .types import (
 )
 
 CollectorHandler = Callable[[RuntimeContext, ModuleRuntimeState], CollectorResult]
-ExecHandler = Callable[[RuntimeContext, ModuleRuntimeState, StepConfig, list[pathlib.Path]], dict[str, Any]]
-AssertionHandler = Callable[[RuntimeContext, StepConfig, list[pathlib.Path]], dict[str, Any]]
+ExecHandler = Callable[
+    [RuntimeContext, ModuleRuntimeState, StepConfig, list[pathlib.Path]], dict[str, Any]
+]
+AssertionHandler = Callable[
+    [RuntimeContext, StepConfig, list[pathlib.Path]], dict[str, Any]
+]
 
 
 class WorkflowEngine:
@@ -43,8 +47,20 @@ class WorkflowEngine:
         collectors: dict[str, CollectorHandler] | None = None,
         exec_handlers: dict[str, ExecHandler] | None = None,
         assertion_handlers: dict[str, AssertionHandler] | None = None,
-        ask_executor: Callable[[RuntimeContext, StepConfig, str, list[pathlib.Path], str], Any] = run_ask_step,
-        apply_executor: Callable[[RuntimeContext, ModuleRuntimeState, StepConfig, str, list[pathlib.Path], str], dict[str, object]] = run_apply_step,
+        ask_executor: Callable[
+            [RuntimeContext, StepConfig, str, list[pathlib.Path], str], Any
+        ] = run_ask_step,
+        apply_executor: Callable[
+            [
+                RuntimeContext,
+                ModuleRuntimeState,
+                StepConfig,
+                str,
+                list[pathlib.Path],
+                str,
+            ],
+            dict[str, object],
+        ] = run_apply_step,
     ) -> None:
         self.context = context
         self.artifacts = artifacts
@@ -69,7 +85,9 @@ class WorkflowEngine:
         statuses: dict[str, str] = {state.module.id: "pending" for state in states}
         futures: dict[Future[StepResult], tuple[ModuleRuntimeState, StepConfig]] = {}
 
-        with ThreadPoolExecutor(max_workers=max(1, self.context.config.llm.max_parallel)) as pool:
+        with ThreadPoolExecutor(
+            max_workers=max(1, self.context.config.llm.max_parallel)
+        ) as pool:
             while True:
                 for state in states:
                     if state.status in {"completed", "failed"}:
@@ -84,9 +102,14 @@ class WorkflowEngine:
                         continue
                     if futures and not step.is_read_only:
                         continue
-                    if any(not running_step.is_read_only for _future, (_state, running_step) in futures.items()):
+                    if any(
+                        not running_step.is_read_only
+                        for _future, (_state, running_step) in futures.items()
+                    ):
                         continue
-                    if step.is_read_only and len(futures) >= max(1, self.context.config.llm.max_parallel):
+                    if step.is_read_only and len(futures) >= max(
+                        1, self.context.config.llm.max_parallel
+                    ):
                         continue
                     future = pool.submit(self._execute_step, state, step)
                     futures[future] = (state, step)
@@ -98,8 +121,15 @@ class WorkflowEngine:
                 if not futures:
                     if all(state.status == "completed" for state in states):
                         break
-                    pending = [state.module.id for state in states if state.status not in {"completed", "failed"}]
-                    raise HookError("Scheduler deadlock while running modules: " + ", ".join(pending))
+                    pending = [
+                        state.module.id
+                        for state in states
+                        if state.status not in {"completed", "failed"}
+                    ]
+                    raise HookError(
+                        "Scheduler deadlock while running modules: "
+                        + ", ".join(pending)
+                    )
 
                 done, _ = wait(set(futures), return_when=FIRST_COMPLETED)
                 for future in done:
@@ -128,7 +158,9 @@ class WorkflowEngine:
     def _execute_step(self, state: ModuleRuntimeState, step: StepConfig) -> StepResult:
         if step.when_env and env_bool(step.when_env) is not True:
             payload = {"skipped": True, "reason": f"{step.when_env} not enabled"}
-            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            self.artifacts.write_json(
+                state, state.step_index, step.id, "result.json", payload
+            )
             return StepResult()
 
         if step.type == "collect":
@@ -140,23 +172,35 @@ class WorkflowEngine:
                 return self._persist_plugin_collect(state, step, result)
             return self._run_collect(state, step)
 
-        input_paths = [self.artifacts.resolve_input(state, reference) for reference in step.inputs]
+        input_paths = [
+            self.artifacts.resolve_input(state, reference) for reference in step.inputs
+        ]
         stage_name = f"{state.module.id}.{step.id}"
 
         if step.type == "ask":
             prompt = resolve_prompt_text(self.context.repo_root, step)
-            payload = self.ask_executor(self.context, step, prompt, input_paths, stage_name)
+            payload = self.ask_executor(
+                self.context, step, prompt, input_paths, stage_name
+            )
             artifact_name = step.output or "result.json"
             if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
-                self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)
+                self.artifacts.write_json(
+                    state, state.step_index, step.id, artifact_name, payload
+                )
             else:
-                self.artifacts.write_text(state, state.step_index, step.id, artifact_name, str(payload))
+                self.artifacts.write_text(
+                    state, state.step_index, step.id, artifact_name, str(payload)
+                )
             return StepResult()
 
         if step.type == "apply":
             prompt = resolve_prompt_text(self.context.repo_root, step)
-            payload = self.apply_executor(self.context, state, step, prompt, input_paths, stage_name)
-            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            payload = self.apply_executor(
+                self.context, state, step, prompt, input_paths, stage_name
+            )
+            self.artifacts.write_json(
+                state, state.step_index, step.id, "result.json", payload
+            )
             return StepResult()
 
         if step.type == "exec":
@@ -180,7 +224,9 @@ class WorkflowEngine:
             if handler is None:
                 raise HookError(f"Unknown exec handler: {step.executor}")
             payload = handler(self.context, state, step, input_paths)
-            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            self.artifacts.write_json(
+                state, state.step_index, step.id, "result.json", payload
+            )
             return StepResult()
 
         if step.type == "assert":
@@ -206,7 +252,9 @@ class WorkflowEngine:
             if handler is None:
                 raise HookError(f"Unknown assertion handler: {step.assertion}")
             payload = handler(self.context, step, input_paths)
-            self.artifacts.write_json(state, state.step_index, step.id, "result.json", payload)
+            self.artifacts.write_json(
+                state, state.step_index, step.id, "result.json", payload
+            )
             if not bool(payload.get("ok", False)):
                 raise HookError(str(payload.get("message", "assertion failed")))
             return StepResult()
@@ -267,9 +315,13 @@ class WorkflowEngine:
         result = handler(self.context, state)
         for artifact_name, payload in result.artifacts.items():
             if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
-                self.artifacts.write_json(state, state.step_index, step.id, artifact_name, payload)
+                self.artifacts.write_json(
+                    state, state.step_index, step.id, artifact_name, payload
+                )
             else:
-                self.artifacts.write_text(state, state.step_index, step.id, artifact_name, str(payload))
+                self.artifacts.write_text(
+                    state, state.step_index, step.id, artifact_name, str(payload)
+                )
         metadata = dict(result.metadata)
         if result.skip_module:
             metadata["skip_module"] = True

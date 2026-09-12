@@ -6,7 +6,9 @@ from ..git_utils import collect_commit_messages_for_ranges, is_feature_branch
 from ..types import CollectorResult, RuntimeContext
 
 
-def collect_beads_status_context(context: RuntimeContext, state: Any) -> CollectorResult:
+def collect_beads_status_context(
+    context: RuntimeContext, state: Any
+) -> CollectorResult:
     branch_name = str(context.cache.get("branch_name", ""))
     branch_selection_reason = str(
         context.cache.get("branch_selection_reason", "no pushed branch updates")
@@ -22,7 +24,9 @@ def collect_beads_status_context(context: RuntimeContext, state: Any) -> Collect
             skip_reason=branch_selection_reason,
         )
     sync_branch = context.cache.get("sync_branch", "beads-sync")
-    if branch_name in {"HEAD", "main", sync_branch} or not is_feature_branch(branch_name):
+    if branch_name in {"HEAD", "main", sync_branch} or not is_feature_branch(
+        branch_name
+    ):
         return CollectorResult(
             artifacts={"branch-context.txt": f"branch={branch_name}\n"},
             skip_module=True,
@@ -33,8 +37,12 @@ def collect_beads_status_context(context: RuntimeContext, state: Any) -> Collect
     changed_files = context.cache.get(
         "branch_changed_files", context.cache.get("changed_files", [])
     )
-    diff_text = context.cache.get("branch_diff_text", context.cache.get("diff_text", ""))
-    commits = collect_commit_messages_for_ranges(context.repo_root, ranges) if ranges else []
+    diff_text = context.cache.get(
+        "branch_diff_text", context.cache.get("diff_text", "")
+    )
+    commits = (
+        collect_commit_messages_for_ranges(context.repo_root, ranges) if ranges else []
+    )
     report_file = "BEADS_STATUS_ACTION_REQUIRED.md"
     commit_lines = []
     for commit in commits:
@@ -54,8 +62,11 @@ def collect_beads_status_context(context: RuntimeContext, state: Any) -> Collect
                 ]
             )
             + "\n",
-            "changed-files.txt": "\n".join(changed_files) + ("\n" if changed_files else ""),
-            "push.diff": diff_text + ("\n" if diff_text and not diff_text.endswith("\n") else ""),
-            "commits.txt": "\n".join(commit_lines).strip() + ("\n" if commit_lines else ""),
+            "changed-files.txt": "\n".join(changed_files)
+            + ("\n" if changed_files else ""),
+            "push.diff": diff_text
+            + ("\n" if diff_text and not diff_text.endswith("\n") else ""),
+            "commits.txt": "\n".join(commit_lines).strip()
+            + ("\n" if commit_lines else ""),
         }
     )

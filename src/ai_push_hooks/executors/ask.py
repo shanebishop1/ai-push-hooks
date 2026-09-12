@@ -31,7 +31,9 @@ def extract_json_object(text: str) -> dict[str, Any]:
     try:
         payload = json.loads(text[start : end + 1])
     except json.JSONDecodeError as exc:
-        raise HookError(f"Failed to parse JSON object from model output: {exc}") from exc
+        raise HookError(
+            f"Failed to parse JSON object from model output: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
         raise HookError("Model output JSON is not an object")
     return payload
@@ -41,7 +43,9 @@ def validate_schema(schema: str | None, payload: Any) -> Any:
     if schema is None:
         return payload
     if schema == "string_array":
-        if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+        if not isinstance(payload, list) or not all(
+            isinstance(item, str) for item in payload
+        ):
             raise HookError("Expected schema string_array")
         return payload
     if schema == "docs_issue_array":
@@ -50,7 +54,10 @@ def validate_schema(schema: str | None, payload: Any) -> Any:
         for item in payload:
             if not isinstance(item, dict):
                 raise HookError("docs_issue_array items must be objects")
-            if not str(item.get("file", "")).strip() or not str(item.get("description", "")).strip():
+            if (
+                not str(item.get("file", "")).strip()
+                or not str(item.get("description", "")).strip()
+            ):
                 raise HookError("docs_issue_array items require file and description")
         return payload
     if schema == "beads_alignment_result":
@@ -58,9 +65,12 @@ def validate_schema(schema: str | None, payload: Any) -> Any:
             raise HookError("Expected schema beads_alignment_result")
         commands = payload.get("commands", [])
         if commands is not None and (
-            not isinstance(commands, list) or not all(isinstance(item, str) for item in commands)
+            not isinstance(commands, list)
+            or not all(isinstance(item, str) for item in commands)
         ):
-            raise HookError("beads_alignment_result.commands must be an array of strings")
+            raise HookError(
+                "beads_alignment_result.commands must be an array of strings"
+            )
         return payload
     if schema == "pr_create_payload":
         if not isinstance(payload, dict):
@@ -154,7 +164,9 @@ def run_ask_step(
                         f"{_safe_invalid_output(invocation, last_output)}"
                     ) from exc
 
-                snippet = last_output[: context.config.llm.invalid_json_feedback_max_chars]
+                snippet = last_output[
+                    : context.config.llm.invalid_json_feedback_max_chars
+                ]
                 suffix = (
                     "Return ONLY valid JSON array."
                     if expects_json_array
@@ -172,7 +184,11 @@ def run_ask_step(
 
                 session = result.session
                 can_resume = bool(
-                    getattr(getattr(invocation.runner, "capabilities", None), "supports_resume", False)
+                    getattr(
+                        getattr(invocation.runner, "capabilities", None),
+                        "supports_resume",
+                        False,
+                    )
                     and session is not None
                     and session.session_id
                     and session.resumable
@@ -186,13 +202,9 @@ def run_ask_step(
                         retry_reason = "runner does not support resume"
                     retry_message = "Retrying with a fresh runner invocation."
                     if retry_reason == "runner does not support resume":
-                        retry_message = (
-                            "Retrying with a fresh runner invocation; unsupported session reuse."
-                        )
+                        retry_message = "Retrying with a fresh runner invocation; unsupported session reuse."
                     elif retry_reason == "session absent":
-                        retry_message = (
-                            "Retrying with a fresh runner invocation; no reusable session was captured."
-                        )
+                        retry_message = "Retrying with a fresh runner invocation; no reusable session was captured."
                     context.logger.status(
                         "llm.retry_fresh_session",
                         retry_message,

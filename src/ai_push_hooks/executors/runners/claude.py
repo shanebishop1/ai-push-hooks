@@ -65,7 +65,9 @@ def resolve_claude_executable() -> str:
     )
 
 
-def _capability_error(reason: str, *, details: str = "") -> RunnerAdapterUnavailableError:
+def _capability_error(
+    reason: str, *, details: str = ""
+) -> RunnerAdapterUnavailableError:
     return RunnerAdapterUnavailableError(
         "Claude Code CLI does not satisfy the required non-interactive contract",
         details=f"{reason}{(': ' + details) if details else ''}",
@@ -102,9 +104,13 @@ def check_claude_capabilities(
         raise _capability_error("help output was truncated")
 
     help_text = f"{help_result.stdout}\n{help_result.stderr}"
-    missing = tuple(marker for marker in REQUIRED_HELP_MARKERS if marker not in help_text)
+    missing = tuple(
+        marker for marker in REQUIRED_HELP_MARKERS if marker not in help_text
+    )
     if missing:
-        raise _capability_error("missing required flags or modes", details=", ".join(missing))
+        raise _capability_error(
+            "missing required flags or modes", details=", ".join(missing)
+        )
 
 
 def _protocol_failure(
@@ -158,13 +164,19 @@ def parse_claude_result(
     try:
         payload: Any = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise _protocol_failure(request, process_result, "stdout was not valid JSON") from exc
+        raise _protocol_failure(
+            request, process_result, "stdout was not valid JSON"
+        ) from exc
     if not isinstance(payload, dict):
-        raise _protocol_failure(request, process_result, "top-level JSON value was not an object")
+        raise _protocol_failure(
+            request, process_result, "top-level JSON value was not an object"
+        )
 
     message_type = payload.get("type")
     if message_type != "result":
-        raise _protocol_failure(request, process_result, "top-level JSON type was not result")
+        raise _protocol_failure(
+            request, process_result, "top-level JSON type was not result"
+        )
 
     is_error = payload.get("is_error")
     if not isinstance(is_error, bool):

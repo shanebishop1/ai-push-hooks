@@ -91,7 +91,9 @@ def test_source_replacement_does_not_hot_reload(tmp_path: pathlib.Path) -> None:
     assert loader.invoke(tmp_path, "checks.py:hook", object()) == "old"
 
 
-def test_same_filename_in_two_repositories_has_separate_cache(tmp_path: pathlib.Path) -> None:
+def test_same_filename_in_two_repositories_has_separate_cache(
+    tmp_path: pathlib.Path,
+) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
     first.mkdir()
@@ -132,9 +134,7 @@ def test_distinct_source_imports_can_overlap_without_sharing_a_global_lock(
     helper.wait = lambda: import_barrier.wait(timeout=2)  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "plugin_import_barrier", helper)
     source = (
-        "from plugin_import_barrier import wait\n"
-        "wait()\n"
-        "def hook(context): return 1\n"
+        "from plugin_import_barrier import wait\nwait()\ndef hook(context): return 1\n"
     )
     _write(tmp_path, "first.py", source)
     _write(tmp_path, "second.py", source)
@@ -192,7 +192,9 @@ def test_descriptor_relative_load_rejects_parent_symlink_replacement(
     original_open = plugin_loader_module._OS_OPEN
     swapped = False
 
-    def replace_parent_after_root_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+    def replace_parent_after_root_open(
+        path: object, flags: int, *args: object, **kwargs: object
+    ) -> int:
         nonlocal swapped
         descriptor = original_open(path, flags, *args, **kwargs)
         if path == repo and "dir_fd" not in kwargs and not swapped:
@@ -201,13 +203,17 @@ def test_descriptor_relative_load_rejects_parent_symlink_replacement(
             parent.symlink_to(outside, target_is_directory=True)
         return descriptor
 
-    monkeypatch.setattr(plugin_loader_module, "_OS_OPEN", replace_parent_after_root_open)
+    monkeypatch.setattr(
+        plugin_loader_module, "_OS_OPEN", replace_parent_after_root_open
+    )
     with pytest.raises(HookError, match="symlink|reparse"):
         PluginLoader().load(repo, "checks/hook.py:hook")
     assert swapped
 
 
-def test_mapping_inputs_reject_undeclared_keys_before_import(tmp_path: pathlib.Path) -> None:
+def test_mapping_inputs_reject_undeclared_keys_before_import(
+    tmp_path: pathlib.Path,
+) -> None:
     marker = tmp_path / "imported"
     _write(
         tmp_path,
@@ -217,7 +223,9 @@ def test_mapping_inputs_reject_undeclared_keys_before_import(tmp_path: pathlib.P
     )
     module = ModuleConfig(id="quality", enabled=True, steps=())
     runtime, state = _runtime(tmp_path, module)
-    step = StepConfig(id="hook", type="collect", python="checks.py:hook", inputs=("declared",))
+    step = StepConfig(
+        id="hook", type="collect", python="checks.py:hook", inputs=("declared",)
+    )
     declared = tmp_path / "declared"
     extra = tmp_path / "extra"
     declared.write_text("declared", encoding="utf-8")
@@ -262,8 +270,7 @@ def test_installed_dependency_uses_interpreter_environment_without_path_changes(
     _write(
         tmp_path,
         "checks.py",
-        "import json\n"
-        "def hook(context):\n    return json.dumps({'ok': True})\n",
+        "import json\ndef hook(context):\n    return json.dumps({'ok': True})\n",
     )
     loader = PluginLoader()
     original_path = list(sys.path)
@@ -290,7 +297,9 @@ def hook(context):
     return context
 """
     _write(tmp_path, "checks.py", source)
-    update = PushRefUpdate("refs/heads/feature/test", "a" * 40, "refs/heads/feature/test", "b" * 40)
+    update = PushRefUpdate(
+        "refs/heads/feature/test", "a" * 40, "refs/heads/feature/test", "b" * 40
+    )
     module = ModuleConfig(id="quality", enabled=True, steps=())
     runtime, state = _runtime(
         tmp_path,
@@ -327,8 +336,14 @@ def hook(context):
         result.inputs["new"] = context_path  # type: ignore[index]
 
 
-def test_plugin_prints_are_not_host_sanitized(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
-    _write(tmp_path, "checks.py", "def hook(context):\n    print('plugin output')\n    return None\n")
+def test_plugin_prints_are_not_host_sanitized(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(
+        tmp_path,
+        "checks.py",
+        "def hook(context):\n    print('plugin output')\n    return None\n",
+    )
     PluginLoader().invoke(tmp_path, "checks.py:hook", object(), stage="collect")
     assert "plugin output" in capsys.readouterr().out
 
@@ -336,9 +351,15 @@ def test_plugin_prints_are_not_host_sanitized(tmp_path: pathlib.Path, capsys: py
 @pytest.mark.parametrize(
     ("source", "message"),
     [
-        ("import dependency_that_is_not_installed_anywhere\ndef hook(c): return 1\n", "dependency_that_is_not_installed_anywhere"),
+        (
+            "import dependency_that_is_not_installed_anywhere\ndef hook(c): return 1\n",
+            "dependency_that_is_not_installed_anywhere",
+        ),
         ("def hook(c): raise ValueError('secret payload')\n", "raised an exception"),
-        ("raise SystemExit('secret payload')\ndef hook(c): return 1\n", "exited during import"),
+        (
+            "raise SystemExit('secret payload')\ndef hook(c): return 1\n",
+            "exited during import",
+        ),
     ],
 )
 def test_import_and_callback_failures_are_named_without_payloads(
@@ -357,7 +378,9 @@ def test_missing_callable_is_named(tmp_path: pathlib.Path) -> None:
         PluginLoader().invoke(tmp_path, "checks.py:missing", object(), stage="assert")
 
 
-def test_async_callbacks_and_awaitable_returns_are_rejected(tmp_path: pathlib.Path) -> None:
+def test_async_callbacks_and_awaitable_returns_are_rejected(
+    tmp_path: pathlib.Path,
+) -> None:
     _write(tmp_path, "async_hook.py", "async def hook(context): return 1\n")
     with pytest.raises(HookError, match="must be synchronous"):
         PluginLoader().invoke(tmp_path, "async_hook.py:hook", object())
@@ -374,7 +397,9 @@ def test_async_callbacks_and_awaitable_returns_are_rejected(tmp_path: pathlib.Pa
         PluginLoader().invoke(tmp_path, "awaitable.py:hook", object())
 
 
-def test_system_exit_is_converted_and_keyboard_interrupt_propagates(tmp_path: pathlib.Path) -> None:
+def test_system_exit_is_converted_and_keyboard_interrupt_propagates(
+    tmp_path: pathlib.Path,
+) -> None:
     _write(tmp_path, "exit.py", "def hook(context): raise SystemExit('secret')\n")
     with pytest.raises(HookError, match="assert plugin exit.py:hook exited") as raised:
         PluginLoader().invoke(tmp_path, "exit.py:hook", object(), stage="assert")

@@ -73,10 +73,14 @@ BEADS_MIGRATION_OVERRIDE_ENV_NAMES = frozenset(
 )
 
 
-def _report_file_path(context: RuntimeContext, state: ModuleRuntimeState) -> pathlib.Path:
+def _report_file_path(
+    context: RuntimeContext, state: ModuleRuntimeState
+) -> pathlib.Path:
     branch_context = state.artifacts.get("collect/branch-context.txt")
     if branch_context and branch_context.exists():
-        payload = git_utils.parse_key_value_text(branch_context.read_text(encoding="utf-8"))
+        payload = git_utils.parse_key_value_text(
+            branch_context.read_text(encoding="utf-8")
+        )
         report_file = payload.get("report_file", "BEADS_STATUS_ACTION_REQUIRED.md")
     else:
         report_file = "BEADS_STATUS_ACTION_REQUIRED.md"
@@ -102,13 +106,19 @@ def _validate_beads_issue_ids(values: list[str]) -> None:
         raise HookError("Beads alignment commands require between 1 and 20 issue ids")
     for issue_id in values:
         if not BEADS_ISSUE_ID_PATTERN.fullmatch(issue_id):
-            raise HookError(f"Invalid Beads issue id in alignment command: {issue_id!r}")
+            raise HookError(
+                f"Invalid Beads issue id in alignment command: {issue_id!r}"
+            )
 
 
 def validate_beads_alignment_command(command: str) -> list[str]:
     if not isinstance(command, str) or not command.strip():
         raise HookError("Beads alignment commands must be non-empty strings")
-    if len(command) > 4096 or "\x00" in command or any(ord(char) < 32 for char in command):
+    if (
+        len(command) > 4096
+        or "\x00" in command
+        or any(ord(char) < 32 for char in command)
+    ):
         raise HookError("Beads alignment command contains invalid or excessive input")
     try:
         argv = shlex.split(command, posix=True)
@@ -120,7 +130,11 @@ def validate_beads_alignment_command(command: str) -> list[str]:
 
     subcommand = argv[1]
     if subcommand == "update":
-        if len(argv) < 5 or argv[-2] != "--status" or argv[-1] not in BEADS_UPDATE_STATUSES:
+        if (
+            len(argv) < 5
+            or argv[-2] != "--status"
+            or argv[-1] not in BEADS_UPDATE_STATUSES
+        ):
             raise HookError(
                 "Allowed Beads update form is: bd update <issue-id> [<issue-id> ...] "
                 "--status <open|in_progress|blocked>"
@@ -155,14 +169,18 @@ def resolve_beads_executable(repo_root: pathlib.Path) -> str:
     lexical_candidate = pathlib.Path(os.path.abspath(candidate))
     resolved_repo_root = repo_root.resolve(strict=True)
     if is_path_within(lexical_candidate, resolved_repo_root):
-        raise HookError(f"Refusing repository-contained `bd` executable: {lexical_candidate}")
+        raise HookError(
+            f"Refusing repository-contained `bd` executable: {lexical_candidate}"
+        )
     try:
         executable = lexical_candidate.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise HookError("Unable to safely resolve the `bd` executable") from exc
     if is_path_within(executable, resolved_repo_root):
         raise HookError(f"Refusing repository-contained `bd` executable: {executable}")
-    if path_is_link_or_reparse(executable) or not stat.S_ISREG(executable.stat().st_mode):
+    if path_is_link_or_reparse(executable) or not stat.S_ISREG(
+        executable.stat().st_mode
+    ):
         raise HookError(f"Resolved `bd` executable is not a regular file: {executable}")
     if not os.access(executable, os.X_OK):
         raise HookError(f"Resolved `bd` executable is not executable: {executable}")
@@ -185,7 +203,12 @@ def beads_alignment_executor(
     inputs: list[pathlib.Path],
 ) -> dict[str, Any]:
     if state.metadata.get("skip_module"):
-        return {"skipped": True, "commands_run": [], "report_written": False, "unresolved": False}
+        return {
+            "skipped": True,
+            "commands_run": [],
+            "report_written": False,
+            "unresolved": False,
+        }
     payload = json.loads(inputs[0].read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise HookError("beads_alignment payload must be an object")
@@ -196,14 +219,18 @@ def beads_alignment_executor(
         raise HookError(
             f"beads_alignment accepts at most {BEADS_ALIGNMENT_MAX_COMMANDS} commands"
         )
-    validated_commands = [validate_beads_alignment_command(command) for command in commands]
+    validated_commands = [
+        validate_beads_alignment_command(command) for command in commands
+    ]
     beads_executable = resolve_beads_executable(context.repo_root) if commands else ""
     command_env = beads_alignment_env()
     report_path = _report_file_path(context, state)
     commands_run: list[str] = []
     started_at = time.monotonic()
     for command, argv in zip(commands, validated_commands):
-        remaining = BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS - (time.monotonic() - started_at)
+        remaining = BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS - (
+            time.monotonic() - started_at
+        )
         if remaining <= 0:
             raise HookError(
                 f"Beads alignment exceeded its {BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS}-second total budget"
@@ -224,7 +251,9 @@ def beads_alignment_executor(
     if report_markdown:
         if not report_markdown.endswith("\n"):
             report_markdown += "\n"
-        if not git_utils.write_text_file(report_path, report_markdown, root=context.repo_root):
+        if not git_utils.write_text_file(
+            report_path, report_markdown, root=context.repo_root
+        ):
             raise HookError(f"Failed to write Beads alignment report: {report_path}")
         report_written = True
     elif report_path.exists() and not unresolved:
@@ -254,7 +283,9 @@ def gh_pr_create_executor(
     branch_name = str(context.cache.get("branch_name", "")).strip()
     if not branch_name:
         reason = str(
-            context.cache.get("branch_selection_reason", "no single pushed branch is available")
+            context.cache.get(
+                "branch_selection_reason", "no single pushed branch is available"
+            )
         )
         raise HookError(f"PR creation requires one pushed branch: {reason}")
     default_base_branch = context.config.general.base_branch.strip() or "main"
@@ -316,7 +347,9 @@ def gh_pr_create_executor(
     if payload.get("draft", False):
         args.append("--draft")
     created = git_utils.run_command(args, cwd=context.repo_root, check=False)
-    combined_output = "\n".join([(created.stdout or "").strip(), (created.stderr or "").strip()])
+    combined_output = "\n".join(
+        [(created.stdout or "").strip(), (created.stderr or "").strip()]
+    )
     if created.returncode != 0:
         # A URL in failed-command output is not proof that the create operation
         # succeeded. Reconcile against GitHub before accepting the result.
@@ -326,7 +359,9 @@ def gh_pr_create_executor(
     else:
         pr_url = git_utils.extract_pr_url(combined_output)
     if not pr_url:
-        details = git_utils._command_diagnostics(args, created.stdout or "", created.stderr or "")
+        details = git_utils._command_diagnostics(
+            args, created.stdout or "", created.stderr or ""
+        )
         raise HookError(
             details or f"gh pr create failed with exit code {created.returncode}"
         )

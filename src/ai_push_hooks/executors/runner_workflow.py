@@ -76,29 +76,36 @@ def _safe_input_artifacts(
         # parents immediately before opening each file; this is a same-user
         # race defense, not an OS sandbox.  O_NOFOLLOW and descriptor checks
         # below protect the final open even if the leaf changes concurrently.
-        if (
-            not is_path_within(lexical_path, run_root)
-            or path_has_symlink(run_root, lexical_path)
+        if not is_path_within(lexical_path, run_root) or path_has_symlink(
+            run_root, lexical_path
         ):
             raise HookError(f"Runner artifact must not traverse a symlink: {name}")
         try:
             resolved_path = lexical_path.resolve(strict=True)
         except (OSError, RuntimeError) as exc:
-            raise HookError(f"Unable to safely resolve runner artifact: {name}") from exc
+            raise HookError(
+                f"Unable to safely resolve runner artifact: {name}"
+            ) from exc
         if (
             resolved_path != lexical_path
             or not is_path_within(resolved_path, run_root)
             or not resolved_path.is_file()
         ):
-            raise HookError(f"Runner artifact must be a regular hook-owned file: {name}")
+            raise HookError(
+                f"Runner artifact must be a regular hook-owned file: {name}"
+            )
 
         descriptor: int | None = None
         try:
-            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            flags = (
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            )
             descriptor = os.open(lexical_path, flags)
             metadata = os.fstat(descriptor)
             if not os.path.isfile(lexical_path) or not stat.S_ISREG(metadata.st_mode):
-                raise HookError(f"Runner artifact must be a regular hook-owned file: {name}")
+                raise HookError(
+                    f"Runner artifact must be a regular hook-owned file: {name}"
+                )
             remaining = RUNNER_INPUT_MAX_BYTES - total_bytes
             if metadata.st_size > remaining:
                 raise HookError(
@@ -121,7 +128,9 @@ def _safe_input_artifacts(
             total_bytes += len(content_bytes)
             content = bytes(content_bytes).decode("utf-8")
         except (OSError, UnicodeError) as exc:
-            raise HookError(f"Unable to read hook-owned runner artifact: {name}") from exc
+            raise HookError(
+                f"Unable to read hook-owned runner artifact: {name}"
+            ) from exc
         finally:
             if descriptor is not None:
                 os.close(descriptor)
@@ -143,7 +152,9 @@ def _build_request(
     profile = resolve_runner_profile(context.config, step)
     cwd = pathlib.Path(working_directory).resolve(strict=True)
     if not cwd.is_dir():
-        raise HookError(f"Runner working directory is not a directory: {working_directory}")
+        raise HookError(
+            f"Runner working directory is not a directory: {working_directory}"
+        )
     request = RunnerRequest(
         profile_id=profile.name,
         runner_type=profile.type,
@@ -206,7 +217,9 @@ def _failure_result(
     if not isinstance(session_id, str) or not session_id.strip():
         session_id = fallback_session_id
     session = _session_metadata(runner, session_id.strip()) if session_id else None
-    return RunnerResult(final_text="", returncode=1, stdout="", stderr="", session=session)
+    return RunnerResult(
+        final_text="", returncode=1, stdout="", stderr="", session=session
+    )
 
 
 def _preserve_failure_session(
@@ -214,7 +227,9 @@ def _preserve_failure_session(
     result: RunnerResult,
     fallback_session_id: str | None,
 ) -> RunnerResult:
-    if (result.session is not None and result.session.session_id) or not fallback_session_id:
+    if (
+        result.session is not None and result.session.session_id
+    ) or not fallback_session_id:
         return result
     return RunnerResult(
         final_text=result.final_text,
@@ -250,7 +265,9 @@ def _completion(
     )
 
 
-def _print_normalized_output(context: RuntimeContext, invocation: _RunnerInvocation) -> None:
+def _print_normalized_output(
+    context: RuntimeContext, invocation: _RunnerInvocation
+) -> None:
     if not context.config.logging.print_llm_output or not invocation.result.final_text:
         return
     # This is an explicit opt-in.  Only normalized final text is printed and
@@ -270,7 +287,14 @@ def _request_sensitive_values(request: RunnerRequest) -> tuple[str, ...]:
         if value
         and any(
             marker in name.upper()
-            for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
+            for marker in (
+                "API_KEY",
+                "TOKEN",
+                "SECRET",
+                "PASSWORD",
+                "AUTH",
+                "CREDENTIAL",
+            )
         )
     )
     return (
@@ -316,9 +340,7 @@ def _named_error(
             "\n".join(part for part in (reason, streams) if part),
             max_chars=1_200,
         )
-    message = (
-        f"Runner profile `{profile_name}` ({runner_type}) failed at stage `{stage_name}`"
-    )
+    message = f"Runner profile `{profile_name}` ({runner_type}) failed at stage `{stage_name}`"
     if details:
         message += f": {details}"
     return HookError(message)

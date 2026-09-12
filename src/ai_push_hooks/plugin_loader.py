@@ -51,8 +51,7 @@ def _read_source_limited(descriptor: int) -> bytes:
     """Read plugin source from a checked descriptor within the source budget."""
 
     oversize_message = (
-        "Python plugin source exceeds maximum size of "
-        f"{PLUGIN_SOURCE_MAX_BYTES} bytes"
+        f"Python plugin source exceeds maximum size of {PLUGIN_SOURCE_MAX_BYTES} bytes"
     )
     if os.fstat(descriptor).st_size > PLUGIN_SOURCE_MAX_BYTES:
         raise HookError(oversize_message)
@@ -125,15 +124,21 @@ def _open_source_descriptor_relative(
         file_fd = _OS_OPEN(parts[-1], file_flags, dir_fd=directory_fd)
         metadata = os.fstat(file_fd)
         if not stat.S_ISREG(metadata.st_mode):
-            raise HookError("Python plugin path must reference an ordinary regular file")
+            raise HookError(
+                "Python plugin path must reference an ordinary regular file"
+            )
         return root.joinpath(*parts), _read_source_limited(file_fd)
     except HookError:
         raise
     except OSError as exc:
         if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
-            raise HookError("Python plugin path must not traverse a symlink or reparse point") from None
+            raise HookError(
+                "Python plugin path must not traverse a symlink or reparse point"
+            ) from None
         if exc.errno == errno.ENOENT:
-            raise HookError("Python plugin path must reference an existing regular file") from None
+            raise HookError(
+                "Python plugin path must reference an existing regular file"
+            ) from None
         raise HookError("Python plugin path could not be opened safely") from None
     finally:
         if file_fd >= 0:
@@ -142,18 +147,24 @@ def _open_source_descriptor_relative(
             os.close(directory_fd)
 
 
-def _open_source_absolute(root: pathlib.Path, relative_path: str) -> tuple[pathlib.Path, bytes]:
+def _open_source_absolute(
+    root: pathlib.Path, relative_path: str
+) -> tuple[pathlib.Path, bytes]:
     """Fallback for platforms without descriptor-relative open support."""
 
     lexical_path = root.joinpath(*relative_path.split("/"))
     if path_has_symlink(root, lexical_path):
-        raise HookError("Python plugin path must not traverse a symlink or reparse point")
+        raise HookError(
+            "Python plugin path must not traverse a symlink or reparse point"
+        )
     callback_path = resolve_contained_path(root, relative_path, "Python plugin path")
 
     try:
         metadata = callback_path.lstat()
     except (FileNotFoundError, OSError):
-        raise HookError("Python plugin path must reference an existing regular file") from None
+        raise HookError(
+            "Python plugin path must reference an existing regular file"
+        ) from None
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     if stat.S_ISLNK(metadata.st_mode) or bool(
         getattr(metadata, "st_file_attributes", 0) & reparse_flag
@@ -175,7 +186,9 @@ def _open_source_absolute(root: pathlib.Path, relative_path: str) -> tuple[pathl
     try:
         descriptor_metadata = os.fstat(descriptor)
         if not stat.S_ISREG(descriptor_metadata.st_mode):
-            raise HookError("Python plugin path must reference an ordinary regular file")
+            raise HookError(
+                "Python plugin path must reference an ordinary regular file"
+            )
         return callback_path, _read_source_limited(descriptor)
     except HookError:
         raise
@@ -195,10 +208,10 @@ def _open_source(root: pathlib.Path, relative_path: str) -> tuple[pathlib.Path, 
     return _open_source_absolute(root, relative_path)
 
 
-def _failure(stage: str, relative_path: str, callable_name: str, detail: str) -> HookError:
-    return HookError(
-        f"Python {stage} plugin {relative_path}:{callable_name} {detail}"
-    )
+def _failure(
+    stage: str, relative_path: str, callable_name: str, detail: str
+) -> HookError:
+    return HookError(f"Python {stage} plugin {relative_path}:{callable_name} {detail}")
 
 
 class PluginLoader:
@@ -210,9 +223,7 @@ class PluginLoader:
         self._source_locks: dict[tuple[pathlib.Path, pathlib.Path], threading.Lock] = {}
         self._module_number = 0
 
-    def _source_lock(
-        self, key: tuple[pathlib.Path, pathlib.Path]
-    ) -> threading.Lock:
+    def _source_lock(self, key: tuple[pathlib.Path, pathlib.Path]) -> threading.Lock:
         with self._lock:
             lock = self._source_locks.get(key)
             if lock is None:
@@ -355,13 +366,17 @@ class PluginLoader:
         except SystemExit:
             raise _failure(stage, relative_path, callable_name, "exited") from None
         except Exception:  # noqa: BLE001
-            raise _failure(stage, relative_path, callable_name, "raised an exception") from None
+            raise _failure(
+                stage, relative_path, callable_name, "raised an exception"
+            ) from None
 
         if inspect.isawaitable(value):
             close = getattr(value, "close", None)
             if callable(close):
                 close()
-            raise _failure(stage, relative_path, callable_name, "must return synchronously")
+            raise _failure(
+                stage, relative_path, callable_name, "must return synchronously"
+            )
         return value
 
     # Explicit aliases make the intended internal seam easy to integrate while
@@ -378,7 +393,9 @@ def _ordered_inputs(
         extra = [reference for reference in input_paths if reference not in declared]
         if extra:
             raise HookError(f"Undeclared Python plugin input: {extra[0]}")
-        missing = [reference for reference in step.inputs if reference not in input_paths]
+        missing = [
+            reference for reference in step.inputs if reference not in input_paths
+        ]
         if missing:
             raise HookError(f"Missing resolved Python plugin input: {missing[0]}")
         return {reference: input_paths[reference] for reference in step.inputs}
@@ -437,7 +454,9 @@ class PluginDispatcher:
         input_paths: Mapping[str, pathlib.Path] | Sequence[pathlib.Path],
     ) -> Any:
         if not step.python:
-            raise HookError(f"Python {step.type} step `{step.id}` has no callback reference")
+            raise HookError(
+                f"Python {step.type} step `{step.id}` has no callback reference"
+            )
         context = build_plugin_context(runtime, state, step, input_paths)
         return self.loader.invoke(
             runtime.repo_root,

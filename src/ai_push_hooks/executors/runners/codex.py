@@ -111,14 +111,18 @@ def _parse_codex_jsonl(request: RunnerRequest, process: ProcessResult) -> _Codex
             thread_id = value
         elif event_type == "turn.started":
             if turn_open:
-                raise _protocol_error(request, process, "Codex JSONL turn order was invalid")
+                raise _protocol_error(
+                    request, process, "Codex JSONL turn order was invalid"
+                )
             turn_open = True
             if not terminal_failure:
                 terminal_success = False
         elif event_type == "item.completed":
             item = event.get("item")
             if not isinstance(item, dict):
-                raise _protocol_error(request, process, "Codex item.completed event had no item")
+                raise _protocol_error(
+                    request, process, "Codex item.completed event had no item"
+                )
             if item.get("type") == "agent_message":
                 text = item.get("text")
                 if not isinstance(text, str):
@@ -213,7 +217,9 @@ class CodexRunner:
         if process.stdout_truncated or process.stderr_truncated:
             raise _protocol_error(request, process, "Codex output stream was truncated")
         if not process.stdout.strip():
-            raise _protocol_error(request, process, "Codex emitted an empty JSONL stream")
+            raise _protocol_error(
+                request, process, "Codex emitted an empty JSONL stream"
+            )
 
         parsed = _parse_codex_jsonl(request, process)
         if not parsed.terminal_success:

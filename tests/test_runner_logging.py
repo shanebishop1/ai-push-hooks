@@ -15,7 +15,9 @@ class _TTY(io.StringIO):
         return True
 
 
-def test_console_color_policy_respects_tty_force_and_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_console_color_policy_respects_tty_force_and_no_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stream = _TTY()
     monkeypatch.setattr("ai_push_hooks.types.sys.stderr", stream)
     monkeypatch.delenv("NO_COLOR", raising=False)
@@ -57,7 +59,9 @@ def test_non_tty_and_dumb_terminal_are_plain(monkeypatch: pytest.MonkeyPatch) ->
     assert stream.getvalue() == "[ai-push-hooks] plain\n"
 
 
-def test_jsonl_is_structured_plain_and_sanitized(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_jsonl_is_structured_plain_and_sanitized(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     stream = io.StringIO()
     monkeypatch.setattr("ai_push_hooks.types.sys.stderr", stream)
     monkeypatch.setenv("FORCE_COLOR", "1")
@@ -107,10 +111,15 @@ def test_llm_console_uses_semantic_accents(monkeypatch: pytest.MonkeyPatch) -> N
     assert "\x1b[34mask:query\x1b[0m" in output
     assert "\x1b[32mLLM complete\x1b[0m" in output
     assert "\x1b[31mLLM failed\x1b[0m" in output
-    assert "\x1b[2m; session persisted: session-1; resume: runner --resume session-1; transcript: transcript.json\x1b[0m" in output
+    assert (
+        "\x1b[2m; session persisted: session-1; resume: runner --resume session-1; transcript: transcript.json\x1b[0m"
+        in output
+    )
 
 
-def test_llm_completion_reports_each_session_lifecycle(capsys: pytest.CaptureFixture[str]) -> None:
+def test_llm_completion_reports_each_session_lifecycle(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     logger = HookLogger(None)
 
     logger.llm_complete(1, "docs.query", "review", "command")
@@ -155,16 +164,26 @@ def test_llm_completion_reports_each_session_lifecycle(capsys: pytest.CaptureFix
 
     output = capsys.readouterr().err
     assert "LLM complete #1: docs.query (review/command)" in output
-    assert "session-persisted" not in output.split("LLM complete #1: docs.query (review/command)", 1)[1].splitlines()[0]
+    assert (
+        "session-persisted"
+        not in output.split("LLM complete #1: docs.query (review/command)", 1)[
+            1
+        ].splitlines()[0]
+    )
     assert "resume: opencode --session session-persisted" in output
     assert "transcript: persisted-transcript.json" in output
-    assert "session deleted: session-deleted; transcript: .git/transcripts/docs.json" in output
+    assert (
+        "session deleted: session-deleted; transcript: .git/transcripts/docs.json"
+        in output
+    )
     assert "session: session-ephemeral; not resumable" in output
     assert "LLM failed #5: docs.query (review/command)" in output
     assert "must-not-be-emitted" not in output
 
 
-def test_nonresumable_resume_command_is_omitted_from_jsonl(tmp_path: pathlib.Path) -> None:
+def test_nonresumable_resume_command_is_omitted_from_jsonl(
+    tmp_path: pathlib.Path,
+) -> None:
     path = tmp_path / "events.jsonl"
     logger = HookLogger(path)
 
@@ -184,7 +203,9 @@ def test_nonresumable_resume_command_is_omitted_from_jsonl(tmp_path: pathlib.Pat
     assert "must-not-be-emitted" not in record["message"]
 
 
-def test_llm_calls_are_numbered_and_completion_associated_under_concurrency(tmp_path: pathlib.Path) -> None:
+def test_llm_calls_are_numbered_and_completion_associated_under_concurrency(
+    tmp_path: pathlib.Path,
+) -> None:
     path = tmp_path / "events.jsonl"
     logger = HookLogger(path)
 
@@ -197,7 +218,9 @@ def test_llm_calls_are_numbered_and_completion_associated_under_concurrency(tmp_
             runner_profile="review",
             runner_type="command",
         )
-        logger.llm_complete(call_number, stage, "review", "command", failed=index % 2 == 0)
+        logger.llm_complete(
+            call_number, stage, "review", "command", failed=index % 2 == 0
+        )
         return call_number, stage
 
     with ThreadPoolExecutor(max_workers=8) as executor:
@@ -205,8 +228,12 @@ def test_llm_calls_are_numbered_and_completion_associated_under_concurrency(tmp_
 
     assert sorted(call_number for call_number, _ in results) == list(range(1, 41))
     assert len(logger.llm_calls) == 40
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    calls = {record["call_number"] for record in records if record["event"] == "llm.call"}
+    records = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    calls = {
+        record["call_number"] for record in records if record["event"] == "llm.call"
+    }
     completions = {
         record["call_number"]: record["stage_name"]
         for record in records

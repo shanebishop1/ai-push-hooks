@@ -29,7 +29,9 @@ def beads_config(enabled: bool = True):
                 id="beads",
                 enabled=enabled,
                 steps=(
-                    StepConfig(id="collect", type="collect", collector="beads_status_context"),
+                    StepConfig(
+                        id="collect", type="collect", collector="beads_status_context"
+                    ),
                     StepConfig(
                         id="plan",
                         type="ask",
@@ -65,7 +67,9 @@ def test_beads_disabled_skips_cleanly(tmp_path: pathlib.Path) -> None:
     repo = init_repo(tmp_path, branch="feature/beads")
     config = beads_config(enabled=False)
     context = build_context(repo, config)
-    result = WorkflowEngine(context=context, artifacts=ArtifactStore(context.run_dir)).run()
+    result = WorkflowEngine(
+        context=context, artifacts=ArtifactStore(context.run_dir)
+    ).run()
     assert result.modules == {}
 
 
@@ -113,12 +117,18 @@ def test_beads_non_feature_branch_skips(tmp_path: pathlib.Path) -> None:
     assert calls["llm"] == 0
 
 
-def test_collect_commit_messages_handles_empty_commit_body(tmp_path: pathlib.Path) -> None:
+def test_collect_commit_messages_handles_empty_commit_body(
+    tmp_path: pathlib.Path,
+) -> None:
     repo = init_repo(tmp_path, branch="feature/beads")
     target = repo / "docs" / "INDEX.md"
     target.write_text("# Docs Index\n\n- updated\n", encoding="utf-8")
     subprocess.run(
-        ["git", "add", str(target)], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "add", str(target)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     subprocess.run(
         ["git", "commit", "-m", "single line subject"],
@@ -190,7 +200,9 @@ def test_beads_alignment_executes_only_validated_alignment_commands(
         calls.append((args, timeout, env, inherit_env))
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    monkeypatch.setattr("ai_push_hooks.executors.exec.resolve_beads_executable", fake_resolve)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.exec.resolve_beads_executable", fake_resolve
+    )
     monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
     result = beads_alignment_executor(
@@ -336,9 +348,12 @@ def test_beads_alignment_enforces_total_execution_budget(
     )
     calls: list[list[str]] = []
     times = iter([0.0, 0.0, float(BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS + 1)])
-    monkeypatch.setattr("ai_push_hooks.executors.exec.time.monotonic", lambda: next(times))
     monkeypatch.setattr(
-        "ai_push_hooks.executors.exec.resolve_beads_executable", lambda _repo: "/safe/bin/bd"
+        "ai_push_hooks.executors.exec.time.monotonic", lambda: next(times)
+    )
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.exec.resolve_beads_executable",
+        lambda _repo: "/safe/bin/bd",
     )
     monkeypatch.setattr(
         "ai_push_hooks.git_utils.run_command",
@@ -417,7 +432,9 @@ def test_beads_default_report_never_follows_or_unlinks_symlink(
     assert (repo / "BEADS_STATUS_ACTION_REQUIRED.md").is_symlink()
 
 
-def test_beads_configured_report_rejects_symlinked_parent(tmp_path: pathlib.Path) -> None:
+def test_beads_configured_report_rejects_symlinked_parent(
+    tmp_path: pathlib.Path,
+) -> None:
     repo = init_repo(tmp_path, branch="feature/beads")
     config = beads_config()
     context = build_context(repo, config)

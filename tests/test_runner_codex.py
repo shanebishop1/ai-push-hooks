@@ -49,7 +49,11 @@ def success_stream(*messages: str) -> str:
                 json.dumps(
                     {
                         "type": "item.completed",
-                        "item": {"type": "agent_message", "id": f"message-{i}", "text": text},
+                        "item": {
+                            "type": "agent_message",
+                            "id": f"message-{i}",
+                            "text": text,
+                        },
                     }
                 )
                 for i, text in enumerate(messages)
@@ -239,8 +243,10 @@ def test_delayed_final_message_after_turn_completed_is_retained(
 def test_incomplete_turn_after_prior_success_fails_closed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stream = success_stream("first") + "\n" + json.dumps(
-        {"type": "turn.started", "turn_id": "turn-2"}
+    stream = (
+        success_stream("first")
+        + "\n"
+        + json.dumps({"type": "turn.started", "turn_id": "turn-2"})
     )
     monkeypatch.setattr(
         "ai_push_hooks.executors.runners.codex.run_process",

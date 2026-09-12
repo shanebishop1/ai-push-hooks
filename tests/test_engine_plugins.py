@@ -35,7 +35,9 @@ def _engine(
     )
 
 
-def test_python_collect_receives_inputs_and_preserves_skip_metadata(repo: pathlib.Path) -> None:
+def test_python_collect_receives_inputs_and_preserves_skip_metadata(
+    repo: pathlib.Path,
+) -> None:
     reference = _write(
         repo,
         "from ai_push_hooks.types import CollectorResult\n"
@@ -49,7 +51,12 @@ def test_python_collect_receives_inputs_and_preserves_skip_metadata(repo: pathli
         enabled=True,
         steps=(
             StepConfig(id="seed", type="collect", collector="seed"),
-            StepConfig(id="collect", type="collect", python=reference, inputs=("seed/input.txt",)),
+            StepConfig(
+                id="collect",
+                type="collect",
+                python=reference,
+                inputs=("seed/input.txt",),
+            ),
             StepConfig(id="unreached", type="exec", executor="missing"),
         ),
     )
@@ -62,7 +69,9 @@ def test_python_collect_receives_inputs_and_preserves_skip_metadata(repo: pathli
     assert result.modules == {"quality": "completed"}
     step_dir = repo / ".git" / "ai-push-hooks-tests" / "quality" / "01-collect"
     assert (step_dir / "answer.txt").read_text(encoding="utf-8") == "answer"
-    assert not (repo / ".git" / "ai-push-hooks-tests" / "quality" / "02-unreached").exists()
+    assert not (
+        repo / ".git" / "ai-push-hooks-tests" / "quality" / "02-unreached"
+    ).exists()
 
 
 @pytest.mark.parametrize(
@@ -124,11 +133,15 @@ def test_python_assert_persists_report_before_false_verdict(repo: pathlib.Path) 
     engine = _engine(repo, module)
     with pytest.raises(HookError, match="policy failed"):
         engine.run()
-    report = repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-policy" / "result.json"
+    report = (
+        repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-policy" / "result.json"
+    )
     assert json.loads(report.read_text(encoding="utf-8"))["ok"] is False
 
 
-def test_python_exec_does_not_merge_result_into_module_metadata(repo: pathlib.Path) -> None:
+def test_python_exec_does_not_merge_result_into_module_metadata(
+    repo: pathlib.Path,
+) -> None:
     _write(
         repo,
         "from ai_push_hooks.types import CollectorResult\n"
@@ -147,11 +160,20 @@ def test_python_exec_does_not_merge_result_into_module_metadata(repo: pathlib.Pa
     )
     engine = _engine(repo, module)
     engine.run()
-    metadata = repo / ".git" / "ai-push-hooks-tests" / "quality" / "01-collect" / "metadata.txt"
+    metadata = (
+        repo
+        / ".git"
+        / "ai-push-hooks-tests"
+        / "quality"
+        / "01-collect"
+        / "metadata.txt"
+    )
     assert metadata.read_text(encoding="utf-8") == "False"
 
 
-def test_imports_happen_only_after_when_env_and_input_gates(repo: pathlib.Path, monkeypatch) -> None:
+def test_imports_happen_only_after_when_env_and_input_gates(
+    repo: pathlib.Path, monkeypatch
+) -> None:
     marker = repo / "imported.txt"
     reference = _write(
         repo,
@@ -181,7 +203,9 @@ def test_imports_happen_only_after_when_env_and_input_gates(repo: pathlib.Path, 
         id="missing",
         enabled=True,
         steps=(
-            StepConfig(id="input", type="collect", python=reference, inputs=("missing.txt",)),
+            StepConfig(
+                id="input", type="collect", python=reference, inputs=("missing.txt",)
+            ),
         ),
     )
     with pytest.raises(HookError, match="Unknown artifact reference"):
@@ -213,7 +237,9 @@ def test_plugin_artifact_budget_is_checked_before_any_write(repo: pathlib.Path) 
     assert not (store.run_dir / "quality" / "00-collect").exists()
 
 
-def test_plugin_artifact_aggregate_budget_is_checked_before_any_write(repo: pathlib.Path) -> None:
+def test_plugin_artifact_aggregate_budget_is_checked_before_any_write(
+    repo: pathlib.Path,
+) -> None:
     reference = _write(
         repo,
         "from ai_push_hooks.types import CollectorResult\n"
@@ -262,10 +288,14 @@ def test_python_exec_and_assert_result_artifacts_are_bounded(
     )
     with pytest.raises(HookError, match="per-artifact"):
         _engine(repo, module).run()
-    assert not (repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-result").exists()
+    assert not (
+        repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-result"
+    ).exists()
 
 
-def test_command_steps_persist_streams_without_model_accounting(repo: pathlib.Path) -> None:
+def test_command_steps_persist_streams_without_model_accounting(
+    repo: pathlib.Path,
+) -> None:
     step = StepConfig(
         id="command",
         type="exec",
@@ -282,7 +312,10 @@ def test_command_steps_persist_streams_without_model_accounting(repo: pathlib.Pa
     step_dir = repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-command"
     assert (step_dir / "stdout.txt").read_text(encoding="utf-8") == "out\n"
     assert (step_dir / "stderr.txt").read_text(encoding="utf-8") == "err\n"
-    assert json.loads((step_dir / "result.json").read_text(encoding="utf-8"))["returncode"] == 0
+    assert (
+        json.loads((step_dir / "result.json").read_text(encoding="utf-8"))["returncode"]
+        == 0
+    )
     assert engine.context.logger.llm_calls == []
 
 
@@ -301,7 +334,9 @@ def test_command_assert_report_is_saved_before_failure(repo: pathlib.Path) -> No
 
     with pytest.raises(HookError):
         engine.run()
-    report = repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-policy" / "result.json"
+    report = (
+        repo / ".git" / "ai-push-hooks-tests" / "quality" / "00-policy" / "result.json"
+    )
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["ok"] is False
     assert (report.parent / "stdout.txt").exists()

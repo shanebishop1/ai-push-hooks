@@ -47,9 +47,21 @@ trap 'rm -rf "$artifact_dir"' EXIT
 python -m pip install -c constraints-ci.txt ".[dev]"
 python -m pytest tests -q
 python -m ruff check .
+python -m ruff format --check src tests scripts
 PIP_CONSTRAINT="$PWD/constraints-ci.txt" \
   python -m build --outdir "$artifact_dir"
 python -m twine check "$artifact_dir"/*
+```
+
+Python formatting is mechanical and applies only to `src/`, `tests/`, and
+`scripts/`. The policy is configured in `pyproject.toml` and uses pinned Ruff
+0.13.3 from `constraints-ci.txt`. `ruff check` is lint-only; it does not
+format. In the pinned environment above, use these commands to check or fix
+formatting:
+
+```bash
+python -m ruff format --check src tests scripts
+python -m ruff format src tests scripts
 ```
 
 The Docker smoke gate uses no external model calls and does not mount host credentials or the repository at runtime. A missing Docker daemon is a blocker, not a pass. Live provider probes are separate, opt-in, potentially billable, and disclose supplied content; do not enable `AI_PUSH_HOOKS_LIVE_PROBE` without approval. Report which checks actually ran, exit statuses, and blocked/skipped coverage.

@@ -9,7 +9,11 @@ from typing import Sequence
 from .artifacts import ArtifactStore, generate_run_id
 from .config import load_config
 from .engine import WorkflowEngine
-from .paths import ensure_private_directory, resolve_contained_path, write_text_no_follow
+from .paths import (
+    ensure_private_directory,
+    resolve_contained_path,
+    write_text_no_follow,
+)
 from .git_utils import (
     collect_changed_files,
     collect_diff,
@@ -28,11 +32,15 @@ from .git_utils import (
 from .types import HookConfig, HookError, HookLogger, RuntimeContext
 
 
-def _build_logger(repo_root: pathlib.Path, git_dir: pathlib.Path, config: HookConfig) -> HookLogger:
+def _build_logger(
+    repo_root: pathlib.Path, git_dir: pathlib.Path, config: HookConfig
+) -> HookLogger:
     ensure_private_directory(git_dir / "ai-push-hooks")
     jsonl_path = None
     if config.logging.jsonl:
-        log_dir = ensure_dir(resolve_storage_path(repo_root, git_dir, config.logging.dir))
+        log_dir = ensure_dir(
+            resolve_storage_path(repo_root, git_dir, config.logging.dir)
+        )
         if log_dir is not None:
             jsonl_path = resolve_contained_path(log_dir, "hook.jsonl", "JSONL log path")
     return HookLogger(jsonl_path=jsonl_path, console_level=config.logging.level)
@@ -40,7 +48,9 @@ def _build_logger(repo_root: pathlib.Path, git_dir: pathlib.Path, config: HookCo
 
 def _write_summary(context: RuntimeContext, result: dict[str, object]) -> None:
     summary_dir = ensure_dir(
-        resolve_storage_path(context.repo_root, context.git_dir, context.config.logging.summary_dir)
+        resolve_storage_path(
+            context.repo_root, context.git_dir, context.config.logging.summary_dir
+        )
     )
     if summary_dir is None:
         return
@@ -49,7 +59,9 @@ def _write_summary(context: RuntimeContext, result: dict[str, object]) -> None:
         f"{context.run_id}.json",
         "Summary output path",
     )
-    write_text_no_follow(summary_path, json.dumps(result, ensure_ascii=True, indent=2) + "\n")
+    write_text_no_follow(
+        summary_path, json.dumps(result, ensure_ascii=True, indent=2) + "\n"
+    )
 
 
 def _assert_clean_worktree(repo_root: pathlib.Path) -> None:
@@ -77,7 +89,11 @@ def _run_hook_impl(
     if config.general.require_clean_worktree:
         _assert_clean_worktree(repo_root)
 
-    actual_stdin = list(stdin_lines) if stdin_lines is not None else [line.rstrip("\n") for line in sys.stdin]
+    actual_stdin = (
+        list(stdin_lines)
+        if stdin_lines is not None
+        else [line.rstrip("\n") for line in sys.stdin]
+    )
     push_updates = parse_push_updates(actual_stdin)
     pushed_branch_updates = [
         update
@@ -92,7 +108,9 @@ def _run_hook_impl(
         )
     pushed_branches = list(
         dict.fromkeys(
-            update.branch_name for update in pushed_branch_updates if update.branch_name is not None
+            update.branch_name
+            for update in pushed_branch_updates
+            if update.branch_name is not None
         )
     )
     if config.general.skip_on_sync_branch:
@@ -108,7 +126,9 @@ def _run_hook_impl(
     )
     ranges = unique_range_expressions(revision_ranges)
     changed_files = collect_changed_files(repo_root, ranges) if ranges else []
-    diff_text = collect_diff(repo_root, ranges, config.llm.max_diff_bytes) if ranges else ""
+    diff_text = (
+        collect_diff(repo_root, ranges, config.llm.max_diff_bytes) if ranges else ""
+    )
     if len(pushed_branches) == 1:
         branch_name = pushed_branches[0]
         branch_selection_reason = "single pushed branch"
@@ -141,7 +161,9 @@ def _run_hook_impl(
         branch_diff_text = ""
         branch_is_new = False
     run_id = generate_run_id()
-    run_dir = resolve_storage_path(repo_root, git_dir, f".git/ai-push-hooks/runs/{run_id}")
+    run_dir = resolve_storage_path(
+        repo_root, git_dir, f".git/ai-push-hooks/runs/{run_id}"
+    )
 
     context = RuntimeContext(
         repo_root=repo_root,
@@ -198,14 +220,28 @@ def _run_hook_impl(
     try:
         workflow_result = engine.run()
         logger.llm_summary()
-        _write_summary(context, {"run_dir": str(workflow_result.run_dir), "modules": workflow_result.modules})
-        logger.status("hook.complete", "AI push hooks workflow completed", run_dir=str(workflow_result.run_dir))
+        _write_summary(
+            context,
+            {
+                "run_dir": str(workflow_result.run_dir),
+                "modules": workflow_result.modules,
+            },
+        )
+        logger.status(
+            "hook.complete",
+            "AI push hooks workflow completed",
+            run_dir=str(workflow_result.run_dir),
+        )
         return 0
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip() or exc.__class__.__name__
         logger.error("hook.failed", "AI push hooks workflow failed", error=message)
         if config.general.allow_push_on_error:
-            logger.warn("hook.fail_open", "Allowing push because allow_push_on_error=true", error=message)
+            logger.warn(
+                "hook.fail_open",
+                "Allowing push because allow_push_on_error=true",
+                error=message,
+            )
             return 0
         raise
 

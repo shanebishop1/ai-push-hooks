@@ -92,11 +92,22 @@ trap 'rm -rf "$artifact_dir"' EXIT
 python -m pip install -c constraints-ci.txt ".[dev]"
 python -m pytest tests -q
 python -m ruff check .
+python -m ruff format --check src tests scripts
 PIP_CONSTRAINT="$PWD/constraints-ci.txt" \
   python -m build --outdir "$artifact_dir"
 python -m twine check "$artifact_dir"/*
 npm run test:npm-pack
 python -m pytest -q tests/test_installed_hook_e2e.py
+```
+
+Python formatting is a mechanical Ruff 0.13.3 policy for `src/`, `tests/`,
+and `scripts/`, configured in `pyproject.toml`. `ruff check` is lint-only; it
+does not format. After installing the pinned environment above, check or
+format those directories with:
+
+```bash
+python -m ruff format --check src tests scripts
+python -m ruff format src tests scripts
 ```
 
 The build uses a fresh temporary directory rather than stale `dist/` output.

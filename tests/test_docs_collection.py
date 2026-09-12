@@ -11,7 +11,9 @@ from ai_push_hooks.modules.docs import collect_docs_context
 from .conftest import build_context, init_repo, make_config
 
 
-def _collect(repo: pathlib.Path, *, changed_file: str, diff_text: str = "") -> dict[str, str]:
+def _collect(
+    repo: pathlib.Path, *, changed_file: str, diff_text: str = ""
+) -> dict[str, str]:
     config = make_config([])
     context = build_context(
         repo,
@@ -22,7 +24,9 @@ def _collect(repo: pathlib.Path, *, changed_file: str, diff_text: str = "") -> d
     return collect_docs_context(context, None).artifacts
 
 
-def test_doc_inventory_rejects_external_and_dangling_symlinks(tmp_path: pathlib.Path) -> None:
+def test_doc_inventory_rejects_external_and_dangling_symlinks(
+    tmp_path: pathlib.Path,
+) -> None:
     repo = init_repo(tmp_path)
     external = tmp_path / "external.md"
     external.write_text("external secret marker\n", encoding="utf-8")
@@ -72,7 +76,9 @@ def test_search_retains_surrounding_context(tmp_path: pathlib.Path) -> None:
     assert "README.md:3: after context-target" in context
 
 
-def test_filename_derived_regex_metacharacters_are_literal(tmp_path: pathlib.Path) -> None:
+def test_filename_derived_regex_metacharacters_are_literal(
+    tmp_path: pathlib.Path,
+) -> None:
     repo = init_repo(tmp_path)
     (repo / "README.md").write_text("literal [needle marker\n", encoding="utf-8")
 
@@ -189,12 +195,16 @@ def test_heavy_matches_retain_bounded_metadata_and_read_each_file_once(
     )
 
     assert reads == doc_files
-    assert all(len(buffer.matches) <= docs_module.DOC_MAX_QUERY_MATCHES for buffer in buffers)
+    assert all(
+        len(buffer.matches) <= docs_module.DOC_MAX_QUERY_MATCHES for buffer in buffers
+    )
     assert sum(len(buffer.matches) for buffer in buffers) <= (
         len(queries) * docs_module.DOC_MAX_QUERY_MATCHES
     )
     assert all(
-        buffer.characters <= docs_module.DOC_CONTEXT_BUDGET + max(
+        buffer.characters
+        <= docs_module.DOC_CONTEXT_BUDGET
+        + max(
             (len(chunk) for _key, chunk in buffer.matches),
             default=0,
         )

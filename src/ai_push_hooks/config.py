@@ -141,7 +141,9 @@ def _require_table(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
-def _validate_unknown_keys(table: dict[str, Any], allowed: set[str], label: str) -> None:
+def _validate_unknown_keys(
+    table: dict[str, Any], allowed: set[str], label: str
+) -> None:
     unknown = set(table) - allowed
     if unknown:
         raise HookError(f"Unknown field(s) in {label}: {', '.join(sorted(unknown))}")
@@ -207,7 +209,9 @@ def _validate_runner_command_placeholders(
         _validate_no_control_chars(argument, argument_label)
         for placeholder in RUNNER_PLACEHOLDER_PATTERN.findall(argument):
             if placeholder not in RUNNER_PLACEHOLDERS:
-                raise HookError(f"Unknown placeholder {placeholder!r} in {argument_label}")
+                raise HookError(
+                    f"Unknown placeholder {placeholder!r} in {argument_label}"
+                )
         if ("{" in argument or "}" in argument) and argument not in RUNNER_PLACEHOLDERS:
             raise HookError(
                 f"Placeholders in {argument_label} must be whole argv elements"
@@ -215,13 +219,17 @@ def _validate_runner_command_placeholders(
         if argument == "{prompt}":
             prompt_count += 1
     if transport == "stdin" and prompt_count:
-        raise HookError(f"{label}.command must not contain {{prompt}} with stdin transport")
+        raise HookError(
+            f"{label}.command must not contain {{prompt}} with stdin transport"
+        )
     if transport == "argv" and prompt_count != 1:
         raise HookError(
             f"{label}.command must contain exactly one {{prompt}} with argv transport"
         )
     if "{model}" in command and not (model or effective_model):
-        raise HookError(f"{label}.command uses {{model}} but {label}.model is not configured")
+        raise HookError(
+            f"{label}.command uses {{model}} but {label}.model is not configured"
+        )
 
 
 def _validate_runner_profiles(
@@ -241,7 +249,9 @@ def _validate_runner_profiles(
         runner_type = profile["type"].strip()
         _validate_no_control_chars(profile["type"], f"{label}.type")
         if runner_type not in RUNNER_TYPES:
-            raise HookError(f"{label}.type must be one of: {', '.join(sorted(RUNNER_TYPES))}")
+            raise HookError(
+                f"{label}.type must be one of: {', '.join(sorted(RUNNER_TYPES))}"
+            )
         _validate_string(profile, "model", label)
         if "model" in profile and not profile["model"].strip():
             raise HookError(f"{label}.model must be a non-empty string when provided")
@@ -252,8 +262,13 @@ def _validate_runner_profiles(
             _validate_no_control_chars(profile["variant"], f"{label}.variant")
         _validate_string(profile, "project_access", label)
         _validate_string(profile, "prompt_transport", label)
-        if "project_access" in profile and profile["project_access"] not in PROJECT_ACCESS_VALUES:
-            raise HookError(f"{label}.project_access must be one of: artifacts, project")
+        if (
+            "project_access" in profile
+            and profile["project_access"] not in PROJECT_ACCESS_VALUES
+        ):
+            raise HookError(
+                f"{label}.project_access must be one of: artifacts, project"
+            )
 
         type_specific_keys = {
             "variant": runner_type == "opencode",
@@ -262,7 +277,9 @@ def _validate_runner_profiles(
         }
         for key, applicable in type_specific_keys.items():
             if key in profile and not applicable:
-                raise HookError(f"{label}.{key} is only valid for runner type {('opencode' if key == 'variant' else 'command')}")
+                raise HookError(
+                    f"{label}.{key} is only valid for runner type {('opencode' if key == 'variant' else 'command')}"
+                )
 
         if runner_type != "command":
             continue
@@ -321,9 +338,7 @@ def _validate_json_options(value: Any, label: str, *, path: str = "") -> None:
                 raise HookError(f"{location} must use string keys")
             _validate_json_options(item, label, path=f"{path}.{key}")
         return
-    raise HookError(
-        f"{location} must contain only JSON-compatible null-free values"
-    )
+    raise HookError(f"{location} must contain only JSON-compatible null-free values")
 
 
 def _validate_python_reference(
@@ -356,15 +371,15 @@ def _validate_python_reference(
     if path_has_symlink(root, lexical_path):
         raise HookError(f"{label} path must not traverse a symlink or reparse point")
     try:
-        callback_path = resolve_contained_path(
-            root, "/".join(parts), f"{label} path"
-        )
+        callback_path = resolve_contained_path(root, "/".join(parts), f"{label} path")
     except HookError as exc:
         raise HookError(str(exc)) from exc
     try:
         metadata = callback_path.lstat()
     except FileNotFoundError as exc:
-        raise HookError(f"{label} path must reference an existing regular file") from exc
+        raise HookError(
+            f"{label} path must reference an existing regular file"
+        ) from exc
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     if stat.S_ISLNK(metadata.st_mode) or bool(
         getattr(metadata, "st_file_attributes", 0) & reparse_flag
@@ -495,7 +510,8 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
     unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
     if unknown:
         raise HookError(
-            "Legacy or unsupported config keys are not allowed: " + ", ".join(sorted(unknown))
+            "Legacy or unsupported config keys are not allowed: "
+            + ", ".join(sorted(unknown))
         )
 
     general = _require_table(raw.get("general", {}), "general")
@@ -595,7 +611,11 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     raise HookError(f"{label}.options must be a table")
                 _validate_string(step, "stdin", label, allow_none=True)
                 _validate_integer(step, "timeout_seconds", label, minimum=1)
-                if "runner" in step and step["runner"] is not None and not step["runner"].strip():
+                if (
+                    "runner" in step
+                    and step["runner"] is not None
+                    and not step["runner"].strip()
+                ):
                     raise HookError(f"{label}.runner must be a non-empty string")
                 if "runner" in step and step["runner"] is not None:
                     _validate_no_control_chars(step["runner"], f"{label}.runner")
@@ -604,8 +624,11 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
                     and isinstance(step.get("type"), str)
                     and step["type"] in {"collect", "exec", "assert"}
                 ):
-                    raise HookError(f"{label}.runner is only valid on ask and apply steps")
+                    raise HookError(
+                        f"{label}.runner is only valid on ask and apply steps"
+                    )
                 _validate_step_extensions(step, label)
+
 
 def _normalize_runner_profile(name: str, raw: dict[str, Any]) -> RunnerProfile:
     runner_type = str(raw["type"]).strip()
@@ -637,20 +660,36 @@ def _normalize_step(
         id=str(raw.get("id", "")).strip(),
         type=step_type,
         inputs=tuple(str(item) for item in raw.get("inputs", []) or []),
-        output=str(raw.get("output")).strip() if raw.get("output") is not None else None,
-        schema=str(raw.get("schema")).strip() if raw.get("schema") is not None else None,
-        prompt=str(raw.get("prompt")).strip() if raw.get("prompt") is not None else None,
-        prompt_file=str(raw.get("prompt_file")).strip() if raw.get("prompt_file") is not None else None,
+        output=str(raw.get("output")).strip()
+        if raw.get("output") is not None
+        else None,
+        schema=str(raw.get("schema")).strip()
+        if raw.get("schema") is not None
+        else None,
+        prompt=str(raw.get("prompt")).strip()
+        if raw.get("prompt") is not None
+        else None,
+        prompt_file=str(raw.get("prompt_file")).strip()
+        if raw.get("prompt_file") is not None
+        else None,
         fallback_prompt_id=(
             str(raw.get("fallback_prompt_id")).strip()
             if raw.get("fallback_prompt_id") is not None
             else None
         ),
-        collector=str(raw.get("collector")).strip() if raw.get("collector") is not None else None,
+        collector=str(raw.get("collector")).strip()
+        if raw.get("collector") is not None
+        else None,
         allow_paths=tuple(str(item) for item in raw.get("allow_paths", []) or []),
-        executor=str(raw.get("executor")).strip() if raw.get("executor") is not None else None,
-        assertion=str(raw.get("assertion")).strip() if raw.get("assertion") is not None else None,
-        python=str(raw.get("python")).strip() if raw.get("python") is not None else None,
+        executor=str(raw.get("executor")).strip()
+        if raw.get("executor") is not None
+        else None,
+        assertion=str(raw.get("assertion")).strip()
+        if raw.get("assertion") is not None
+        else None,
+        python=str(raw.get("python")).strip()
+        if raw.get("python") is not None
+        else None,
         options=dict(raw.get("options", {}) or {}),
         command=tuple(str(item) for item in raw.get("command", []) or []),
         stdin=str(raw.get("stdin")).strip() if raw.get("stdin") is not None else None,
@@ -659,8 +698,12 @@ def _normalize_step(
             if raw.get("timeout_seconds") is not None
             else (DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS if raw.get("command") else None)
         ),
-        when_env=str(raw.get("when_env")).strip() if raw.get("when_env") is not None else None,
-        runner=str(raw.get("runner")).strip() if raw.get("runner") is not None else None,
+        when_env=str(raw.get("when_env")).strip()
+        if raw.get("when_env") is not None
+        else None,
+        runner=str(raw.get("runner")).strip()
+        if raw.get("runner") is not None
+        else None,
     )
     if not step.id:
         raise HookError("Every workflow step requires a non-empty id")
@@ -673,8 +716,12 @@ def _normalize_step(
             raise HookError(f"Apply step `{step.id}` may not allow Git metadata paths")
         if normalized_component(parts[-1]) == "agents.md":
             raise HookError(f"Apply step `{step.id}` may not allow AGENTS.md")
-    if step.is_promptable and not any([step.prompt, step.prompt_file, step.fallback_prompt_id]):
-        raise HookError(f"Promptable step `{step.id}` requires prompt, prompt_file, or fallback_prompt_id")
+    if step.is_promptable and not any(
+        [step.prompt, step.prompt_file, step.fallback_prompt_id]
+    ):
+        raise HookError(
+            f"Promptable step `{step.id}` requires prompt, prompt_file, or fallback_prompt_id"
+        )
     if step.type == "collect" and not (step.collector or step.python):
         raise HookError(f"Collect step `{step.id}` requires collector or python")
     if step.type == "ask" and not step.output:
@@ -684,12 +731,16 @@ def _normalize_step(
     if step.type == "exec" and not (step.executor or step.python or step.command):
         raise HookError(f"Exec step `{step.id}` requires executor, python, or command")
     if step.type == "assert" and not (step.assertion or step.python or step.command):
-        raise HookError(f"Assert step `{step.id}` requires assertion, python, or command")
+        raise HookError(
+            f"Assert step `{step.id}` requires assertion, python, or command"
+        )
     return step
 
 
 def _build_config(
-    raw: dict[str, Any], *, effective_model: str | None = None,
+    raw: dict[str, Any],
+    *,
+    effective_model: str | None = None,
     repo_root: pathlib.Path | None = None,
 ) -> HookConfig:
     if not isinstance(raw, dict):
@@ -699,10 +750,13 @@ def _build_config(
     unknown = set(raw) - ALLOWED_TOP_LEVEL_KEYS
     if unknown:
         raise HookError(
-            "Legacy or unsupported config keys are not allowed: " + ", ".join(sorted(unknown))
+            "Legacy or unsupported config keys are not allowed: "
+            + ", ".join(sorted(unknown))
         )
 
-    workflow_modules = tuple(str(item) for item in raw.get("workflow", {}).get("modules", []) or [])
+    workflow_modules = tuple(
+        str(item) for item in raw.get("workflow", {}).get("modules", []) or []
+    )
     if not workflow_modules:
         raise HookError("workflow.modules must define at least one module id")
 
@@ -740,7 +794,9 @@ def _build_config(
     if repo_root is not None:
         validated_python_references: set[str] = set()
         for module_id, module_raw in module_payload.items():
-            for index, step_raw in enumerate(module_raw.get("steps", []) or [], start=1):
+            for index, step_raw in enumerate(
+                module_raw.get("steps", []) or [], start=1
+            ):
                 python_ref = step_raw.get("python")
                 if python_ref is not None:
                     if python_ref in validated_python_references:
@@ -854,7 +910,7 @@ def _apply_env_overrides(
         "llm": config.llm.__dict__.copy(),
         "logging": config.logging.__dict__.copy(),
         "workflow": {"modules": list(config.workflow.modules)},
-    "modules": {},
+        "modules": {},
         "runners": {},
     }
     for module_id, module in config.modules.items():
@@ -974,7 +1030,9 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
     if stat.S_ISLNK(path_metadata.st_mode) or bool(
         getattr(path_metadata, "st_file_attributes", 0) & reparse_flag
     ):
-        raise HookError(f"Config file must not be a symlink or reparse point: {config_path}")
+        raise HookError(
+            f"Config file must not be a symlink or reparse point: {config_path}"
+        )
     if not stat.S_ISREG(path_metadata.st_mode):
         raise HookError(f"Config file must be a regular file: {config_path}")
 
@@ -1022,7 +1080,9 @@ def load_config(repo_root: pathlib.Path) -> tuple[HookConfig, pathlib.Path]:
             location = f" at line {exc.lineno}, column {exc.colno}"
         raise HookError(f"Invalid TOML in {config_path}{location}: {exc}") from exc
     if not isinstance(loaded, dict):
-        raise HookError(f"Invalid config format in {config_path}: expected a top-level table")
+        raise HookError(
+            f"Invalid config format in {config_path}: expected a top-level table"
+        )
     model_override = os.getenv("AI_PUSH_HOOKS_MODEL")
     variant_override = os.getenv("AI_PUSH_HOOKS_VARIANT")
     _validate_model_override(model_override)
@@ -1038,12 +1098,18 @@ def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:
     if step.prompt and step.prompt.strip():
         return step.prompt.strip()
     if step.prompt_file:
-        parts = relative_path_parts(step.prompt_file, f"Prompt file for step `{step.id}`")
+        parts = relative_path_parts(
+            step.prompt_file, f"Prompt file for step `{step.id}`"
+        )
         if any(normalized_component(part) == ".git" for part in parts):
-            raise HookError(f"Prompt file for step `{step.id}` must not reference Git metadata")
+            raise HookError(
+                f"Prompt file for step `{step.id}` must not reference Git metadata"
+            )
         lexical_prompt_path = repo_root.joinpath(*parts)
         if path_has_symlink(repo_root, lexical_prompt_path):
-            raise HookError(f"Prompt file for step `{step.id}` must not traverse a symlink")
+            raise HookError(
+                f"Prompt file for step `{step.id}` must not traverse a symlink"
+            )
         prompt_path = resolve_contained_path(
             repo_root,
             step.prompt_file,
@@ -1057,8 +1123,12 @@ def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:
             )
         except HookError:
             git_roots = ()
-        if any(is_path_within(resolved_prompt_path, git_root) for git_root in git_roots):
-            raise HookError(f"Prompt file for step `{step.id}` must not resolve inside Git metadata")
+        if any(
+            is_path_within(resolved_prompt_path, git_root) for git_root in git_roots
+        ):
+            raise HookError(
+                f"Prompt file for step `{step.id}` must not resolve inside Git metadata"
+            )
         if prompt_path.exists():
             flags = (
                 os.O_RDONLY
@@ -1096,7 +1166,9 @@ def resolve_prompt_text(repo_root: pathlib.Path, step: StepConfig) -> str:
                 return text
         if step.fallback_prompt_id:
             return resolve_builtin_prompt(step.fallback_prompt_id)
-        raise HookError(f"Prompt file not found or empty for step `{step.id}`: {prompt_path}")
+        raise HookError(
+            f"Prompt file not found or empty for step `{step.id}`: {prompt_path}"
+        )
     if step.fallback_prompt_id:
         return resolve_builtin_prompt(step.fallback_prompt_id)
     raise HookError(f"No prompt source available for step `{step.id}`")

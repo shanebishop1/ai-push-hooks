@@ -67,7 +67,9 @@ class PluginContext:
     def __post_init__(self) -> None:
         object.__setattr__(self, "inputs", MappingProxyType(dict(self.inputs)))
         object.__setattr__(self, "options", _freeze(self.options))
-        object.__setattr__(self, "prior_module_metadata", _freeze(self.prior_module_metadata))
+        object.__setattr__(
+            self, "prior_module_metadata", _freeze(self.prior_module_metadata)
+        )
 
 
 def _require_json(value: Any, label: str) -> None:

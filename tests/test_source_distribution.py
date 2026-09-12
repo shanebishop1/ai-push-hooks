@@ -43,9 +43,7 @@ FORBIDDEN_PREFIXES = (
 SOURCE_DIRECTORIES = ("src", "tests", "scripts")
 
 
-def _ignore_local_artifacts(
-    _directory: str, names: list[str]
-) -> set[str]:
+def _ignore_local_artifacts(_directory: str, names: list[str]) -> set[str]:
     ignored = {
         ".git",
         ".venv",

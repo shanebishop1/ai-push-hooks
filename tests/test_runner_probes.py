@@ -97,7 +97,13 @@ def test_fake_adapters_verify_nonce_and_production_apply_allowlist(
     monkeypatch.setenv(live_probe.LIVE_APPLY_OPT_IN, "1")
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-read")
 
-    def fake_ask(context: object, step: object, prompt: str, inputs: list[pathlib.Path], stage: str) -> str:
+    def fake_ask(
+        context: object,
+        step: object,
+        prompt: str,
+        inputs: list[pathlib.Path],
+        stage: str,
+    ) -> str:
         assert live_probe.NONCE_FILENAME in prompt
         project = context.repo_root  # type: ignore[attr-defined]
         return (project / live_probe.NONCE_FILENAME).read_text(encoding="utf-8").strip()
@@ -145,10 +151,16 @@ def test_read_probe_rejects_git_visible_mutation_before_apply(
     monkeypatch.setenv(live_probe.LIVE_OPT_IN, "1")
 
     def mutating_ask(
-        context: object, step: object, prompt: str, inputs: list[pathlib.Path], stage: str
+        context: object,
+        step: object,
+        prompt: str,
+        inputs: list[pathlib.Path],
+        stage: str,
     ) -> str:
         project = context.repo_root  # type: ignore[attr-defined]
-        (project / live_probe.OUTSIDE_FILENAME).write_text("unexpected\n", encoding="utf-8")
+        (project / live_probe.OUTSIDE_FILENAME).write_text(
+            "unexpected\n", encoding="utf-8"
+        )
         return (project / live_probe.NONCE_FILENAME).read_text(encoding="utf-8").strip()
 
     monkeypatch.setattr(live_probe, "run_ask_step", mutating_ask)
@@ -189,4 +201,6 @@ def test_conformance_checks_only_contract_text_and_never_auth_commands(
         ("/fake/codex", "--version"),
         ("/fake/codex", "exec", "--help"),
     ]
-    assert not any(argument in {"auth", "login", "status"} for call in calls for argument in call)
+    assert not any(
+        argument in {"auth", "login", "status"} for call in calls for argument in call
+    )

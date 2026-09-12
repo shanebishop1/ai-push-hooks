@@ -8,7 +8,9 @@ from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.types import HookError, ModuleConfig, ModuleRuntimeState, StepConfig
 
 
-def test_cross_module_looking_artifact_reference_fails_clearly(tmp_path: pathlib.Path) -> None:
+def test_cross_module_looking_artifact_reference_fails_clearly(
+    tmp_path: pathlib.Path,
+) -> None:
     store = ArtifactStore(tmp_path / "run")
     state = ModuleRuntimeState(
         module=ModuleConfig(
@@ -43,7 +45,9 @@ def test_artifact_names_cannot_escape_run_directory(
     store = ArtifactStore(tmp_path / "run")
     store.prepare()
     state = ModuleRuntimeState(
-        module=ModuleConfig(module_id, True, (StepConfig(id="collect", type="collect"),))
+        module=ModuleConfig(
+            module_id, True, (StepConfig(id="collect", type="collect"),)
+        )
     )
 
     with pytest.raises(HookError):

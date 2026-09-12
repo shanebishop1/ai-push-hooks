@@ -8,7 +8,11 @@ import subprocess
 import pytest
 
 from ai_push_hooks import cli, install
-from ai_push_hooks.install import install_hook, pre_push_hook_script, resolve_pre_push_hook_path
+from ai_push_hooks.install import (
+    install_hook,
+    pre_push_hook_script,
+    resolve_pre_push_hook_path,
+)
 from ai_push_hooks.types import HookError
 
 
@@ -85,12 +89,14 @@ def test_install_force_replaces_regular_hook_and_rejects_special_targets(
         install_hook(True, cwd=repo)
 
 
-def test_install_preserves_args_stdin_and_exit_status(repo: pathlib.Path, tmp_path: pathlib.Path) -> None:
+def test_install_preserves_args_stdin_and_exit_status(
+    repo: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "ai-push-hooks"
     fake.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$CAPTURE_ARGS\"\ncat > \"$CAPTURE_STDIN\"\nexit 17\n",
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$CAPTURE_ARGS"\ncat > "$CAPTURE_STDIN"\nexit 17\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -119,11 +125,16 @@ def test_install_preserves_args_stdin_and_exit_status(repo: pathlib.Path, tmp_pa
         check=False,
     )
     assert completed.returncode == 17
-    assert args_file.read_text(encoding="utf-8").strip() == "hook origin file:///tmp/path with spaces.git"
+    assert (
+        args_file.read_text(encoding="utf-8").strip()
+        == "hook origin file:///tmp/path with spaces.git"
+    )
     assert stdin_file.read_text(encoding="utf-8").startswith("refs/heads/main ")
 
 
-def test_install_handles_subdirectory_and_separate_git_dir(repo: pathlib.Path, tmp_path: pathlib.Path) -> None:
+def test_install_handles_subdirectory_and_separate_git_dir(
+    repo: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
     nested = repo / "docs" / "nested"
     nested.mkdir()
     assert install_hook(False, cwd=nested) == 0
@@ -161,7 +172,9 @@ def test_install_allows_repo_local_hooks_path_and_refuses_external_or_shared(
     assert configured != before
 
 
-def test_install_refuses_linked_worktree_shared_hooks(repo: pathlib.Path, tmp_path: pathlib.Path) -> None:
+def test_install_refuses_linked_worktree_shared_hooks(
+    repo: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
     worktree = tmp_path / "linked-worktree"
     subprocess.run(
         ["git", "worktree", "add", "-b", "linked", str(worktree)],
@@ -175,7 +188,9 @@ def test_install_refuses_linked_worktree_shared_hooks(repo: pathlib.Path, tmp_pa
         install_hook(False, cwd=worktree)
 
 
-def test_install_outside_repository_and_cli_dispatch(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_outside_repository_and_cli_dispatch(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with pytest.raises(HookError, match="Could not resolve Git hook location"):
         install_hook(False, cwd=tmp_path)
 

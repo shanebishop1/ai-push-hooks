@@ -39,7 +39,9 @@ def _lifecycle_request(context) -> RunnerRequest:
     )
 
 
-def test_runtime_directories_and_files_are_private_by_default(tmp_path, monkeypatch) -> None:
+def test_runtime_directories_and_files_are_private_by_default(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/runtime-modes")
     config, _ = load_config(repo)
     config = replace(config, llm=replace(config.llm, delete_session_after_run=False))
@@ -109,7 +111,9 @@ def test_windows_reparse_attribute_is_treated_as_unsafe(monkeypatch, tmp_path) -
     assert path_utils.path_is_link_or_reparse(tmp_path / "junction") is True
 
 
-def test_path_traversal_check_rejects_detected_reparse_component(monkeypatch, tmp_path) -> None:
+def test_path_traversal_check_rejects_detected_reparse_component(
+    monkeypatch, tmp_path
+) -> None:
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(

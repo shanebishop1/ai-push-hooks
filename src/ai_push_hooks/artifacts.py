@@ -45,11 +45,17 @@ class ArtifactStore:
         step_name = validate_path_component(step_id, "Artifact step id")
         lexical_module_path = self.run_dir / module_name
         if path_has_symlink(self.run_dir, lexical_module_path):
-            raise HookError(f"Artifact module path must not traverse a symlink: {module_id}")
-        module_path = resolve_contained_path(self.run_dir, module_name, "Artifact module path")
+            raise HookError(
+                f"Artifact module path must not traverse a symlink: {module_id}"
+            )
+        module_path = resolve_contained_path(
+            self.run_dir, module_name, "Artifact module path"
+        )
         lexical_step_path = module_path / f"{step_index:02d}-{step_name}"
         if path_has_symlink(self.run_dir, lexical_step_path):
-            raise HookError(f"Artifact step path must not traverse a symlink: {step_id}")
+            raise HookError(
+                f"Artifact step path must not traverse a symlink: {step_id}"
+            )
         path = resolve_contained_path(
             module_path,
             f"{step_index:02d}-{step_name}",
@@ -125,7 +131,9 @@ class ArtifactStore:
         payload: Any,
     ) -> pathlib.Path:
         path = self._artifact_path(state.module.id, step_index, step_id, artifact_name)
-        write_text_no_follow(path, json.dumps(payload, ensure_ascii=True, indent=2) + "\n")
+        write_text_no_follow(
+            path, json.dumps(payload, ensure_ascii=True, indent=2) + "\n"
+        )
         return self.register(state, step_id, artifact_name, path)
 
     def serialize_plugin_artifacts(
@@ -152,7 +160,10 @@ class ArtifactStore:
             try:
                 if isinstance(payload, (dict, list)) or artifact_name.endswith(".json"):
                     content = (
-                        json.dumps(payload, ensure_ascii=True, indent=2, allow_nan=False) + "\n"
+                        json.dumps(
+                            payload, ensure_ascii=True, indent=2, allow_nan=False
+                        )
+                        + "\n"
                     ).encode("utf-8")
                 elif isinstance(payload, str):
                     content = payload.encode("utf-8")
@@ -169,7 +180,9 @@ class ArtifactStore:
                 )
             total_bytes += len(content)
             if total_bytes > max_total_bytes:
-                raise HookError("CollectorResult artifacts exceed the aggregate size limit")
+                raise HookError(
+                    "CollectorResult artifacts exceed the aggregate size limit"
+                )
             serialized[artifact_name] = content
         return serialized
 

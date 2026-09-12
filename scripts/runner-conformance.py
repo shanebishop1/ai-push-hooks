@@ -99,7 +99,9 @@ def _check_cli(
     try:
         version = run((executable, "--version"))
     except (OSError, subprocess.SubprocessError) as exc:
-        return CheckResult(name, "FAIL", f"could not run --version ({type(exc).__name__})")
+        return CheckResult(
+            name, "FAIL", f"could not run --version ({type(exc).__name__})"
+        )
     if version.returncode != 0:
         return CheckResult(name, "FAIL", "--version returned non-zero")
     version_output = f"{version.stdout}\n{version.stderr}"
@@ -111,9 +113,13 @@ def _check_cli(
         )
 
     if not required_help and not check_help:
-        return CheckResult(name, "PASS", f"--version: {_safe_first_line(version_output)}")
+        return CheckResult(
+            name, "PASS", f"--version: {_safe_first_line(version_output)}"
+        )
 
-    help_argv = (executable, "exec", "--help") if name == "codex" else (executable, "--help")
+    help_argv = (
+        (executable, "exec", "--help") if name == "codex" else (executable, "--help")
+    )
     try:
         help_result = run(help_argv)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -123,7 +129,9 @@ def _check_cli(
     help_text = f"{help_result.stdout}\n{help_result.stderr}"
     missing = tuple(marker for marker in required_help if marker not in help_text)
     if missing:
-        return CheckResult(name, "FAIL", "missing required help markers: " + ", ".join(missing))
+        return CheckResult(
+            name, "FAIL", "missing required help markers: " + ", ".join(missing)
+        )
     return CheckResult(
         name,
         "PASS",
@@ -145,13 +153,17 @@ def installed_checks(*, run: CommandRunner = _run) -> list[CheckResult]:
     if codex is None:
         checks.append(CheckResult("codex", "SKIP", "binary not installed"))
     else:
-        checks.append(_check_cli("codex", codex, required_help=CODEX_REQUIRED_HELP, run=run))
+        checks.append(
+            _check_cli("codex", codex, required_help=CODEX_REQUIRED_HELP, run=run)
+        )
 
     claude = shutil.which("claude")
     if claude is None:
         checks.append(CheckResult("claude", "SKIP", "binary not installed"))
     else:
-        checks.append(_check_cli("claude", claude, required_help=CLAUDE_REQUIRED_HELP, run=run))
+        checks.append(
+            _check_cli("claude", claude, required_help=CLAUDE_REQUIRED_HELP, run=run)
+        )
     return checks
 
 

@@ -29,7 +29,12 @@ def pr_config():
                         id="compose",
                         type="ask",
                         prompt="compose",
-                        inputs=["collect/pr-context.txt", "collect/changed-files.txt", "collect/push.diff", "collect/commits.txt"],
+                        inputs=[
+                            "collect/pr-context.txt",
+                            "collect/changed-files.txt",
+                            "collect/push.diff",
+                            "collect/commits.txt",
+                        ],
                         output="pr-draft.json",
                         schema="pr_create_payload",
                     ),
@@ -49,12 +54,20 @@ def pr_config():
 def test_pr_module_skips_when_flag_not_set(tmp_path: pathlib.Path) -> None:
     repo = init_repo(tmp_path, branch="feature/pr")
     config = pr_config()
-    context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
+    context = build_context(
+        repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n"
+    )
     calls = {"llm": 0}
 
     def fake_ask(context, step, prompt, input_paths, stage_name):
         calls["llm"] += 1
-        return {"title": "x", "body": "y", "base_branch": "main", "head_branch": "feature/pr", "draft": False}
+        return {
+            "title": "x",
+            "body": "y",
+            "base_branch": "main",
+            "head_branch": "feature/pr",
+            "draft": False,
+        }
 
     WorkflowEngine(
         context=context,
@@ -64,16 +77,26 @@ def test_pr_module_skips_when_flag_not_set(tmp_path: pathlib.Path) -> None:
     assert calls["llm"] == 0
 
 
-def test_pr_module_composes_then_invokes_exec_when_enabled(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_pr_module_composes_then_invokes_exec_when_enabled(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/pr")
     config = pr_config()
-    context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
+    context = build_context(
+        repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n"
+    )
     monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
     calls = {"llm": 0, "exec": 0}
 
     def fake_ask(context, step, prompt, input_paths, stage_name):
         calls["llm"] += 1
-        return {"title": "My PR", "body": "Body", "base_branch": "main", "head_branch": "feature/pr", "draft": False}
+        return {
+            "title": "My PR",
+            "body": "Body",
+            "base_branch": "main",
+            "head_branch": "feature/pr",
+            "draft": False,
+        }
 
     def fake_exec(context, state, step, input_paths):
         calls["exec"] += 1
@@ -88,26 +111,36 @@ def test_pr_module_composes_then_invokes_exec_when_enabled(tmp_path: pathlib.Pat
     assert calls == {"llm": 1, "exec": 1}
 
 
-def test_pr_context_uses_configured_base_branch(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_pr_context_uses_configured_base_branch(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/pr")
     config = pr_config()
     config = replace(config, general=replace(config.general, base_branch="develop"))
-    context = build_context(repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n")
+    context = build_context(
+        repo, config, ranges=[], changed_files=["src/app.py"], diff_text="+change\n"
+    )
     monkeypatch.setenv("AI_PUSH_HOOKS_CREATE_PR", "1")
 
-    result = collect_pr_context(context, type("State", (), {"module": config.modules["pr"]})())
+    result = collect_pr_context(
+        context, type("State", (), {"module": config.modules["pr"]})()
+    )
 
     assert result.skip_module is False
     assert "base_branch=develop\n" in str(result.artifacts["pr-context.txt"])
 
 
-def test_gh_pr_create_defaults_to_configured_base_branch(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_gh_pr_create_defaults_to_configured_base_branch(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/pr")
     config = pr_config()
     config = replace(config, general=replace(config.general, base_branch="develop"))
     context = build_context(repo, config)
     payload = context.run_dir / "pr-draft.json"
-    payload.write_text('{"title":"Title","body":"Body","head_branch":"feature/pr"}\n', encoding="utf-8")
+    payload.write_text(
+        '{"title":"Title","body":"Body","head_branch":"feature/pr"}\n', encoding="utf-8"
+    )
     captured = {}
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
@@ -119,11 +152,20 @@ def test_gh_pr_create_defaults_to_configured_base_branch(tmp_path: pathlib.Path,
 
     def fake_run_command(args, cwd, **kwargs):
         captured["args"] = args
-        return type("Completed", (), {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""})()
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""},
+        )()
 
     monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
-    result = gh_pr_create_executor(context, type("State", (), {"metadata": {}})(), config.modules["pr"].steps[-1], [payload])
+    result = gh_pr_create_executor(
+        context,
+        type("State", (), {"metadata": {}})(),
+        config.modules["pr"].steps[-1],
+        [payload],
+    )
 
     assert result["pr_url"] == "https://github.com/o/r/pull/1"
     assert captured["args"][captured["args"].index("--base") + 1] == "develop"
@@ -179,7 +221,11 @@ def test_gh_pr_create_preserves_valid_draft_values(
 
     def fake_run_command(args, cwd, **kwargs):
         captured["args"] = args
-        return type("Completed", (), {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""})()
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""},
+        )()
 
     monkeypatch.setattr(git_utils, "run_command", fake_run_command)
 
@@ -250,7 +296,9 @@ def test_initial_push_returns_actionable_deferred_result_without_calling_gh(
     monkeypatch.setattr(
         git_utils,
         "run_command",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gh must not run")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("gh must not run")
+        ),
     )
 
     result = gh_pr_create_executor(
@@ -309,7 +357,9 @@ def test_gh_pr_create_reuses_existing_open_pr_without_creating_another(
     existing_url = "https://github.com/test/repo/pull/42"
 
     monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(git_utils, "lookup_open_pr_url", lambda *args, **kwargs: existing_url)
+    monkeypatch.setattr(
+        git_utils, "lookup_open_pr_url", lambda *args, **kwargs: existing_url
+    )
     monkeypatch.setattr(
         git_utils,
         "run_command",

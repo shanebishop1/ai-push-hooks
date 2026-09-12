@@ -68,8 +68,11 @@ class ApplyOperation:
 
 def _is_protected_path(path: str) -> bool:
     parts = pathlib.PurePosixPath(path).parts
-    return any(normalized_component(part) == PROTECTED_GIT_COMPONENT for part in parts) or (
-        bool(parts) and normalized_component(parts[-1]) == PROTECTED_INSTRUCTION_FILENAME
+    return any(
+        normalized_component(part) == PROTECTED_GIT_COMPONENT for part in parts
+    ) or (
+        bool(parts)
+        and normalized_component(parts[-1]) == PROTECTED_INSTRUCTION_FILENAME
     )
 
 
@@ -102,7 +105,9 @@ def _hash_file(path: pathlib.Path, max_bytes: int | None = None) -> str:
                 break
             total_bytes += len(chunk)
             if max_bytes is not None and total_bytes > max_bytes:
-                raise HookError(f"File grew beyond bounded read budget while reading: {path}")
+                raise HookError(
+                    f"File grew beyond bounded read budget while reading: {path}"
+                )
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -116,11 +121,15 @@ def _read_regular_file(
             raise HookError(f"File exceeds bounded read budget before reading: {path}")
         content = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
         if max_bytes is not None and len(content) > max_bytes:
-            raise HookError(f"File grew beyond bounded read budget while reading: {path}")
+            raise HookError(
+                f"File grew beyond bounded read budget while reading: {path}"
+            )
         return content, metadata.st_mode
 
 
-def _snapshot_destination(repo_root: pathlib.Path, relative_path: str) -> DestinationState:
+def _snapshot_destination(
+    repo_root: pathlib.Path, relative_path: str
+) -> DestinationState:
     destination = _repo_path_from_git(repo_root, relative_path)
     if path_has_symlink(repo_root, destination):
         return DestinationState("symlink")
@@ -143,15 +152,23 @@ def _repo_path_from_git(repo_root: pathlib.Path, path: str) -> pathlib.Path:
     return repo_root.joinpath(*pure_path.parts)
 
 
-def _snapshot_repo_files(repo_root: pathlib.Path, paths: set[str]) -> dict[str, FileSnapshot]:
+def _snapshot_repo_files(
+    repo_root: pathlib.Path, paths: set[str]
+) -> dict[str, FileSnapshot]:
     if len(paths) > STAGING_MAX_FILES:
-        raise HookError("Git-visible checkout changes exceed the bounded safety snapshot budget")
+        raise HookError(
+            "Git-visible checkout changes exceed the bounded safety snapshot budget"
+        )
     snapshot: dict[str, FileSnapshot] = {}
     total_bytes = 0
     for path in paths:
         full_path = _repo_path_from_git(repo_root, path)
         if path_has_symlink(repo_root, full_path):
-            mode = full_path.lstat().st_mode if full_path.exists() or full_path.is_symlink() else None
+            mode = (
+                full_path.lstat().st_mode
+                if full_path.exists() or full_path.is_symlink()
+                else None
+            )
             snapshot[path] = (
                 "symlink",
                 mode,
@@ -205,12 +222,16 @@ def _snapshot_git_control_metadata(context: RuntimeContext) -> MetadataSnapshot:
 
     def excluded(path: pathlib.Path) -> bool:
         lexical = pathlib.Path(os.path.abspath(path))
-        return any(is_path_within(lexical, namespace) for namespace in excluded_namespaces)
+        return any(
+            is_path_within(lexical, namespace) for namespace in excluded_namespaces
+        )
 
     def record(key: str, path: pathlib.Path) -> None:
         budget["entries"] += 1
         if budget["entries"] > METADATA_MAX_FILES:
-            raise HookError("Git control metadata exceeds the bounded safety snapshot budget")
+            raise HookError(
+                "Git control metadata exceeds the bounded safety snapshot budget"
+            )
         if path_is_link_or_reparse(path):
             raise HookError(
                 f"Refusing symlinked monitored Git metadata or reparse point: {key} ({path})"
@@ -282,7 +303,13 @@ def _snapshot_git_control_metadata(context: RuntimeContext) -> MetadataSnapshot:
                 "refs",
                 "worktrees",
             },
-            skipped_root_files={"HEAD", "config", "config.worktree", "index", "packed-refs"},
+            skipped_root_files={
+                "HEAD",
+                "config",
+                "config.worktree",
+                "index",
+                "packed-refs",
+            },
         )
         record("current:logs/HEAD", common_dir / "logs" / "HEAD")
     else:
@@ -318,11 +345,15 @@ def _git_index_state(repo_root: pathlib.Path) -> tuple[str, str]:
     staged = run_command(
         ["git", "ls-files", "--stage", "-z"], cwd=repo_root, check=True
     ).stdout
-    flags = run_command(["git", "ls-files", "-v", "-z"], cwd=repo_root, check=True).stdout
+    flags = run_command(
+        ["git", "ls-files", "-v", "-z"], cwd=repo_root, check=True
+    ).stdout
     return staged, flags
 
 
-def _validate_apply_allowlist(repo_root: pathlib.Path, patterns: tuple[str, ...]) -> None:
+def _validate_apply_allowlist(
+    repo_root: pathlib.Path, patterns: tuple[str, ...]
+) -> None:
     for pattern in patterns:
         parts = relative_path_parts(pattern, "Apply allow_paths entry")
         if any(normalized_component(part) == PROTECTED_GIT_COMPONENT for part in parts):
@@ -337,7 +368,9 @@ def _validate_apply_allowlist(repo_root: pathlib.Path, patterns: tuple[str, ...]
         if len(static_parts) == len(parts):
             candidates = [repo_root.joinpath(*parts)]
         else:
-            candidates = [repo_root.joinpath(*static_parts)] if static_parts else [repo_root]
+            candidates = (
+                [repo_root.joinpath(*static_parts)] if static_parts else [repo_root]
+            )
         for candidate in candidates:
             if path_has_symlink(repo_root, candidate):
                 raise HookError(f"Apply allow_paths traverses a symlink: {pattern}")
@@ -392,7 +425,9 @@ def _copy_checkout_to_staging(
             )
         resolved_source = source.resolve(strict=False)
         if not is_path_within(resolved_source, resolved_repo_root):
-            raise HookError(f"Allowed checkout source escapes repository: {relative_path}")
+            raise HookError(
+                f"Allowed checkout source escapes repository: {relative_path}"
+            )
         if any(is_path_within(resolved_source, root) for root in git_roots):
             continue
         if not source.exists():
@@ -400,15 +435,21 @@ def _copy_checkout_to_staging(
         if not stat.S_ISREG(source.lstat().st_mode):
             if project_access == "project":
                 continue
-            raise HookError(f"Allowed checkout path is not a regular file: {relative_path}")
+            raise HookError(
+                f"Allowed checkout path is not a regular file: {relative_path}"
+            )
         copied_files += 1
         if copied_files > STAGING_MAX_FILES:
-            raise HookError("Allowed apply files exceed the bounded staging workspace budget")
+            raise HookError(
+                "Allowed apply files exceed the bounded staging workspace budget"
+            )
         remaining_bytes = STAGING_MAX_BYTES - copied_bytes
         content, source_mode = _read_regular_file(source, max_bytes=remaining_bytes)
         copied_bytes += len(content)
         if copied_bytes > STAGING_MAX_BYTES:
-            raise HookError("Allowed apply files exceed the bounded staging workspace budget")
+            raise HookError(
+                "Allowed apply files exceed the bounded staging workspace budget"
+            )
         baselines[relative_path] = DestinationState(
             "file",
             source_mode,
@@ -427,7 +468,9 @@ def _inventory_staging(staging_root: pathlib.Path) -> dict[str, StagedFile]:
     for directory, dirnames, filenames in os.walk(staging_root, followlinks=False):
         total_entries += len(dirnames) + len(filenames)
         if total_entries > STAGING_MAX_FILES:
-            raise HookError("Apply staging workspace exceeds its bounded inventory budget")
+            raise HookError(
+                "Apply staging workspace exceeds its bounded inventory budget"
+            )
         directory_path = pathlib.Path(directory)
         for name in dirnames:
             path = directory_path / name
@@ -445,10 +488,14 @@ def _inventory_staging(staging_root: pathlib.Path) -> dict[str, StagedFile]:
                     f"Apply staging workspace contains symlink or reparse point: {relative}"
                 )
             if not stat.S_ISREG(metadata.st_mode):
-                raise HookError(f"Apply staging workspace contains non-regular file: {relative}")
+                raise HookError(
+                    f"Apply staging workspace contains non-regular file: {relative}"
+                )
             total_bytes += metadata.st_size
             if len(inventory) >= STAGING_MAX_FILES or total_bytes > STAGING_MAX_BYTES:
-                raise HookError("Apply staging workspace exceeds its bounded inventory budget")
+                raise HookError(
+                    "Apply staging workspace exceeds its bounded inventory budget"
+                )
             inventory[relative] = StagedFile(
                 _hash_file(path, metadata.st_size), metadata.st_mode, metadata.st_size
             )
@@ -471,7 +518,10 @@ def _changed_staging_paths(
         )
     )
     if unexpected:
-        raise HookError("Apply staging workspace contains paths outside allowlist: " + ", ".join(unexpected))
+        raise HookError(
+            "Apply staging workspace contains paths outside allowlist: "
+            + ", ".join(unexpected)
+        )
     return {path for path in all_paths if before.get(path) != after.get(path)}
 
 
@@ -506,7 +556,9 @@ def _ignored_changed_paths(
 def _safe_destination(context: RuntimeContext, relative_path: str) -> pathlib.Path:
     repo_root = context.repo_root.resolve(strict=True)
     if _is_protected_path(relative_path):
-        raise HookError(f"Apply destination must not contain Git metadata: {relative_path}")
+        raise HookError(
+            f"Apply destination must not contain Git metadata: {relative_path}"
+        )
     destination = _repo_path_from_git(repo_root, relative_path)
     if path_has_symlink(repo_root, destination):
         raise HookError(f"Apply destination is or traverses a symlink: {relative_path}")
@@ -514,8 +566,12 @@ def _safe_destination(context: RuntimeContext, relative_path: str) -> pathlib.Pa
     while not existing_parent.exists() and existing_parent != repo_root:
         existing_parent = existing_parent.parent
     if not existing_parent.is_dir():
-        raise HookError(f"Apply destination has a non-directory parent: {relative_path}")
-    if not is_path_within(existing_parent.resolve(strict=True), repo_root.resolve(strict=True)):
+        raise HookError(
+            f"Apply destination has a non-directory parent: {relative_path}"
+        )
+    if not is_path_within(
+        existing_parent.resolve(strict=True), repo_root.resolve(strict=True)
+    ):
         raise HookError(f"Apply destination escapes repository: {relative_path}")
     resolved_destination = destination.resolve(strict=False)
     git_roots = (
@@ -523,7 +579,9 @@ def _safe_destination(context: RuntimeContext, relative_path: str) -> pathlib.Pa
         resolve_git_common_dir(context.repo_root).resolve(strict=True),
     )
     if any(is_path_within(resolved_destination, root) for root in git_roots):
-        raise HookError(f"Apply destination resolves inside Git metadata: {relative_path}")
+        raise HookError(
+            f"Apply destination resolves inside Git metadata: {relative_path}"
+        )
     return destination
 
 
@@ -547,16 +605,23 @@ def _preflight_apply_operations(
     conflicts = [
         operation.relative_path
         for operation in operations
-        if _snapshot_destination(context.repo_root, operation.relative_path) != operation.baseline
+        if _snapshot_destination(context.repo_root, operation.relative_path)
+        != operation.baseline
     ]
     if conflicts:
         raise HookError(
-            "Apply checkout changed concurrently; refusing to overwrite: " + ", ".join(conflicts)
+            "Apply checkout changed concurrently; refusing to overwrite: "
+            + ", ".join(conflicts)
         )
 
 
-def _verify_operation_baseline(context: RuntimeContext, operation: ApplyOperation) -> None:
-    if _snapshot_destination(context.repo_root, operation.relative_path) != operation.baseline:
+def _verify_operation_baseline(
+    context: RuntimeContext, operation: ApplyOperation
+) -> None:
+    if (
+        _snapshot_destination(context.repo_root, operation.relative_path)
+        != operation.baseline
+    ):
         raise HookError(
             "Apply checkout changed concurrently; refusing to overwrite: "
             + operation.relative_path
@@ -575,7 +640,10 @@ def _propagate_staging_changes(
         _ignored_changed_paths(context.repo_root, changed_paths, work_tree=staging_root)
     )
     if ignored:
-        raise HookError("Refusing to copy staging output to ignored paths: " + ", ".join(sorted(ignored)))
+        raise HookError(
+            "Refusing to copy staging output to ignored paths: "
+            + ", ".join(sorted(ignored))
+        )
     operations: list[ApplyOperation] = []
     expected: dict[str, StagedFile | None] = {}
     for relative_path in sorted(changed_paths):
@@ -598,12 +666,13 @@ def _propagate_staging_changes(
         if not is_path_within(
             source.resolve(strict=True), staging_root.resolve(strict=True)
         ):
-            raise HookError(f"Refusing staged output that escapes workspace: {relative_path}")
+            raise HookError(
+                f"Refusing staged output that escapes workspace: {relative_path}"
+            )
         content, source_mode = _read_regular_file(source, max_bytes=staged.size)
-        if (
-            hashlib.sha256(content).hexdigest() != staged.digest
-            or stat.S_IMODE(source_mode) != stat.S_IMODE(staged.mode)
-        ):
+        if hashlib.sha256(content).hexdigest() != staged.digest or stat.S_IMODE(
+            source_mode
+        ) != stat.S_IMODE(staged.mode):
             raise HookError(f"Staged output changed after validation: {relative_path}")
         approved_mode = _conservative_propagation_mode(baseline, staged.mode)
         operations.append(
@@ -649,13 +718,14 @@ def _verify_propagated_changes(
             mismatches.append(relative_path)
             continue
         metadata = destination.lstat()
-        if _hash_file(destination, staged.size) != staged.digest or stat.S_IMODE(metadata.st_mode) != stat.S_IMODE(
-            staged.mode
-        ):
+        if _hash_file(destination, staged.size) != staged.digest or stat.S_IMODE(
+            metadata.st_mode
+        ) != stat.S_IMODE(staged.mode):
             mismatches.append(relative_path)
     if mismatches:
         raise HookError(
-            "Real checkout does not match validated staging output: " + ", ".join(mismatches)
+            "Real checkout does not match validated staging output: "
+            + ", ".join(mismatches)
         )
 
 
@@ -834,7 +904,9 @@ def run_apply_step(
     call_error: Exception | None = None
     staged_changes: set[str] = set()
     propagated_expected: dict[str, StagedFile | None] = {}
-    with tempfile.TemporaryDirectory(prefix="ai-push-hooks-apply-") as temporary_directory:
+    with tempfile.TemporaryDirectory(
+        prefix="ai-push-hooks-apply-"
+    ) as temporary_directory:
         staging_root = pathlib.Path(temporary_directory).resolve(strict=True)
         profile = resolve_runner_profile(context.config, step)
         destination_baselines = _copy_checkout_to_staging(
@@ -877,11 +949,17 @@ def run_apply_step(
             metadata_before,
         )
         if call_error is not None:
-            raise HookError(f"Apply step failed in isolated staging: {call_error}") from call_error
+            raise HookError(
+                f"Apply step failed in isolated staging: {call_error}"
+            ) from call_error
         if result is None:
             raise HookError("Apply step failed without a runner result")
         if result.returncode != 0:
-            details = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            details = (
+                result.stderr.strip()
+                or result.stdout.strip()
+                or f"exit code {result.returncode}"
+            )
             raise HookError(f"Apply step failed in isolated staging: {details}")
         propagated_expected = _propagate_staging_changes(
             context,

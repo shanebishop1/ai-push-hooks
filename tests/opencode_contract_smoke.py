@@ -19,7 +19,12 @@ README_BEFORE = "Synthetic beta smoke repository.\n"
 README_AFTER = README_BEFORE + "\nBeta smoke edit applied.\n"
 
 
-def run(command: list[str], cwd: pathlib.Path | None = None, *, input_text: str | None = None) -> str:
+def run(
+    command: list[str],
+    cwd: pathlib.Path | None = None,
+    *,
+    input_text: str | None = None,
+) -> str:
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -126,16 +131,23 @@ class MockProvider:
         with self._lock:
             self.requests.append((path, payload))
 
-    def response_plan(self, payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    def response_plan(
+        self, payload: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
         text = request_text(payload)
         results = tool_result_messages(payload)
         if "[smoke_project_read]" in text:
             if not results:
                 calls = [
-                    tool_call("read", {"filePath": f"{workspace_path(payload)}/README.md"}, 20),
+                    tool_call(
+                        "read", {"filePath": f"{workspace_path(payload)}/README.md"}, 20
+                    ),
                 ]
                 self.issued_tool_calls.extend(
-                    (call["function"]["name"], json.loads(call["function"]["arguments"]))
+                    (
+                        call["function"]["name"],
+                        json.loads(call["function"]["arguments"]),
+                    )
                     for call in calls
                 )
                 return "tools", calls
@@ -158,7 +170,10 @@ class MockProvider:
                     tool_call("websearch", {"query": "forbidden smoke search"}, 9),
                 ]
                 self.issued_tool_calls.extend(
-                    (call["function"]["name"], json.loads(call["function"]["arguments"]))
+                    (
+                        call["function"]["name"],
+                        json.loads(call["function"]["arguments"]),
+                    )
                     for call in calls
                 )
                 return "tools", calls
@@ -170,7 +185,10 @@ class MockProvider:
                     tool_call("read", {"filePath": f"{workspace}/README.md"}, 6),
                 ]
                 self.issued_tool_calls.extend(
-                    (call["function"]["name"], json.loads(call["function"]["arguments"]))
+                    (
+                        call["function"]["name"],
+                        json.loads(call["function"]["arguments"]),
+                    )
                     for call in calls
                 )
                 return "tools", calls
@@ -187,7 +205,10 @@ class MockProvider:
                     )
                 ]
                 self.issued_tool_calls.extend(
-                    (call["function"]["name"], json.loads(call["function"]["arguments"]))
+                    (
+                        call["function"]["name"],
+                        json.loads(call["function"]["arguments"]),
+                    )
                     for call in calls
                 )
                 return "tools", calls
@@ -212,7 +233,10 @@ class MockProvider:
                     ),
                 ]
                 self.issued_tool_calls.extend(
-                    (call["function"]["name"], json.loads(call["function"]["arguments"]))
+                    (
+                        call["function"]["name"],
+                        json.loads(call["function"]["arguments"]),
+                    )
                     for call in calls
                 )
                 return "tools", calls
@@ -232,7 +256,9 @@ class MockProvider:
             "object": "chat.completion",
             "created": int(time.time()),
             "model": "mock-model",
-            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            "choices": [
+                {"index": 0, "message": message, "finish_reason": finish_reason}
+            ],
         }
 
     def chat_stream_chunks(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -249,7 +275,9 @@ class MockProvider:
                 "object": "chat.completion.chunk",
                 "created": int(time.time()),
                 "model": "mock-model",
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+                "choices": [
+                    {"index": 0, "delta": delta, "finish_reason": finish_reason}
+                ],
             }
         ]
 
@@ -342,7 +370,11 @@ class MockProvider:
                 }
                 content_part = {"type": "output_text", "text": "", "annotations": []}
                 finished_part = {"type": "output_text", "text": "[]", "annotations": []}
-                finished_message = {**message, "status": "completed", "content": [finished_part]}
+                finished_message = {
+                    **message,
+                    "status": "completed",
+                    "content": [finished_part],
+                }
                 events.extend(
                     [
                         {
@@ -404,7 +436,9 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path.rstrip("/") in {"/v1/models", "/models"}:
-            self.send_json({"object": "list", "data": [{"id": "mock-model", "object": "model"}]})
+            self.send_json(
+                {"object": "list", "data": [{"id": "mock-model", "object": "model"}]}
+            )
             return
         self.send_error(404)
 
@@ -428,7 +462,9 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 response = self.server.provider.chat_response(payload)
             self.send_json(response)
         except Exception as exc:  # pragma: no cover - surfaced by the client
-            self.send_json({"error": {"message": str(exc), "type": "mock_error"}}, status=500)
+            self.send_json(
+                {"error": {"message": str(exc), "type": "mock_error"}}, status=500
+            )
 
     def send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
         encoded = json.dumps(payload).encode("utf-8")
@@ -447,8 +483,12 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         for payload in payloads:
             event_type = str(payload.get("type", "message"))
             self.wfile.write(
-                b"event: " + event_type.encode("utf-8") + b"\n"
-                + b"data: " + json.dumps(payload).encode("utf-8") + b"\n\n"
+                b"event: "
+                + event_type.encode("utf-8")
+                + b"\n"
+                + b"data: "
+                + json.dumps(payload).encode("utf-8")
+                + b"\n\n"
             )
             self.wfile.flush()
         self.wfile.write(b"data: [DONE]\n\n")
@@ -460,7 +500,9 @@ class MockServer(http.server.ThreadingHTTPServer):
         self.provider = provider
 
 
-def protected_git_snapshot(git_dir: pathlib.Path) -> dict[str, tuple[str, int, bytes | str]]:
+def protected_git_snapshot(
+    git_dir: pathlib.Path,
+) -> dict[str, tuple[str, int, bytes | str]]:
     snapshot: dict[str, tuple[str, int, bytes | str]] = {}
     for path in sorted(git_dir.rglob("*")):
         relative = path.relative_to(git_dir)
@@ -486,7 +528,7 @@ def create_synthetic_repo(root: pathlib.Path) -> pathlib.Path:
     write(repo / "outside.txt", "Outside allowlist must remain unchanged.\n")
     write(
         repo / "ai-push-hooks.toml",
-        '''[general]
+        """[general]
 skip_on_sync_branch = false
 base_branch = "main"
 
@@ -519,7 +561,7 @@ id = "apply"
 type = "apply"
 prompt = "[SMOKE_APPLY] Make only the requested synthetic README edit."
 allow_paths = ["README.md"]
-''',
+""",
     )
     git(repo, "config", "user.name", "OpenCode smoke test")
     git(repo, "config", "user.email", "smoke@example.invalid")
@@ -534,13 +576,19 @@ allow_paths = ["README.md"]
 
 def assert_provider_contract(provider: MockProvider) -> None:
     readonly_requests = [
-        payload for _path, payload in provider.requests if "[smoke_readonly]" in request_text(payload)
+        payload
+        for _path, payload in provider.requests
+        if "[smoke_readonly]" in request_text(payload)
     ]
     apply_requests = [
-        payload for _path, payload in provider.requests if "[smoke_apply]" in request_text(payload)
+        payload
+        for _path, payload in provider.requests
+        if "[smoke_apply]" in request_text(payload)
     ]
     if not readonly_requests or not apply_requests:
-        raise AssertionError("real OpenCode did not reach both mock-provider smoke stages")
+        raise AssertionError(
+            "real OpenCode did not reach both mock-provider smoke stages"
+        )
 
     def result_call_id(result: dict[str, Any]) -> str | None:
         for key in ("call_id", "tool_call_id", "toolCallId"):
@@ -594,7 +642,9 @@ def assert_provider_contract(provider: MockProvider) -> None:
     for call_id, name in readonly_calls.items():
         result = readonly_results.get(call_id)
         if result is None or not is_denied(result):
-            raise AssertionError(f"real OpenCode did not deny or hide read-only `{name}` tool request")
+            raise AssertionError(
+                f"real OpenCode did not deny or hide read-only `{name}` tool request"
+            )
 
     apply_calls = [
         arguments
@@ -603,11 +653,17 @@ def assert_provider_contract(provider: MockProvider) -> None:
     ]
     apply_paths = {str(arguments["filePath"]).lower() for arguments in apply_calls}
     if not any(path.endswith("/readme.md") for path in apply_paths):
-        raise AssertionError("mock provider did not issue the allowlisted README write request")
+        raise AssertionError(
+            "mock provider did not issue the allowlisted README write request"
+        )
     if not any(path.endswith("/outside.txt") for path in apply_paths):
-        raise AssertionError("mock provider did not issue the outside-allowlist write request")
+        raise AssertionError(
+            "mock provider did not issue the outside-allowlist write request"
+        )
     if not any(path.endswith("/.git/head") for path in apply_paths):
-        raise AssertionError("mock provider did not issue the protected Git metadata write request")
+        raise AssertionError(
+            "mock provider did not issue the protected Git metadata write request"
+        )
 
     apply_results = results_by_call_id(apply_requests)
     allowed_result = apply_results.get("smoke-call-3")
@@ -622,7 +678,9 @@ def assert_provider_contract(provider: MockProvider) -> None:
             raise AssertionError(f"real OpenCode did not deny the {name}")
 
 
-def run_adapter_project_contract(root: pathlib.Path, repo: pathlib.Path, provider: MockProvider) -> None:
+def run_adapter_project_contract(
+    root: pathlib.Path, repo: pathlib.Path, provider: MockProvider
+) -> None:
     """Exercise the new runner directly against the same loopback provider.
 
     The workflow smoke above intentionally preserves the shipped compatibility
@@ -678,9 +736,13 @@ def run_adapter_project_contract(root: pathlib.Path, repo: pathlib.Path, provide
             f"text={request_text(payload)[:180]}"
             for path, payload in provider.requests[requests_before_read:]
         )
-        raise RuntimeError(f"adapter project read failed: {exc}; provider requests: {seen}") from exc
+        raise RuntimeError(
+            f"adapter project read failed: {exc}; provider requests: {seen}"
+        ) from exc
     if read_result.final_text.strip() != "[]":
-        raise AssertionError("OpenCode project analysis did not return the expected mock response")
+        raise AssertionError(
+            "OpenCode project analysis did not return the expected mock response"
+        )
     read_requests = [
         payload
         for _path, payload in provider.requests
@@ -693,7 +755,9 @@ def run_adapter_project_contract(root: pathlib.Path, repo: pathlib.Path, provide
         raise AssertionError("adapter project analysis read permission was blocked")
     read_result = runner.finalize(read_request, read_result)
     if read_result.session is None or read_result.session.state != "deleted":
-        raise AssertionError("adapter project analysis session was not deleted in its isolated environment")
+        raise AssertionError(
+            "adapter project analysis session was not deleted in its isolated environment"
+        )
 
     staging = root / "adapter-project-staging"
     staging.mkdir()
@@ -722,13 +786,19 @@ def run_adapter_project_contract(root: pathlib.Path, repo: pathlib.Path, provide
     if not apply_requests:
         raise AssertionError("adapter project apply did not reach the mock provider")
     apply_results = tool_result_messages(apply_requests[-1])
-    if not apply_results or any("denied" in request_text(item) for item in apply_results[:1]):
+    if not apply_results or any(
+        "denied" in request_text(item) for item in apply_results[:1]
+    ):
         raise AssertionError("adapter project apply broad read permission was blocked")
     if (staging / "README.md").read_text(encoding="utf-8") != README_AFTER:
-        raise AssertionError("adapter project apply did not update the allowlisted staging file")
+        raise AssertionError(
+            "adapter project apply did not update the allowlisted staging file"
+        )
     apply_result = runner.finalize(apply_request, apply_result)
     if apply_result.session is None or apply_result.session.state != "deleted":
-        raise AssertionError("adapter project apply session was not deleted in its isolated environment")
+        raise AssertionError(
+            "adapter project apply session was not deleted in its isolated environment"
+        )
 
 
 def main() -> int:
@@ -745,7 +815,9 @@ def main() -> int:
     thread.start()
 
     try:
-        with tempfile.TemporaryDirectory(prefix="opencode-contract-") as temporary_directory:
+        with tempfile.TemporaryDirectory(
+            prefix="opencode-contract-"
+        ) as temporary_directory:
             root = pathlib.Path(temporary_directory)
             repo = create_synthetic_repo(root)
             before_git = protected_git_snapshot(repo / ".git")
@@ -767,7 +839,14 @@ def main() -> int:
                 "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
             }
             completed = subprocess.run(
-                [sys.executable, "-m", "ai_push_hooks", "hook", "origin", "loopback://synthetic"],
+                [
+                    sys.executable,
+                    "-m",
+                    "ai_push_hooks",
+                    "hook",
+                    "origin",
+                    "loopback://synthetic",
+                ],
                 cwd=repo,
                 input=push_input,
                 text=True,
@@ -785,7 +864,7 @@ def main() -> int:
                     f"ai-push-hooks hook failed ({completed.returncode})\n"
                     f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}\n"
                     f"mock provider requests: {requests_seen}"
-            )
+                )
 
             if (repo / "README.md").read_text(encoding="utf-8") != README_AFTER:
                 request_summary = " | ".join(
@@ -818,9 +897,13 @@ def main() -> int:
             if before_git != after_git:
                 changed = sorted(set(before_git) ^ set(after_git))
                 changed.extend(
-                    key for key in sorted(set(before_git) & set(after_git)) if before_git[key] != after_git[key]
+                    key
+                    for key in sorted(set(before_git) & set(after_git))
+                    if before_git[key] != after_git[key]
                 )
-                raise AssertionError("protected Git metadata changed: " + ", ".join(changed))
+                raise AssertionError(
+                    "protected Git metadata changed: " + ", ".join(changed)
+                )
 
             saved_openai_key = os.environ.get("OPENAI_API_KEY")
             saved_openai_base_url = os.environ.get("OPENAI_BASE_URL")
@@ -856,8 +939,12 @@ def main() -> int:
         server.server_close()
         thread.join(timeout=5)
 
-    print("PASS: real OpenCode contract, allowlist propagation, and Git metadata checks")
-    print("PASS: no external model calls (runtime network=none; provider=loopback mock)")
+    print(
+        "PASS: real OpenCode contract, allowlist propagation, and Git metadata checks"
+    )
+    print(
+        "PASS: no external model calls (runtime network=none; provider=loopback mock)"
+    )
     return 0
 
 

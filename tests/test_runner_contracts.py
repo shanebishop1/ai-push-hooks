@@ -58,18 +58,28 @@ def request(tmp_path: pathlib.Path, **overrides: object) -> RunnerRequest:
     return RunnerRequest(**values)
 
 
-def test_request_is_flat_and_packet_inputs_remain_ordered(tmp_path: pathlib.Path) -> None:
+def test_request_is_flat_and_packet_inputs_remain_ordered(
+    tmp_path: pathlib.Path,
+) -> None:
     value = request(tmp_path)
 
     assert value.profile_id == "review"
     assert value.runner_type == "command"
-    assert [artifact.name for artifact in value.artifacts] == ["first.txt", "second.txt"]
-    assert [artifact.content for artifact in value.artifacts] == ["first body", "second body"]
+    assert [artifact.name for artifact in value.artifacts] == [
+        "first.txt",
+        "second.txt",
+    ]
+    assert [artifact.content for artifact in value.artifacts] == [
+        "first body",
+        "second body",
+    ]
     assert "first body" not in repr(value)
     assert "second body" not in repr(value)
 
 
-def test_prompt_packet_rendering_preserves_instruction_and_artifact_order(tmp_path: pathlib.Path) -> None:
+def test_prompt_packet_rendering_preserves_instruction_and_artifact_order(
+    tmp_path: pathlib.Path,
+) -> None:
     value = request(tmp_path)
     packet = build_prompt_packet(value).render()
 
@@ -78,7 +88,9 @@ def test_prompt_packet_rendering_preserves_instruction_and_artifact_order(tmp_pa
     assert value.instruction in packet
 
 
-def test_registry_has_only_static_known_types_and_loads_lazily(tmp_path: pathlib.Path) -> None:
+def test_registry_has_only_static_known_types_and_loads_lazily(
+    tmp_path: pathlib.Path,
+) -> None:
     loaded: list[str] = []
 
     class FakeRunner:
@@ -91,9 +103,7 @@ def test_registry_has_only_static_known_types_and_loads_lazily(tmp_path: pathlib
         loaded.append("command")
         return FakeRunner()
 
-    specs = {
-        name: LazyRunnerSpec("unused") for name in KNOWN_RUNNER_TYPES
-    }
+    specs = {name: LazyRunnerSpec("unused") for name in KNOWN_RUNNER_TYPES}
     specs["command"] = factory
     registry = RunnerRegistry(specs)
 
@@ -176,7 +186,9 @@ def test_registry_uses_independent_locks_for_different_adapters() -> None:
     assert all(callable(getattr(runner, "run", None)) for runner in loaded)
 
 
-def test_result_and_session_metadata_do_not_claim_ephemeral_transcript_as_persisted() -> None:
+def test_result_and_session_metadata_do_not_claim_ephemeral_transcript_as_persisted() -> (
+    None
+):
     result = RunnerResult(
         final_text="done",
         returncode=0,
@@ -194,7 +206,9 @@ def test_result_and_session_metadata_do_not_claim_ephemeral_transcript_as_persis
         SessionMetadata(session_id="s-1", state="deleted", resumable=True)
 
 
-def test_optional_finalize_capability_is_a_noop_when_not_supported(tmp_path: pathlib.Path) -> None:
+def test_optional_finalize_capability_is_a_noop_when_not_supported(
+    tmp_path: pathlib.Path,
+) -> None:
     class NoLifecycle:
         capabilities = RunnerCapabilities()
 
@@ -206,7 +220,9 @@ def test_optional_finalize_capability_is_a_noop_when_not_supported(tmp_path: pat
     assert finalize_runner(NoLifecycle(), value, result) is result
 
 
-def test_finalize_capability_must_return_a_runner_result(tmp_path: pathlib.Path) -> None:
+def test_finalize_capability_must_return_a_runner_result(
+    tmp_path: pathlib.Path,
+) -> None:
     class BadLifecycle:
         capabilities = RunnerCapabilities(supports_finalize=True)
 
@@ -214,10 +230,14 @@ def test_finalize_capability_must_return_a_runner_result(tmp_path: pathlib.Path)
             return object()
 
     with pytest.raises(RunnerProtocolError, match="finalizer"):
-        finalize_runner(BadLifecycle(), request(tmp_path), RunnerResult("done", 0, "", ""))
+        finalize_runner(
+            BadLifecycle(), request(tmp_path), RunnerResult("done", 0, "", "")
+        )
 
 
-def test_diagnostics_are_bounded_redacted_and_do_not_need_environment_or_prompt(tmp_path: pathlib.Path) -> None:
+def test_diagnostics_are_bounded_redacted_and_do_not_need_environment_or_prompt(
+    tmp_path: pathlib.Path,
+) -> None:
     diagnostic = bounded_redacted_diagnostics(
         "prompt body api_key=super-secret " + "x" * 20,
         "Authorization: Bearer bearer-secret",
@@ -329,7 +349,9 @@ def test_large_request_diagnostics_are_suppressed_before_redaction_scans(
     assert "credential-secret" not in message
 
 
-def test_shell_free_process_execution_captures_stdin_and_separate_streams(tmp_path: pathlib.Path) -> None:
+def test_shell_free_process_execution_captures_stdin_and_separate_streams(
+    tmp_path: pathlib.Path,
+) -> None:
     result = run_process(
         [
             sys.executable,
@@ -408,16 +430,20 @@ def test_repeated_concurrent_processes_preserve_output_and_close_pipe_owners(
     assert invoke(64) == "descriptor-message-64\n"
 
 
-def test_process_errors_classify_not_found_timeout_and_signal(tmp_path: pathlib.Path) -> None:
+def test_process_errors_classify_not_found_timeout_and_signal(
+    tmp_path: pathlib.Path,
+) -> None:
     with pytest.raises(RunnerExecutableNotFoundError):
-        run_process([str(tmp_path / "missing-executable")], cwd=tmp_path, timeout_seconds=1)
+        run_process(
+            [str(tmp_path / "missing-executable")], cwd=tmp_path, timeout_seconds=1
+        )
 
     with pytest.raises(RunnerTimeoutError) as timeout_error:
         run_process(
             [
                 sys.executable,
                 "-c",
-                "import sys, time; print('{\"sessionID\":\"timeout-session\"}', flush=True); time.sleep(10)",
+                'import sys, time; print(\'{"sessionID":"timeout-session"}\', flush=True); time.sleep(10)',
             ],
             cwd=tmp_path,
             # Interpreter startup can exceed 50ms on a loaded CI host;
@@ -451,7 +477,9 @@ def test_process_start_errors_do_not_echo_raw_exception_arguments(
     def fail_to_start(*_args: object, **_kwargs: object) -> None:
         raise OSError("api_key=exception-secret")
 
-    monkeypatch.setattr("ai_push_hooks.executors.runners.process.subprocess.Popen", fail_to_start)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runners.process.subprocess.Popen", fail_to_start
+    )
     with pytest.raises(RunnerError) as error:
         run_process([sys.executable], cwd=tmp_path, timeout_seconds=1)
     assert "exception-secret" not in str(error.value)
@@ -465,7 +493,9 @@ def _active_pid(pid: int) -> bool:
     if sys.platform.startswith("linux"):
         stat_path = pathlib.Path(f"/proc/{pid}/stat")
         try:
-            state = stat_path.read_text(encoding="utf-8").split(") ", 1)[1].split(" ", 1)[0]
+            state = (
+                stat_path.read_text(encoding="utf-8").split(") ", 1)[1].split(" ", 1)[0]
+            )
         except (FileNotFoundError, IndexError):
             return False
         return state != "Z"
@@ -479,7 +509,9 @@ def _wait_for_pid_exit(pid: int, timeout: float = 2.0) -> bool:
     return not _active_pid(pid)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="process-group regression requires POSIX semantics")
+@pytest.mark.skipif(
+    os.name != "posix", reason="process-group regression requires POSIX semantics"
+)
 def test_cleanup_kills_descendant_holding_pipes_after_leader_exits(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -504,7 +536,9 @@ def test_cleanup_kills_descendant_holding_pipes_after_leader_exits(
     assert _wait_for_pid_exit(child_pid)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="process-group regression requires POSIX semantics")
+@pytest.mark.skipif(
+    os.name != "posix", reason="process-group regression requires POSIX semantics"
+)
 def test_cleanup_kills_term_ignoring_grandchild_after_parent_signal_exit(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -530,7 +564,9 @@ def test_cleanup_kills_term_ignoring_grandchild_after_parent_signal_exit(
     assert _wait_for_pid_exit(child_pid)
 
 
-def test_nonzero_and_missing_final_output_are_distinct_contract_failures(tmp_path: pathlib.Path) -> None:
+def test_nonzero_and_missing_final_output_are_distinct_contract_failures(
+    tmp_path: pathlib.Path,
+) -> None:
     value = request(tmp_path)
     result = RunnerResult("", 7, "", "token=hidden")
     with pytest.raises(RunnerNonzeroExitError, match="review.*command.*docs.query"):

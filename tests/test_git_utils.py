@@ -129,8 +129,12 @@ def test_run_command_returns_signal_result_when_check_is_false(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     process_result = ProcessResult(-signal.SIGTERM, "partial", "signal output")
-    error = _error_with_result(RunnerSignalError("private signal details"), process_result)
-    monkeypatch.setattr(git_utils, "run_process", lambda *_args, **_kwargs: _raise(error))
+    error = _error_with_result(
+        RunnerSignalError("private signal details"), process_result
+    )
+    monkeypatch.setattr(
+        git_utils, "run_process", lambda *_args, **_kwargs: _raise(error)
+    )
 
     result = git_utils.run_command(["git", "status"], cwd=tmp_path, check=False)
 
@@ -143,7 +147,9 @@ def test_run_command_returns_signal_result_when_check_is_false(
     "error_factory, expected",
     [
         (
-            lambda: RunnerExecutableNotFoundError("missing executable with secret-token"),
+            lambda: RunnerExecutableNotFoundError(
+                "missing executable with secret-token"
+            ),
             "Command executable was not found",
         ),
         (
@@ -162,7 +168,9 @@ def test_run_command_normalizes_spawn_and_timeout_errors_without_leaking_details
     expected: str,
 ) -> None:
     error = error_factory()  # type: ignore[operator]
-    monkeypatch.setattr(git_utils, "run_process", lambda *_args, **_kwargs: _raise(error))
+    monkeypatch.setattr(
+        git_utils, "run_process", lambda *_args, **_kwargs: _raise(error)
+    )
 
     with pytest.raises(HookError) as raised:
         git_utils.run_command(
@@ -181,7 +189,9 @@ def test_run_command_check_failure_is_bounded_and_redacted(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     secret = "failure-secret"
-    result = ProcessResult(3, "stdout " + secret, "stderr " + secret + "\n" + "x" * 20_000)
+    result = ProcessResult(
+        3, "stdout " + secret, "stderr " + secret + "\n" + "x" * 20_000
+    )
     monkeypatch.setattr(git_utils, "run_process", lambda *_args, **_kwargs: result)
 
     with pytest.raises(HookError, match="Command failed") as raised:

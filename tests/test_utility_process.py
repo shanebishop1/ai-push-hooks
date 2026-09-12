@@ -7,7 +7,11 @@ import time
 
 import pytest
 
-from ai_push_hooks.executors.runners import RunnerSignalError, RunnerTimeoutError, run_process
+from ai_push_hooks.executors.runners import (
+    RunnerSignalError,
+    RunnerTimeoutError,
+    run_process,
+)
 
 
 def _python(script: str, *arguments: str) -> list[str]:
@@ -141,8 +145,12 @@ def test_process_returns_nonzero_and_classifies_signals_and_timeouts(
     assert "timeout-secret" not in str(timeout_error.value)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="process-group cleanup requires POSIX semantics")
-def test_process_cleans_descendants_that_keep_pipes_open(tmp_path: pathlib.Path) -> None:
+@pytest.mark.skipif(
+    os.name != "posix", reason="process-group cleanup requires POSIX semantics"
+)
+def test_process_cleans_descendants_that_keep_pipes_open(
+    tmp_path: pathlib.Path,
+) -> None:
     pid_file = tmp_path / "descendant.pid"
     child_code = "import time; time.sleep(30)"
     parent_code = (

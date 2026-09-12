@@ -43,30 +43,44 @@ def init_config(template: str, force: bool, cwd: pathlib.Path | None = None) -> 
         except FileNotFoundError:
             metadata = None
         except OSError as exc:
-            raise HookError(f"Could not inspect config path {config_path}: {exc}") from exc
+            raise HookError(
+                f"Could not inspect config path {config_path}: {exc}"
+            ) from exc
         if metadata is not None:
             if path_is_link_or_reparse(config_path):
-                raise HookError(f"Refusing to replace symlink or reparse point: {config_path}")
+                raise HookError(
+                    f"Refusing to replace symlink or reparse point: {config_path}"
+                )
             if not stat.S_ISREG(metadata.st_mode):
-                raise HookError(f"Refusing to replace non-regular config path: {config_path}")
+                raise HookError(
+                    f"Refusing to replace non-regular config path: {config_path}"
+                )
         try:
             write_text_no_follow(config_path, MINIMAL_DOCS_TEMPLATE)
         except HookError:
             raise
         except OSError as exc:
-            raise HookError(f"Could not write config file {config_path}: {exc}") from exc
+            raise HookError(
+                f"Could not write config file {config_path}: {exc}"
+            ) from exc
     else:
         try:
             metadata = config_path.lstat()
         except FileNotFoundError:
             metadata = None
         except OSError as exc:
-            raise HookError(f"Could not inspect config path {config_path}: {exc}") from exc
+            raise HookError(
+                f"Could not inspect config path {config_path}: {exc}"
+            ) from exc
         if metadata is not None:
             if path_is_link_or_reparse(config_path):
-                raise HookError(f"Refusing to overwrite symlink or reparse point: {config_path}")
+                raise HookError(
+                    f"Refusing to overwrite symlink or reparse point: {config_path}"
+                )
             if not stat.S_ISREG(metadata.st_mode):
-                raise HookError(f"Refusing to overwrite non-regular config path: {config_path}")
+                raise HookError(
+                    f"Refusing to overwrite non-regular config path: {config_path}"
+                )
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -76,7 +90,9 @@ def init_config(template: str, force: bool, cwd: pathlib.Path | None = None) -> 
                 f"Refusing to overwrite existing config without --force: {config_path}"
             ) from exc
         except OSError as exc:
-            raise HookError(f"Could not create config file {config_path}: {exc}") from exc
+            raise HookError(
+                f"Could not create config file {config_path}: {exc}"
+            ) from exc
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 descriptor = -1

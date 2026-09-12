@@ -61,11 +61,7 @@ def pre_push_hook_script(delegate: tuple[str, ...] | None = None) -> str:
         )
     else:
         availability_check = ""
-    return (
-        "#!/bin/sh\n"
-        + availability_check
-        + f'exec {command} hook "$@"\n'
-    )
+    return "#!/bin/sh\n" + availability_check + f'exec {command} hook "$@"\n'
 
 
 def _git_value(cwd: pathlib.Path, *args: str) -> str:
@@ -81,7 +77,9 @@ def _git_value(cwd: pathlib.Path, *args: str) -> str:
     except FileNotFoundError as exc:
         raise HookError("Git is required for `ai-push-hooks install`") from exc
     except subprocess.TimeoutExpired as exc:
-        raise HookError(f"Git command timed out while resolving hook location: {' '.join(args)}") from exc
+        raise HookError(
+            f"Git command timed out while resolving hook location: {' '.join(args)}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "not a Git repository").strip()
         raise HookError(f"Could not resolve Git hook location: {detail}") from exc
@@ -93,11 +91,15 @@ def _resolve_git_namespace(repo_root: pathlib.Path, value: str) -> pathlib.Path:
     return (repo_root / path).resolve() if not path.is_absolute() else path.resolve()
 
 
-def _path_is_in_namespace(path: pathlib.Path, namespaces: tuple[pathlib.Path, ...]) -> bool:
+def _path_is_in_namespace(
+    path: pathlib.Path, namespaces: tuple[pathlib.Path, ...]
+) -> bool:
     return any(is_path_within(path, namespace) for namespace in namespaces)
 
 
-def _validate_parent_chain(path: pathlib.Path, namespaces: tuple[pathlib.Path, ...]) -> None:
+def _validate_parent_chain(
+    path: pathlib.Path, namespaces: tuple[pathlib.Path, ...]
+) -> None:
     """Reject symlink/reparse parents and create only missing safe directories."""
     parent = path.parent
     existing: list[pathlib.Path] = []
@@ -129,25 +131,41 @@ def _validate_parent_chain(path: pathlib.Path, namespaces: tuple[pathlib.Path, .
         current = current.parent
 
 
-def _effective_hook_path(current_dir: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
-    repo_root = pathlib.Path(_git_value(current_dir, "rev-parse", "--show-toplevel")).resolve()
-    git_dir = _resolve_git_namespace(repo_root, _git_value(repo_root, "rev-parse", "--git-dir"))
+def _effective_hook_path(
+    current_dir: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
+    repo_root = pathlib.Path(
+        _git_value(current_dir, "rev-parse", "--show-toplevel")
+    ).resolve()
+    git_dir = _resolve_git_namespace(
+        repo_root, _git_value(repo_root, "rev-parse", "--git-dir")
+    )
     common_dir = _resolve_git_namespace(
         repo_root, _git_value(repo_root, "rev-parse", "--git-common-dir")
     )
-    raw_hooks_dir = pathlib.Path(_git_value(current_dir, "rev-parse", "--git-path", "hooks"))
+    raw_hooks_dir = pathlib.Path(
+        _git_value(current_dir, "rev-parse", "--git-path", "hooks")
+    )
     lexical_hooks_dir = (
         raw_hooks_dir if raw_hooks_dir.is_absolute() else current_dir / raw_hooks_dir
     )
     if path_is_link_or_reparse(current_dir) or not current_dir.is_dir():
-        raise HookError(f"Refusing to install from an unsafe working directory: {current_dir}")
+        raise HookError(
+            f"Refusing to install from an unsafe working directory: {current_dir}"
+        )
     if any(path_is_link_or_reparse(part) for part in lexical_hooks_dir.parents):
-        raise HookError(f"Refusing hook path with a symlink or reparse parent: {lexical_hooks_dir}")
+        raise HookError(
+            f"Refusing hook path with a symlink or reparse parent: {lexical_hooks_dir}"
+        )
     if path_is_link_or_reparse(lexical_hooks_dir):
-        raise HookError(f"Refusing hook path with a symlink or reparse parent: {lexical_hooks_dir}")
+        raise HookError(
+            f"Refusing hook path with a symlink or reparse parent: {lexical_hooks_dir}"
+        )
     lexical_hook_path = lexical_hooks_dir / "pre-push"
     if path_is_link_or_reparse(lexical_hook_path):
-        raise HookError(f"Refusing symlink or reparse-point hook target: {lexical_hook_path}")
+        raise HookError(
+            f"Refusing symlink or reparse-point hook target: {lexical_hook_path}"
+        )
     hook_path = lexical_hook_path.resolve(strict=False)
 
     namespaces = (repo_root, git_dir)
@@ -179,11 +197,15 @@ def install_hook(force: bool, cwd: pathlib.Path | None = None) -> int:
     except FileNotFoundError:
         metadata = None
     except OSError as exc:
-        raise HookError(f"Could not inspect pre-push hook path {hook_path}: {exc}") from exc
+        raise HookError(
+            f"Could not inspect pre-push hook path {hook_path}: {exc}"
+        ) from exc
 
     if metadata is not None:
         if path_is_link_or_reparse(hook_path):
-            raise HookError(f"Refusing symlink or reparse-point hook target: {hook_path}")
+            raise HookError(
+                f"Refusing symlink or reparse-point hook target: {hook_path}"
+            )
         if not stat.S_ISREG(metadata.st_mode):
             raise HookError(f"Refusing non-regular hook target: {hook_path}")
         if not force:

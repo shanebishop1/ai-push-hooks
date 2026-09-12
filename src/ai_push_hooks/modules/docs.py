@@ -252,7 +252,9 @@ def _collect_query_matches(
     return buffers, fallback_contents
 
 
-def _search_docs_context(repo_root: pathlib.Path, doc_files: list[pathlib.Path], queries: list[str]) -> str:
+def _search_docs_context(
+    repo_root: pathlib.Path, doc_files: list[pathlib.Path], queries: list[str]
+) -> str:
     repo_root = repo_root.resolve(strict=True)
     if not doc_files:
         return ""
@@ -297,7 +299,9 @@ def collect_docs_context(context: RuntimeContext, _state: Any) -> CollectorResul
         ["log", "--oneline", "-n", "20", "--", "README.md", "docs"],
         check=False,
     )
-    commits = collect_commit_messages_for_ranges(context.repo_root, ranges) if ranges else []
+    commits = (
+        collect_commit_messages_for_ranges(context.repo_root, ranges) if ranges else []
+    )
     commit_lines = []
     for commit in commits:
         commit_lines.append(f"--- {commit['hash']}")
@@ -308,12 +312,18 @@ def collect_docs_context(context: RuntimeContext, _state: Any) -> CollectorResul
         commit_lines.append("")
     return CollectorResult(
         artifacts={
-            "changed-files.txt": "\n".join(changed_files) + ("\n" if changed_files else ""),
-            "push.diff": diff_text + ("\n" if diff_text and not diff_text.endswith("\n") else ""),
-            "docs-inventory.txt": "\n".join(path.relative_to(context.repo_root).as_posix() for path in doc_files)
+            "changed-files.txt": "\n".join(changed_files)
+            + ("\n" if changed_files else ""),
+            "push.diff": diff_text
+            + ("\n" if diff_text and not diff_text.endswith("\n") else ""),
+            "docs-inventory.txt": "\n".join(
+                path.relative_to(context.repo_root).as_posix() for path in doc_files
+            )
             + ("\n" if doc_files else ""),
             "docs-context.txt": docs_context + ("\n" if docs_context else ""),
-            "recent-commits.txt": recent_commits + ("\n" if recent_commits and not recent_commits.endswith("\n") else ""),
-            "commits.txt": "\n".join(commit_lines).strip() + ("\n" if commit_lines else ""),
+            "recent-commits.txt": recent_commits
+            + ("\n" if recent_commits and not recent_commits.endswith("\n") else ""),
+            "commits.txt": "\n".join(commit_lines).strip()
+            + ("\n" if commit_lines else ""),
         }
     )

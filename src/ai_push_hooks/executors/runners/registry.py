@@ -53,7 +53,9 @@ class LazyRunnerSpec:
                 details=type(exc).__name__,
             ) from exc
         if not callable(getattr(runner, "run", None)):
-            raise RunnerAdapterUnavailableError("selected runner does not implement run(request)")
+            raise RunnerAdapterUnavailableError(
+                "selected runner does not implement run(request)"
+            )
         return runner
 
 
@@ -68,15 +70,20 @@ _DEFAULT_SPECS = {
 class RunnerRegistry:
     """A fixed registry; it intentionally has no runtime plugin registration API."""
 
-    def __init__(self, specs: Mapping[str, LazyRunnerSpec | Callable[[], Runner]] | None = None) -> None:
+    def __init__(
+        self, specs: Mapping[str, LazyRunnerSpec | Callable[[], Runner]] | None = None
+    ) -> None:
         selected = _DEFAULT_SPECS if specs is None else dict(specs)
         unknown = set(selected) - set(KNOWN_RUNNER_TYPES)
         if unknown:
             raise RunnerContractError(
-                "runner registry contains unsupported adapter types: " + ", ".join(sorted(unknown))
+                "runner registry contains unsupported adapter types: "
+                + ", ".join(sorted(unknown))
             )
         if set(selected) != set(KNOWN_RUNNER_TYPES):
-            raise RunnerContractError("runner registry must contain all four known adapter types")
+            raise RunnerContractError(
+                "runner registry must contain all four known adapter types"
+            )
         self._specs = dict(selected)
         self._loaded: dict[str, Runner] = {}
         self._load_locks = {
@@ -111,7 +118,9 @@ class RunnerRegistry:
 DEFAULT_RUNNER_REGISTRY = RunnerRegistry()
 
 
-def get_runner(runner_type: str, *, registry: RunnerRegistry = DEFAULT_RUNNER_REGISTRY) -> Runner:
+def get_runner(
+    runner_type: str, *, registry: RunnerRegistry = DEFAULT_RUNNER_REGISTRY
+) -> Runner:
     """Resolve one of the four static adapter types lazily."""
 
     return registry.get(runner_type)

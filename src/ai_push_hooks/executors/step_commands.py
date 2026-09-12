@@ -79,7 +79,10 @@ class StepCommandResult:
             raise TypeError("step command returncode must be an integer")
         if not isinstance(self.stdout, bytes) or not isinstance(self.stderr, bytes):
             raise TypeError("step command streams must be bytes")
-        if type(self.stdout_truncated) is not bool or type(self.stderr_truncated) is not bool:
+        if (
+            type(self.stdout_truncated) is not bool
+            or type(self.stderr_truncated) is not bool
+        ):
             raise TypeError("step command truncation flags must be booleans")
 
     def __repr__(self) -> str:
@@ -118,18 +121,24 @@ def _validated_inputs(
     if inputs is None:
         return {}
     if not isinstance(inputs, Mapping):
-        raise StepCommandError("step command inputs must be a logical-reference mapping")
+        raise StepCommandError(
+            "step command inputs must be a logical-reference mapping"
+        )
     normalized: dict[str, pathlib.Path] = {}
     for logical_ref, path in inputs.items():
         if not isinstance(logical_ref, str) or not logical_ref:
-            raise StepCommandError("step command input references must be non-empty strings")
+            raise StepCommandError(
+                "step command input references must be non-empty strings"
+            )
         if not isinstance(path, pathlib.Path):
             path = pathlib.Path(path)
         try:
             resolved = path.resolve(strict=True)
             metadata = resolved.stat()
         except (OSError, RuntimeError) as exc:
-            raise StepCommandError("step command input artifact could not be opened") from exc
+            raise StepCommandError(
+                "step command input artifact could not be opened"
+            ) from exc
         if path_is_link_or_reparse(path) or not resolved.is_file() or not metadata:
             raise StepCommandError("step command input artifact must be a regular file")
         normalized[logical_ref] = resolved
@@ -160,7 +169,9 @@ def _substitute_argv(
                     )
                 rendered.append(str(inputs[logical_ref]))
             else:
-                raise StepCommandError(f"unknown step command placeholder in argument {index}")
+                raise StepCommandError(
+                    f"unknown step command placeholder in argument {index}"
+                )
             continue
 
         if _RECOGNIZED_TOKEN.search(argument):
@@ -183,12 +194,16 @@ def resolve_step_command_argv(
     try:
         root = pathlib.Path(repo_root).resolve(strict=True)
     except (OSError, RuntimeError) as exc:
-        raise StepCommandError("step command repository root could not be resolved") from exc
+        raise StepCommandError(
+            "step command repository root could not be resolved"
+        ) from exc
     if not root.is_dir():
         raise StepCommandError("step command repository root must be a directory")
     executable = python_executable or sys.executable
     if not isinstance(executable, str) or not executable or "\x00" in executable:
-        raise StepCommandError("step command Python interpreter must be a non-empty NUL-free string")
+        raise StepCommandError(
+            "step command Python interpreter must be a non-empty NUL-free string"
+        )
     return _substitute_argv(
         command,
         repo_root=root,
@@ -227,7 +242,9 @@ def _validate_utf8(result: StepCommandResult) -> None:
         try:
             stream.decode("utf-8")
         except UnicodeDecodeError as exc:
-            error = StepCommandEncodingError(f"step command emitted invalid UTF-8 on {name}")
+            error = StepCommandEncodingError(
+                f"step command emitted invalid UTF-8 on {name}"
+            )
             error._step_command_result = result
             raise error from exc
 
@@ -250,17 +267,27 @@ def run_step_command(
     their private ``_process_result`` attribute for the persistence helper.
     """
 
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise StepCommandError("step command timeout must be a finite positive number")
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise StepCommandError("step command timeout must be a finite positive number")
-    if isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int) or max_output_bytes < 0:
-        raise StepCommandError("step command output bound must be a non-negative integer")
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or max_output_bytes < 0
+    ):
+        raise StepCommandError(
+            "step command output bound must be a non-negative integer"
+        )
 
     input_paths = _validated_inputs(inputs)
     if stdin is not None:
         if not isinstance(stdin, str) or stdin not in input_paths:
-            raise StepCommandError("step command stdin must exactly match a declared input")
+            raise StepCommandError(
+                "step command stdin must exactly match a declared input"
+            )
         input_path = input_paths[stdin]
     else:
         input_path = None
@@ -288,7 +315,9 @@ def run_step_command(
             )
             if truncated
         )
-        error = StepCommandTruncatedError(f"step command {streams} exceeded its capture limit")
+        error = StepCommandTruncatedError(
+            f"step command {streams} exceeded its capture limit"
+        )
         error._step_command_result = result
         raise error
     _validate_utf8(result)
@@ -312,7 +341,10 @@ def _assert_message(result: StepCommandResult) -> str:
     stderr = result.stderr.decode("utf-8", errors="surrogateescape")
     combined = "\n".join(part for part in (stderr.strip(), stdout.strip()) if part)
     safe = redact_diagnostic(combined, secrets=_environment_secrets())
-    return bounded_diagnostic(safe, max_chars=1_200) or f"command exited with status {result.returncode}"
+    return (
+        bounded_diagnostic(safe, max_chars=1_200)
+        or f"command exited with status {result.returncode}"
+    )
 
 
 def step_command_result_payload(
@@ -397,7 +429,9 @@ def execute_step_command(
     """
 
     if step.type not in {"exec", "assert"}:
-        raise StepCommandError("step command implementation requires an exec or assert step")
+        raise StepCommandError(
+            "step command implementation requires an exec or assert step"
+        )
     if isinstance(inputs, Mapping):
         input_map = dict(inputs)
         declared_references = set(step.inputs)
@@ -407,7 +441,9 @@ def execute_step_command(
             )
     else:
         if len(inputs) != len(step.inputs):
-            raise StepCommandError("step command input paths do not match declared inputs")
+            raise StepCommandError(
+                "step command input paths do not match declared inputs"
+            )
         input_map = dict(zip(step.inputs, inputs))
     store = artifacts or ArtifactStore(context.run_dir)
     store.prepare()
@@ -444,9 +480,13 @@ def execute_step_command(
         raise
 
     payload = step_command_result_payload(process_result, step_type=step.type)
-    persisted = _persist_process_result(store, state, step, process_result, payload=payload)
+    persisted = _persist_process_result(
+        store, state, step, process_result, payload=payload
+    )
     if step.type == "exec" and process_result.returncode != 0:
-        error = StepCommandExecutionError("step exec command returned a non-zero status")
+        error = StepCommandExecutionError(
+            "step exec command returned a non-zero status"
+        )
         error._step_command_result = process_result
         error._step_command_persisted = persisted
         raise error

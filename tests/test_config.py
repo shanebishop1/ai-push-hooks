@@ -15,7 +15,9 @@ from .conftest import init_repo
 
 
 def test_load_config_requires_config_file(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(HookError, match="Missing required config file `ai-push-hooks.toml`"):
+    with pytest.raises(
+        HookError, match="Missing required config file `ai-push-hooks.toml`"
+    ):
         load_config(tmp_path)
 
 
@@ -87,7 +89,9 @@ type = "{legacy_type}"
         load_config(tmp_path)
 
 
-def test_load_config_supports_standard_toml_inline_tables(tmp_path: pathlib.Path) -> None:
+def test_load_config_supports_standard_toml_inline_tables(
+    tmp_path: pathlib.Path,
+) -> None:
     (tmp_path / "ai-push-hooks.toml").write_text(
         """
 [workflow]
@@ -276,7 +280,9 @@ collector = "docs_context"
         encoding="utf-8",
     )
 
-    with pytest.raises(HookError, match=r"Duplicate module id `docs` in workflow\.modules"):
+    with pytest.raises(
+        HookError, match=r"Duplicate module id `docs` in workflow\.modules"
+    ):
         load_config(tmp_path)
 
 
@@ -517,7 +523,9 @@ collector = "docs_context"
         + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(HookError, match="Missing required config file `ai-push-hooks.toml`"):
+    with pytest.raises(
+        HookError, match="Missing required config file `ai-push-hooks.toml`"
+    ):
         load_config(tmp_path)
 
 
@@ -529,7 +537,9 @@ def test_generate_run_id_is_unique_and_high_resolution() -> None:
     assert re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}", first)
 
 
-def test_base_branch_can_be_overridden_by_env(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_base_branch_can_be_overridden_by_env(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
     (tmp_path / "ai-push-hooks.toml").write_text(
         """
 [general]
@@ -556,7 +566,9 @@ collector = "docs_context"
     assert config.general.base_branch == "release"
 
 
-def test_collect_ranges_uses_configured_base_branch_for_new_remote_branch(monkeypatch) -> None:
+def test_collect_ranges_uses_configured_base_branch_for_new_remote_branch(
+    monkeypatch,
+) -> None:
     calls = []
     local_oid = "a" * 40
     base_oid = "b" * 40
@@ -637,7 +649,9 @@ def test_resolve_storage_path_rejects_symlink_escape(tmp_path: pathlib.Path) -> 
         git_utils.resolve_storage_path(repo_root, git_dir, "logs/output")
 
 
-def test_resolve_storage_path_rejects_git_namespace_symlink(tmp_path: pathlib.Path) -> None:
+def test_resolve_storage_path_rejects_git_namespace_symlink(
+    tmp_path: pathlib.Path,
+) -> None:
     repo_root = tmp_path / "repo"
     git_dir = repo_root / ".git"
     objects = git_dir / "objects"
@@ -646,9 +660,7 @@ def test_resolve_storage_path_rejects_git_namespace_symlink(tmp_path: pathlib.Pa
     (git_dir / "ai-push-hooks").symlink_to(objects, target_is_directory=True)
 
     with pytest.raises(HookError, match="symlink"):
-        git_utils.resolve_storage_path(
-            repo_root, git_dir, ".git/ai-push-hooks/logs"
-        )
+        git_utils.resolve_storage_path(repo_root, git_dir, ".git/ai-push-hooks/logs")
 
 
 @pytest.mark.parametrize("key", ["dir", "transcript_dir", "summary_dir"])
@@ -748,7 +760,9 @@ runner = "pi-apply"
     ask_step = config.modules["docs"].steps[0]
     apply_step = config.modules["docs"].steps[1]
 
-    default = resolve_runner_profile(config, ask_step, {"AI_PUSH_HOOKS_MODEL": "env-model"})
+    default = resolve_runner_profile(
+        config, ask_step, {"AI_PUSH_HOOKS_MODEL": "env-model"}
+    )
     selected = resolve_runner_profile(
         config,
         apply_step,
@@ -956,7 +970,9 @@ collector = "docs_context"
         load_config(tmp_path)
 
 
-def test_runner_selection_is_rejected_on_non_promptable_step(tmp_path: pathlib.Path) -> None:
+def test_runner_selection_is_rejected_on_non_promptable_step(
+    tmp_path: pathlib.Path,
+) -> None:
     (tmp_path / "ai-push-hooks.toml").write_text(
         """
 [workflow]
@@ -1001,7 +1017,9 @@ enabled = true
     )
 
 
-def test_extension_steps_normalize_python_and_command_fields(tmp_path: pathlib.Path) -> None:
+def test_extension_steps_normalize_python_and_command_fields(
+    tmp_path: pathlib.Path,
+) -> None:
     _write_extension_config(
         tmp_path,
         """
@@ -1064,7 +1082,9 @@ def test_extension_implementation_fields_are_strict(
         load_config(tmp_path)
 
 
-def test_python_reference_validation_does_not_import_code(tmp_path: pathlib.Path) -> None:
+def test_python_reference_validation_does_not_import_code(
+    tmp_path: pathlib.Path,
+) -> None:
     marker = tmp_path / "imported"
     (tmp_path / "checks.py").write_text(
         f"{marker!s}.write_text('bad')\n", encoding="utf-8"

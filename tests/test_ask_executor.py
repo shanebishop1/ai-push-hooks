@@ -23,7 +23,9 @@ from .conftest import build_context, init_repo
     ("field", "value"),
     [("title", True), ("body", 123), ("draft", "false"), ("draft", 1)],
 )
-def test_pr_create_payload_rejects_type_coercion_inputs(field: str, value: object) -> None:
+def test_pr_create_payload_rejects_type_coercion_inputs(
+    field: str, value: object
+) -> None:
     payload = {field: value}
 
     with pytest.raises(HookError, match=rf"pr_create_payload\.{field}"):
@@ -79,7 +81,9 @@ def test_run_ask_step_accepts_array_for_docs_issue_schema(
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
-    analyze_step = next(step for step in config.modules["docs"].steps if step.id == "analyze")
+    analyze_step = next(
+        step for step in config.modules["docs"].steps if step.id == "analyze"
+    )
     analyze_step = replace(analyze_step, inputs=())
 
     class FakeRunner:
@@ -90,7 +94,9 @@ def test_run_ask_step_accepts_array_for_docs_issue_schema(
             return RunnerResult("[]", 0, "", "")
 
     _use_runner_boundary_logger(context, monkeypatch)
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
 
     assert run_ask_step(context, analyze_step, "prompt", [], "docs.analyze") == []
 
@@ -102,7 +108,9 @@ def test_run_ask_step_selects_the_configured_runner_profile(
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
-    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = next(
+        step for step in config.modules["docs"].steps if step.id == "query"
+    )
     query_step = replace(query_step, inputs=())
     requests = []
 
@@ -114,7 +122,9 @@ def test_run_ask_step_selects_the_configured_runner_profile(
             return RunnerResult("[]", 0, "", "")
 
     _use_runner_boundary_logger(context, monkeypatch)
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
 
     assert run_ask_step(context, query_step, "prompt", [], "docs.query") == []
     assert requests[0].mode == "ask"
@@ -124,12 +134,18 @@ def test_json_retry_new_session_finalizes_each_attempt(tmp_path, monkeypatch) ->
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     context = build_context(repo, config)
-    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = next(
+        step for step in config.modules["docs"].steps if step.id == "query"
+    )
     query_step = replace(query_step, inputs=())
     results = iter(
         [
-            RunnerResult("not json", 0, "", "", SessionMetadata("session-1", "persisted", True)),
-            RunnerResult("[]", 0, "", "", SessionMetadata("session-2", "persisted", True)),
+            RunnerResult(
+                "not json", 0, "", "", SessionMetadata("session-1", "persisted", True)
+            ),
+            RunnerResult(
+                "[]", 0, "", "", SessionMetadata("session-2", "persisted", True)
+            ),
         ]
     )
     requests = []
@@ -148,24 +164,34 @@ def test_json_retry_new_session_finalizes_each_attempt(tmp_path, monkeypatch) ->
             return result
 
     _use_runner_boundary_logger(context, monkeypatch)
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
 
     assert run_ask_step(context, query_step, "prompt", [], "docs.query") == []
     assert [request.session_id for request in requests] == [None, None]
     assert finalized == ["session-1", "session-2"]
 
 
-def test_json_retry_reused_session_finalizes_only_after_last_attempt(tmp_path, monkeypatch) -> None:
+def test_json_retry_reused_session_finalizes_only_after_last_attempt(
+    tmp_path, monkeypatch
+) -> None:
     repo = init_repo(tmp_path, branch="feature/docs")
     config, _ = load_config(repo)
     config = replace(config, llm=replace(config.llm, json_retry_new_session=False))
     context = build_context(repo, config)
-    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = next(
+        step for step in config.modules["docs"].steps if step.id == "query"
+    )
     query_step = replace(query_step, inputs=())
     results = iter(
         [
-            RunnerResult("not json", 0, "", "", SessionMetadata("session-1", "persisted", True)),
-            RunnerResult("[]", 0, "", "", SessionMetadata("session-1", "persisted", True)),
+            RunnerResult(
+                "not json", 0, "", "", SessionMetadata("session-1", "persisted", True)
+            ),
+            RunnerResult(
+                "[]", 0, "", "", SessionMetadata("session-1", "persisted", True)
+            ),
         ]
     )
     requests = []
@@ -184,7 +210,9 @@ def test_json_retry_reused_session_finalizes_only_after_last_attempt(tmp_path, m
             return result
 
     _use_runner_boundary_logger(context, monkeypatch)
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
 
     assert run_ask_step(context, query_step, "prompt", [], "docs.query") == []
     assert [request.session_id for request in requests] == [None, "session-1"]
@@ -192,7 +220,9 @@ def test_json_retry_reused_session_finalizes_only_after_last_attempt(tmp_path, m
     assert finalized == ["session-1"]
 
 
-@pytest.mark.parametrize("second_outcome", [RunnerTimeoutError("timed out"), "missing-output"])
+@pytest.mark.parametrize(
+    "second_outcome", [RunnerTimeoutError("timed out"), "missing-output"]
+)
 def test_reused_session_is_finalized_when_retry_fails_without_session_metadata(
     tmp_path: pathlib.Path, monkeypatch, second_outcome
 ) -> None:
@@ -200,12 +230,16 @@ def test_reused_session_is_finalized_when_retry_fails_without_session_metadata(
     config, _ = load_config(repo)
     config = replace(config, llm=replace(config.llm, json_retry_new_session=False))
     context = build_context(repo, config)
-    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = next(
+        step for step in config.modules["docs"].steps if step.id == "query"
+    )
     query_step = replace(query_step, inputs=())
     finalized: list[str | None] = []
     outcomes = iter(
         [
-            RunnerResult("not json", 0, "", "", SessionMetadata("session-1", "persisted", True)),
+            RunnerResult(
+                "not json", 0, "", "", SessionMetadata("session-1", "persisted", True)
+            ),
             second_outcome,
         ]
     )
@@ -227,7 +261,9 @@ def test_reused_session_is_finalized_when_retry_fails_without_session_metadata(
             return result
 
     _use_runner_boundary_logger(context, monkeypatch)
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner())
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", lambda _type: FakeRunner()
+    )
 
     with pytest.raises(HookError, match=r"opencode.*docs\.query"):
         run_ask_step(context, query_step, "prompt", [], "docs.query")
@@ -241,7 +277,9 @@ def test_reused_session_is_finalized_when_next_runner_construction_fails(
     config, _ = load_config(repo)
     config = replace(config, llm=replace(config.llm, json_retry_new_session=False))
     context = build_context(repo, config)
-    query_step = next(step for step in config.modules["docs"].steps if step.id == "query")
+    query_step = next(
+        step for step in config.modules["docs"].steps if step.id == "query"
+    )
     query_step = replace(query_step, inputs=())
     finalized: list[str | None] = []
 
@@ -268,7 +306,9 @@ def test_reused_session_is_finalized_when_next_runner_construction_fails(
         raise RunnerAdapterUnavailableError("construction failed")
 
     _use_runner_boundary_logger(context, monkeypatch)
-    monkeypatch.setattr("ai_push_hooks.executors.runner_workflow.get_runner", get_runner)
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner", get_runner
+    )
 
     with pytest.raises(HookError, match=r"opencode.*docs\.query"):
         run_ask_step(context, query_step, "prompt", [], "docs.query")

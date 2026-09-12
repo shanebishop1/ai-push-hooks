@@ -30,7 +30,9 @@ def _git(repo: pathlib.Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
-def _commit_file(repo: pathlib.Path, relative_path: str, content: str, message: str) -> str:
+def _commit_file(
+    repo: pathlib.Path, relative_path: str, content: str, message: str
+) -> str:
     path = repo / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -68,7 +70,9 @@ def test_hook_uses_single_non_head_pushed_branch_and_preserves_update(
     base = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-b", "feature/source")
     _commit_file(repo, "src/first.py", "first = True\n", "first feature commit")
-    tip = _commit_file(repo, "src/second.py", "second = True\n", "second feature commit")
+    tip = _commit_file(
+        repo, "src/second.py", "second = True\n", "second feature commit"
+    )
     _git(repo, "checkout", "main")
     zero = "0" * len(tip)
     changed_file_ranges: list[list[str]] = []
@@ -121,7 +125,9 @@ def test_hook_uses_single_non_head_pushed_branch_and_preserves_update(
 
     beads_result = collect_beads_status_context(context, object())
     assert beads_result.skip_module is False
-    assert "branch=feature/pushed\n" in str(beads_result.artifacts["branch-context.txt"])
+    assert "branch=feature/pushed\n" in str(
+        beads_result.artifacts["branch-context.txt"]
+    )
 
 
 def test_hook_does_not_reuse_whole_push_files_or_diff_for_mixed_ranges(
@@ -371,10 +377,7 @@ def test_sha256_root_range_uses_sha256_empty_tree(tmp_path: pathlib.Path) -> Non
     ranges = collect_ranges_from_stdin(
         repo,
         "https://example.com/org/repo.git",
-        [
-            f"refs/heads/feature/root {root} refs/heads/feature/root "
-            f"{'0' * len(root)}"
-        ],
+        [f"refs/heads/feature/root {root} refs/heads/feature/root {'0' * len(root)}"],
         base_branch="missing-base",
     )
 
