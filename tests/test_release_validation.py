@@ -143,8 +143,8 @@ def test_version_mapping_rejects_unapproved_spelling():
 
 def test_checked_in_channel_maps_stable_version_to_beta_without_version_special_case():
     policy = release.load_release_channel(Path("release-channel.toml"))
-    info = release.map_versions("0.3.1", "0.3.1", "v0.3.1", policy)
-    assert policy.version == "0.3.1"
+    info = release.map_versions("0.3.2", "0.3.2", "v0.3.2", policy)
+    assert policy.version == "0.3.2"
     assert policy.channel == "beta"
     assert policy.python_classifier == "Development Status :: 4 - Beta"
     assert policy.pypi_channel == "none"
