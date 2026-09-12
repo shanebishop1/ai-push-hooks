@@ -11,10 +11,18 @@ Thanks for contributing to ai-push-hooks.
 
 ## Development
 
-From a clone with Python and [uv](https://docs.astral.sh/uv/) installed:
+From a clone with Python, [uv](https://docs.astral.sh/uv/), and Node.js installed:
 
 ```bash
-uv run --no-project --with pytest pytest tests -q
+npm test
+```
+
+The equivalent direct Python invocation is below. Node.js/npm are still needed
+by the installed-package integration tests. The `dev` extra supplies all Python
+test, build, lint, and distribution-validation tools.
+
+```bash
+uv run --no-project --with ".[dev]" python -m pytest tests -q
 ```
 
 ### Beads repository maintenance
@@ -37,8 +45,10 @@ disposable repositories, never the live `.beads` store.
 Validate both distribution surfaces before submitting package or wrapper changes:
 
 ```bash
-uv run --no-project --with build python -m build
-uv run --no-project --with twine python -m twine check dist/*
+artifact_dir=$(mktemp -d)
+trap 'rm -rf "$artifact_dir"' EXIT
+uv run --no-project --with ".[dev]" python -m build --outdir "$artifact_dir"
+uv run --no-project --with ".[dev]" python -m twine check "$artifact_dir"/*
 npm run test:npm-pack
 ```
 
@@ -77,17 +87,20 @@ The checked-in `constraints-ci.txt` pins the validation tools. In a disposable
 development environment, install those pins and run the exact candidate gate:
 
 ```bash
-python -m pip install -c constraints-ci.txt build pytest ruff twine
-python -m pytest -q
-ruff check .
-python -m build --outdir "$ARTIFACT_DIR"
-python -m twine check "$ARTIFACT_DIR"/*
+artifact_dir=$(mktemp -d)
+trap 'rm -rf "$artifact_dir"' EXIT
+python -m pip install -c constraints-ci.txt ".[dev]"
+python -m pytest tests -q
+python -m ruff check .
+PIP_CONSTRAINT="$PWD/constraints-ci.txt" \
+  python -m build --outdir "$artifact_dir"
+python -m twine check "$artifact_dir"/*
 npm run test:npm-pack
 python -m pytest -q tests/test_installed_hook_e2e.py
 ```
 
-Set `ARTIFACT_DIR` to a newly created empty directory outside `dist/` and
-`build/`. The installed-hook tests build a wheel and pack npm into owned temp
+The build uses a fresh temporary directory rather than stale `dist/` output.
+The installed-hook tests build a wheel and pack npm into owned temp
 directories, clear source `PYTHONPATH`, use a minimal PATH, and test a local
 bare remote. Do not run tests against the real repository's remotes, provider
 credentials, transcripts, GitHub PRs, or Beads database. The no-network

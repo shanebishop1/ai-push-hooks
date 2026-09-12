@@ -23,21 +23,34 @@ These commands require an ai-push-hooks source checkout, not just the installed 
 
 ```bash
 # Unit/integration suite.
-uv run --no-project --with pytest pytest tests -q
+uv run --no-project --with ".[dev]" python -m pytest tests -q
 
 # Distribution checks; require the checkout's Node/npm toolchain too.
-uv run --no-project --with build python -m build
-uv run --no-project --with twine python -m twine check dist/*
+artifact_dir=$(mktemp -d)
+trap 'rm -rf "$artifact_dir"' EXIT
+uv run --no-project --with ".[dev]" python -m build --outdir "$artifact_dir"
+uv run --no-project --with ".[dev]" python -m twine check "$artifact_dir"/*
 npm run test:npm-pack
 
 # Installed-package end-to-end coverage (with test dependencies installed).
-python -m pytest -q tests/test_installed_hook_e2e.py
+uv run --no-project --with ".[dev]" python -m pytest -q tests/test_installed_hook_e2e.py
 
 # Real OpenCode CLI with loopback mock provider; requires working Docker.
 bash scripts/opencode-contract-smoke.sh
 ```
 
-For pinned validation tools: `python -m pip install -c constraints-ci.txt build pytest ruff twine`, then `python -m pytest -q` and `ruff check .` in an isolated development environment. Build into a new empty artifact directory when validating a release to avoid checking stale distributions.
+For pinned validation tools, use a disposable environment:
+
+```bash
+artifact_dir=$(mktemp -d)
+trap 'rm -rf "$artifact_dir"' EXIT
+python -m pip install -c constraints-ci.txt ".[dev]"
+python -m pytest tests -q
+python -m ruff check .
+PIP_CONSTRAINT="$PWD/constraints-ci.txt" \
+  python -m build --outdir "$artifact_dir"
+python -m twine check "$artifact_dir"/*
+```
 
 The Docker smoke gate uses no external model calls and does not mount host credentials or the repository at runtime. A missing Docker daemon is a blocker, not a pass. Live provider probes are separate, opt-in, potentially billable, and disclose supplied content; do not enable `AI_PUSH_HOOKS_LIVE_PROBE` without approval. Report which checks actually ran, exit statuses, and blocked/skipped coverage.
 

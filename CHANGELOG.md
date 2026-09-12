@@ -21,6 +21,12 @@ All notable changes to this project are documented here. The format is based on 
   out of diagnostics.
 - Bounded config, prompt, and callback source reads and rejected unsafe config
   file types.
+- Rejected duplicate workflow identifiers and simplified workflow step result
+  handling.
+- Made source distributions complete and added validation of their unpacked
+  test suite and wheel builds with the minimum supported setuptools 77 backend.
+- Standardized development and release validation on the isolated project
+  `.[dev]` extra instead of repeating tool lists.
 - Restored the PyPI release job's checkout permission and pinned the OpenCode
   contract test's base container image.
 
