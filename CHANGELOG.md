@@ -37,6 +37,9 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Documentation
 
+- Added an agent setup skill and CI/npm beta badges.
+- Explained the manual-commit assertion and why applied edits are not part of
+  the commit already being pushed.
 - Included the configuration guide in the npm package and removed its link to
   the local-only runner verification report.
 

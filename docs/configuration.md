@@ -81,6 +81,22 @@ OpenCode runs with isolated configuration and permissions; project/global config
 
 Apply requires a single pushed branch whose local commit is the checked-out `HEAD`. Staging excludes Git metadata, `AGENTS.md`, ignored files, symlinks, and special files. These controls are not an OS sandbox or an automatic rollback system. See [Security](../SECURITY.md).
 
+### Apply and manual commits
+
+`apply` is generic: it can edit any eligible checkout file matching `allow_paths`; it is not limited to Markdown. The runner edits a temporary staging copy, and only validated changes propagate back to the checkout. Those edits do not enter the commit already being pushed, and `apply` never creates a Git commit.
+
+The existing `docs_apply_requires_manual_commit` assertion is a workflow gate, not human-review enforcement. It prevents the original push from passing after `apply` changes files; it cannot prove that anyone reviewed the edits or that they conform to policy. Add it after the `apply` step when that gate is desired:
+
+```toml
+[[modules.docs.steps]]
+id = "manual-commit"
+type = "assert"
+assertion = "docs_apply_requires_manual_commit"
+inputs = ["apply/result.json"]
+```
+
+The assertion checks `apply/result.json`'s `changed_files` and intentionally blocks when edits were propagated. Review `git diff`, run the relevant checks, commit the approved changes, and retry the push. On the retry, the assertion passes when the apply step reports no changes.
+
 ## Custom Runners
 
 Use a command profile for another CLI, including Pi, or your own wrapper. This example expects a local `scripts/review-agent` program that reads the prompt from stdin and writes its final response to stdout:
@@ -241,7 +257,7 @@ To remove the generated hook, inspect `git rev-parse --git-path hooks/pre-push` 
 | Unknown profile | Match `runner` to an existing `[runners.<name>]`. |
 | Runner capability error | Update the CLI to a version with the required adapter flags. |
 | Invalid JSON | Check the prompt and schema; invalid JSON is retried twice by default. |
-| Push blocked after edits | Review `git diff`, run checks, commit approved changes, and retry. |
+| Push blocked after edits | Review `git diff`, run checks, commit approved changes, and retry the push. |
 | Need diagnostics | Inspect `.git/ai-push-hooks/logs` and `.git/ai-push-hooks/summaries`. |
 
 For validation commands, see [Contributing](../CONTRIBUTING.md).
