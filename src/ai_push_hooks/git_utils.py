@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import fnmatch
 import json
 import os
@@ -451,7 +452,24 @@ def _fallback_range(
     local_commit: str,
     *,
     reason: str,
+    pushed_ref: str,
 ) -> tuple[str, str]:
+    configured_base = base_branch.strip() or "main"
+    configured_base_ref = ""
+    if configured_base.startswith("refs/heads/"):
+        configured_base_ref = configured_base
+    elif configured_base.startswith("refs/remotes/"):
+        remote_base = configured_base.removeprefix("refs/remotes/").split("/", 1)
+        if len(remote_base) == 2 and all(remote_base):
+            configured_base_ref = f"refs/heads/{remote_base[1]}"
+    elif not configured_base.startswith("refs/"):
+        configured_base_ref = f"refs/heads/{configured_base}"
+
+    # A zero advertised OID means the remote target is absent; a local or stale
+    # tracking base cannot describe this first publication.
+    if pushed_ref == configured_base_ref:
+        return f"{_empty_tree_oid(repo_root)}..{local_commit}", f"{reason}:empty-tree"
+
     base_commit = _configured_base_commit(repo_root, remote_name, base_branch)
     if base_commit:
         merge_base = git(
@@ -494,6 +512,7 @@ def collect_revision_ranges(
                 base_branch,
                 local_commit,
                 reason="new-ref",
+                pushed_ref=update.remote_ref,
             )
         ranges.append(
             PushRevisionRange(update=update, expression=expression, strategy=strategy)
@@ -582,17 +601,26 @@ def _collect_bounded_git_diff(
 
 
 def _decode_diff_output(output: bytes, max_bytes: int, truncated: bool) -> str:
-    if not truncated:
-        return output.decode("utf-8", errors="surrogateescape")
     limit = max(0, max_bytes)
     if limit == 0:
         return ""
+
+    # Diff artifacts are written as strict UTF-8. Git normally emits UTF-8,
+    # but malformed bytes are represented explicitly as U+FFFD rather than
+    # leaking surrogateescape code points into the artifact writer. A decoder
+    # left non-final for a source-truncated stream drops only its incomplete
+    # pending character; a final decoder represents malformed EOF bytes.
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    normalized = decoder.decode(output, final=not truncated)
+    normalized_bytes = normalized.encode("utf-8")
     marker = DIFF_TRUNCATION_MARKER.encode("utf-8")
+    if not truncated and len(normalized_bytes) <= limit:
+        return normalized
     if len(marker) >= limit:
-        return marker[:limit].decode("utf-8", errors="surrogateescape")
-    return (output[: limit - len(marker)] + marker).decode(
-        "utf-8", errors="surrogateescape"
-    )
+        return marker[:limit].decode("ascii")
+    payload_limit = limit - len(marker)
+    payload = normalized_bytes[:payload_limit].decode("utf-8", errors="ignore")
+    return payload + DIFF_TRUNCATION_MARKER
 
 
 def collect_diff(repo_root: pathlib.Path, ranges: list[str], max_bytes: int) -> str:

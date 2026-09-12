@@ -278,7 +278,7 @@ def test_collect_diff_keeps_partial_capture_budget_and_stderr_bound(
     maximum = 80
     diff = git_utils.collect_diff(tmp_path, ["base..head"], maximum)
 
-    assert len(diff.encode("utf-8", errors="surrogateescape")) <= maximum
+    assert len(diff.encode("utf-8")) <= maximum
     assert "### RANGE base..head\n" in diff
     assert "[diff truncated]" in diff
     assert "stderr must not become diff output" not in diff

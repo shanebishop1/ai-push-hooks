@@ -317,6 +317,90 @@ def test_root_new_branch_without_base_uses_hash_format_empty_tree(
     assert [commit["hash"] for commit in commits] == [root]
 
 
+@pytest.mark.parametrize(
+    "base_branch",
+    ["main", "refs/heads/main", "refs/remotes/origin/main"],
+)
+def test_initial_publication_of_configured_base_uses_empty_tree(
+    tmp_path: pathlib.Path, base_branch: str
+) -> None:
+    repo = init_repo(tmp_path)
+    root = _git(repo, "rev-parse", "HEAD")
+    empty_tree = _git(repo, "hash-object", "-t", "tree", "/dev/null")
+
+    ranges = collect_ranges_from_stdin(
+        repo,
+        "origin",
+        [f"refs/heads/main {root} refs/heads/main {'0' * len(root)}"],
+        base_branch=base_branch,
+    )
+
+    assert ranges == [f"{empty_tree}..{root}"]
+    assert "README.md" in collect_changed_files(repo, ranges)
+
+
+def test_initial_publication_ignores_stale_tracking_base_equal_to_pushed_tip(
+    tmp_path: pathlib.Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    root = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/main", root)
+    empty_tree = _git(repo, "hash-object", "-t", "tree", "/dev/null")
+
+    ranges = collect_ranges_from_stdin(
+        repo,
+        "origin",
+        [f"refs/heads/main {root} refs/heads/main {'0' * len(root)}"],
+    )
+
+    assert ranges == [f"{empty_tree}..{root}"]
+    assert "README.md" in collect_changed_files(repo, ranges)
+
+
+def test_initial_publication_uses_remote_target_for_differently_named_local_branch(
+    tmp_path: pathlib.Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    _git(repo, "checkout", "-b", "feature/source")
+    tip = _commit_file(repo, "src/feature.py", "feature = True\n", "feature")
+    empty_tree = _git(repo, "hash-object", "-t", "tree", "/dev/null")
+
+    ranges = collect_ranges_from_stdin(
+        repo,
+        "origin",
+        [f"refs/heads/feature/source {tip} refs/heads/main {'0' * len(tip)}"],
+    )
+
+    assert ranges == [f"{empty_tree}..{tip}"]
+    assert collect_changed_files(repo, ranges) == [
+        "README.md",
+        "ai-push-hooks.toml",
+        "docs/INDEX.md",
+        "src/app.py",
+        "src/feature.py",
+    ]
+
+
+def test_new_feature_branch_still_uses_configured_qualified_base_ref(
+    tmp_path: pathlib.Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "update-ref", "refs/remotes/origin/main", base)
+    _git(repo, "checkout", "-b", "feature/ranges")
+    tip = _commit_file(repo, "src/feature.py", "feature = True\n", "feature")
+
+    ranges = collect_ranges_from_stdin(
+        repo,
+        "origin",
+        [f"refs/heads/feature/ranges {tip} refs/heads/feature/ranges {'0' * len(tip)}"],
+        base_branch="refs/remotes/origin/main",
+    )
+
+    assert ranges == [f"{base}..{tip}"]
+    assert collect_changed_files(repo, ranges) == ["src/feature.py"]
+
+
 def test_existing_remote_object_builds_exact_range_and_missing_object_fails_closed(
     tmp_path: pathlib.Path,
 ) -> None:

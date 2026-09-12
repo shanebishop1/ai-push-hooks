@@ -254,6 +254,28 @@ id = "policy"
 type = "assert"
 python = "checks/hooks.py:assert_context"
 inputs = ["command/result.json"]
+    """
+
+
+def _range_scenario_config() -> str:
+    return """\
+[general]
+allow_push_on_error = false
+
+[logging]
+jsonl = false
+capture_llm_transcript = false
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
 """
 
 
@@ -516,6 +538,78 @@ def test_npm_works_without_site_packages(
             "MIT License"
             in archive.read("tomli-2.4.0.dist-info/licenses/LICENSE").decode()
         )
+
+
+@pytest.mark.parametrize("distribution", ["wheel", "npm"])
+def test_installed_hook_collects_initial_base_and_feature_ranges(
+    distribution: str,
+    installed_artifacts: dict[str, pathlib.Path],
+    tmp_path: pathlib.Path,
+) -> None:
+    root = tmp_path / f"{distribution}-initial-range-scenario"
+    root.mkdir()
+    env = _isolated_env(root / "home")
+    repo = root / "client repo"
+    repo.mkdir()
+    command = (
+        _prepare_wheel_command(installed_artifacts[distribution], root, env)
+        if distribution == "wheel"
+        else _prepare_npm_command(installed_artifacts[distribution], repo, env)
+    )
+    command_bin = command.parent
+    python_dir = pathlib.Path(sys.executable).parent
+    node_dir = pathlib.Path(shutil.which("node") or sys.executable).parent
+    git_dir = pathlib.Path(shutil.which("git") or sys.executable).parent
+    env["PATH"] = f"{command_bin}:{python_dir}:{node_dir}:{git_dir}:/usr/bin:/bin"
+
+    remote = root / "remote.git"
+    _run(["git", "init", "--bare", str(remote)], root, env)
+    _run(["git", "init", "-b", "main", "."], repo, env)
+    _run(["git", "config", "user.name", "Installed Hook Test"], repo, env)
+    _run(["git", "config", "user.email", "installed-hook@example.invalid"], repo, env)
+    _run(["git", "remote", "add", "origin", str(remote)], repo, env)
+    (repo / "README.md").write_text("# Initial\n", encoding="utf-8")
+    (repo / "ai-push-hooks.toml").write_text(_range_scenario_config(), encoding="utf-8")
+    if distribution == "npm":
+        (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    _run(["git", "add", "."], repo, env)
+    _run(["git", "commit", "-m", "initial"], repo, env)
+
+    if distribution == "npm":
+        _run(["npx", "--no-install", "ai-push-hooks", "install"], repo, env)
+    else:
+        _run([str(command), "install"], repo, env)
+
+    initial_oid = _git(repo, env, "rev-parse", "HEAD")
+    empty_tree = _git(repo, env, "hash-object", "-t", "tree", "/dev/null")
+    _run(["git", "push", "origin", "main"], repo, env, timeout=45)
+    initial_run = _latest_run(repo)
+    initial_changed = (
+        initial_run / "docs" / "00-collect" / "changed-files.txt"
+    ).read_text(encoding="utf-8")
+    initial_diff = (initial_run / "docs" / "00-collect" / "push.diff").read_text(
+        encoding="utf-8"
+    )
+    assert "README.md\n" in initial_changed
+    assert f"### RANGE {empty_tree}..{initial_oid}\n" in initial_diff
+    assert "# Initial" in initial_diff
+
+    _run(["git", "checkout", "-b", "feature/ranges"], repo, env)
+    (repo / "feature.md").write_text("feature change\n", encoding="utf-8")
+    _run(["git", "add", "feature.md"], repo, env)
+    _run(["git", "commit", "-m", "feature"], repo, env)
+    feature_oid = _git(repo, env, "rev-parse", "HEAD")
+    _run(["git", "push", "origin", "feature/ranges"], repo, env, timeout=45)
+    feature_run = _latest_run(repo)
+    feature_changed = (
+        feature_run / "docs" / "00-collect" / "changed-files.txt"
+    ).read_text(encoding="utf-8")
+    feature_diff = (feature_run / "docs" / "00-collect" / "push.diff").read_text(
+        encoding="utf-8"
+    )
+    assert feature_changed == "feature.md\n"
+    assert f"### RANGE {initial_oid}..{feature_oid}\n" in feature_diff
+    assert "feature change" in feature_diff
 
 
 @pytest.mark.parametrize("distribution", ["wheel", "npm"])

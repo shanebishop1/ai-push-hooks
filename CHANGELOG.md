@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Review initial publication of the configured base branch against the empty
+  tree, while retaining configured-base comparison for new feature branches.
+- Persist bounded diffs as valid UTF-8, truncating at character boundaries and
+  representing malformed bytes with replacement characters within the budget.
 - Hardened pull-request creation by validating generated payload types,
   reconciling failed `gh` calls against GitHub, and keeping remote credentials
   out of diagnostics.
