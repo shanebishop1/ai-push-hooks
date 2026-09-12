@@ -258,6 +258,136 @@ collector = "docs_context"
         load_config(tmp_path)
 
 
+def test_load_config_rejects_duplicate_workflow_modules(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs", " docs "]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HookError, match=r"Duplicate module id `docs` in workflow\.modules"):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_duplicate_step_ids_within_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+
+[[modules.docs.steps]]
+id = " collect "
+type = "collect"
+collector = "other_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        HookError,
+        match=r"Duplicate step id `collect` at modules\.docs\.steps\[2\]\.id",
+    ):
+        load_config(tmp_path)
+
+
+def test_load_config_rejects_duplicate_step_ids_in_unselected_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+
+[modules.unselected]
+enabled = false
+
+[[modules.unselected.steps]]
+id = "query"
+type = "ask"
+prompt = "Return JSON"
+output = "query.json"
+
+[[modules.unselected.steps]]
+id = " query "
+type = "ask"
+prompt = "Return JSON"
+output = "other.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        HookError,
+        match=r"Duplicate step id `query` at modules\.unselected\.steps\[2\]\.id",
+    ):
+        load_config(tmp_path)
+
+
+def test_load_config_allows_same_step_id_in_different_modules(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs", "quality"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "collect"
+type = "collect"
+collector = "docs_context"
+
+[modules.quality]
+enabled = true
+
+[[modules.quality.steps]]
+id = "collect"
+type = "collect"
+collector = "quality_context"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config, _ = load_config(tmp_path)
+
+    assert config.modules["docs"].steps[0].id == "collect"
+    assert config.modules["quality"].steps[0].id == "collect"
+
+
 def test_load_config_rejects_unknown_nested_field(tmp_path: pathlib.Path) -> None:
     (tmp_path / "ai-push-hooks.toml").write_text(
         """

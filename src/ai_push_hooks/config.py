@@ -537,6 +537,15 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
     workflow = _require_table(raw.get("workflow", {}), "workflow")
     _validate_unknown_keys(workflow, {"modules"}, "workflow")
     _validate_string_list(workflow, "modules", "workflow")
+    if "modules" in workflow:
+        module_ids: set[str] = set()
+        for module_id in workflow["modules"]:
+            normalized_module_id = module_id.strip()
+            if normalized_module_id in module_ids:
+                raise HookError(
+                    f"Duplicate module id `{normalized_module_id}` in workflow.modules"
+                )
+            module_ids.add(normalized_module_id)
 
     modules = _require_table(raw.get("modules", {}), "modules")
     for module_id, module_value in modules.items():
@@ -549,12 +558,21 @@ def _validate_config_types(raw: dict[str, Any]) -> None:
             steps = module["steps"]
             if not isinstance(steps, (list, tuple)):
                 raise HookError(f"modules.{module_id}.steps must be an array of tables")
+            step_ids: set[str] = set()
             for index, step_value in enumerate(steps, start=1):
                 step = _require_table(step_value, f"modules.{module_id}.steps[{index}]")
                 label = f"modules.{module_id}.steps[{index}]"
                 _validate_unknown_keys(step, STEP_KEYS, label)
                 for key in ("id", "type"):
                     _validate_string(step, key, label)
+                step_id = step.get("id")
+                if isinstance(step_id, str):
+                    normalized_step_id = step_id.strip()
+                    if normalized_step_id in step_ids:
+                        raise HookError(
+                            f"Duplicate step id `{normalized_step_id}` at {label}.id"
+                        )
+                    step_ids.add(normalized_step_id)
                 if isinstance(step.get("type"), str):
                     _reject_legacy_step_type(step["type"].strip(), label)
                 for key in (
