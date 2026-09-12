@@ -1,5 +1,7 @@
 # ai-push-hooks
 
+[![CI](https://github.com/shanebishop1/ai-push-hooks/actions/workflows/ci.yml/badge.svg)](https://github.com/shanebishop1/ai-push-hooks/actions/workflows/ci.yml) [![npm beta](https://img.shields.io/npm/v/ai-push-hooks/beta?label=npm%20beta)](https://www.npmjs.com/package/ai-push-hooks/v/beta)
+
 **Agentic linting for the rules your coding agent forgot.**
 
 `AGENTS.md` tells an agent how to work. **ai-push-hooks checks whether it followed through.** Think of it as the inverse of `AGENTS.md`: a second pass over outgoing changes before `git push`, catching guidelines the agent forgot or neglected.
@@ -23,7 +25,7 @@ With lower-cost models such as GPT 5.6 Luna, GLM 5.3 Flash, Muse Spark 1.3, and 
 
 ## Quick Start
 
-Install the [ai-push-hooks skill](skills/ai-push-hooks/SKILL.md), tell your agent what intelligent checks you want before pushes, and let it set up the modules for you.
+Install the [ai-push-hooks skill](https://github.com/shanebishop1/ai-push-hooks/blob/main/skills/ai-push-hooks/SKILL.md), tell your agent what intelligent checks you want before pushes, and let it set up the modules for you.
 
 ```bash
 npm install --save-dev ai-push-hooks@beta
@@ -34,6 +36,12 @@ npx --no-install ai-push-hooks install
 Install and authenticate your chosen AI CLI. The current `init` starter checks documentation; replace its configuration with the rules-checking example below to check `AGENTS.md` instead. Then push normally.
 
 [Other installation options](docs/configuration.md#installation) | [Existing hook managers](docs/configuration.md#hook-managers)
+
+## Deterministic Demo
+
+![Review, fail, fix, commit, pass: deterministic demo](https://raw.githubusercontent.com/shanebishop1/ai-push-hooks/main/docs/demo/review-fix.gif)
+
+This generated GIF summarizes actual hook results from a disposable repository with a local deterministic command runner; it is not a live screen recording or live AI. It makes no provider calls, remote pushes, or Beads changes. Regenerate it with `uv run --no-project --with pillow==11.3.0 python docs/demo/generate.py`.
 
 ## Example: Check Your Rules
 
@@ -95,7 +103,7 @@ inputs = ["review/issues.json"]
 
 `docs_issue_array` is the existing schema name for `{file, description}` findings; it works for code rules too. A missing rules file or a failed check blocks the push by default. Findings live in the run artifacts under `.git/ai-push-hooks/`.
 
-**Want fixes too?** Add an `apply` step with the findings, your rules, and an explicit `allow_paths` list, then recheck and run tests. Applied edits are not auto-committed: review and commit them before retrying the push.
+**Want fixes too?** Add an `apply` step with the findings, your rules, and an explicit `allow_paths` list, then recheck and run tests. Applied edits are not auto-committed: review the diff, commit approved changes, and retry the push.
 
 ## Build Your Workflow
 
