@@ -1,0 +1,32 @@
+include MANIFEST.in
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
+include LICENSE
+include pyproject.toml
+include constraints-ci.txt
+include ai-push-hooks.toml
+include release-channel.toml
+include package.json
+include bin/ai-push-hooks.js
+include docs/configuration.md
+
+recursive-include src *.py
+recursive-include tests *.py *.mjs
+recursive-include scripts *.py *.sh
+include vendor/README.md
+include vendor/requirements.txt
+include vendor/*.whl
+
+exclude docs/architecture.html
+recursive-exclude docs/reports *
+recursive-exclude prds *
+recursive-exclude .dist *
+recursive-exclude build *
+recursive-exclude dist *
+recursive-exclude .pytest_cache *
+recursive-exclude .ruff_cache *
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude *.egg-info

@@ -123,7 +123,7 @@ jobs:
           node-version: "24"
 
       - name: Install Python build tools
-        run: python -m pip install --constraint constraints-ci.txt build twine
+        run: python -m pip install --constraint constraints-ci.txt build pytest twine
 
       - name: Show package tool versions
         run: |
@@ -140,6 +140,9 @@ jobs:
 
       - name: Validate Python distributions
         run: python -m twine check dist/*
+
+      - name: Build and collect tests from the unpacked sdist
+        run: python -m pytest -q tests/test_source_distribution.py
 
       - name: Smoke-test packed npm install
         env:
