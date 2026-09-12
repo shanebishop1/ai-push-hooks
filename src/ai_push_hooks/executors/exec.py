@@ -20,6 +20,7 @@ from ..paths import (
     resolve_contained_path,
 )
 from ..types import HookError, ModuleRuntimeState, RuntimeContext, StepConfig
+from .ask import validate_schema
 
 BEADS_ALIGNMENT_TIMEOUT_SECONDS = 30
 BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS = 120
@@ -266,14 +267,14 @@ def gh_pr_create_executor(
             "deferred_until_remote": True,
             "reason": reason,
         }
+    payload = validate_schema(
+        "pr_create_payload", json.loads(inputs[0].read_text(encoding="utf-8"))
+    )
     if shutil.which("gh") is None:
         raise HookError("`gh` is required for PR creation but is not installed")
     repository = git_utils.resolve_github_repository(
         context.repo_root, context.remote_name, context.remote_url
     )
-    payload = json.loads(inputs[0].read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise HookError("PR creation payload must be an object")
     existing_pr = git_utils.lookup_open_pr_url(
         context.repo_root, branch_name, default_base_branch, repository
     )
@@ -282,8 +283,8 @@ def gh_pr_create_executor(
 
     base_branch = default_base_branch
     head_branch = branch_name
-    title = git_utils.sanitize_pr_title(str(payload.get("title", "")).strip(), branch_name)
-    body = str(payload.get("body", "")).strip()
+    title = git_utils.sanitize_pr_title(payload.get("title", "").strip(), branch_name)
+    body = payload.get("body", "").strip()
     if not body:
         commits = git_utils.collect_commit_messages_for_ranges(
             context.repo_root,
@@ -312,7 +313,7 @@ def gh_pr_create_executor(
         "--body",
         body,
     ]
-    if bool(payload.get("draft", False)):
+    if payload.get("draft", False):
         args.append("--draft")
     created = git_utils.run_command(args, cwd=context.repo_root, check=False)
     combined_output = "\n".join([(created.stdout or "").strip(), (created.stderr or "").strip()])

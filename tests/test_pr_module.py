@@ -130,6 +130,71 @@ def test_gh_pr_create_defaults_to_configured_base_branch(tmp_path: pathlib.Path,
     assert captured["args"][captured["args"].index("--repo") + 1] == "test/repo"
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("title", True), ("body", 123), ("draft", "false"), ("draft", 1)],
+)
+def test_gh_pr_create_rejects_malformed_payload_before_gh_operations(
+    tmp_path: pathlib.Path, monkeypatch, field: str, value: object
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload.write_text(json.dumps({field: value}) + "\n", encoding="utf-8")
+
+    def fail_gh_operation(*args, **kwargs):
+        raise AssertionError("malformed PR payload must not invoke a GitHub operation")
+
+    monkeypatch.setattr(exec_module.shutil, "which", fail_gh_operation)
+    monkeypatch.setattr(git_utils, "resolve_github_repository", fail_gh_operation)
+    monkeypatch.setattr(git_utils, "lookup_open_pr_url", fail_gh_operation)
+    monkeypatch.setattr(git_utils, "run_command", fail_gh_operation)
+
+    with pytest.raises(HookError, match=rf"pr_create_payload\.{field}"):
+        gh_pr_create_executor(
+            context,
+            type("State", (), {"metadata": {}})(),
+            config.modules["pr"].steps[-1],
+            [payload],
+        )
+
+
+@pytest.mark.parametrize("draft", [None, False, True])
+def test_gh_pr_create_preserves_valid_draft_values(
+    tmp_path: pathlib.Path, monkeypatch, draft: bool | None
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/pr")
+    config = pr_config()
+    context = build_context(repo, config)
+    payload = context.run_dir / "pr-draft.json"
+    payload_data = {"title": "Title", "body": "Body"}
+    if draft is not None:
+        payload_data["draft"] = draft
+    payload.write_text(json.dumps(payload_data) + "\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(exec_module.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(git_utils, "lookup_open_pr_url", lambda *args, **kwargs: "")
+
+    def fake_run_command(args, cwd, **kwargs):
+        captured["args"] = args
+        return type("Completed", (), {"returncode": 0, "stdout": "https://github.com/o/r/pull/1", "stderr": ""})()
+
+    monkeypatch.setattr(git_utils, "run_command", fake_run_command)
+
+    gh_pr_create_executor(
+        context,
+        type("State", (), {"metadata": {}})(),
+        config.modules["pr"].steps[-1],
+        [payload],
+    )
+
+    args = captured["args"]
+    assert isinstance(args, list)
+    assert ("--draft" in args) is (draft is True)
+
+
 def test_gh_pr_create_cannot_override_pushed_head_or_configured_base(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
