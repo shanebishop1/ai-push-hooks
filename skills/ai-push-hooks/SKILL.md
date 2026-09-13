@@ -1,11 +1,11 @@
 ---
 name: ai-push-hooks
-description: AI-powered Git pre-push checks for repository rules, scoped fixes, and explicit quality gates. Use to install, configure, test, or troubleshoot ai-push-hooks with OpenCode, Codex, Claude Code, or custom runners.
+description: AI-powered Git pre-push checks for repository rules, scoped fixes, and explicit quality gates. Use to install, configure, test, or troubleshoot ai-push-hooks with the first-class OpenCode, Codex, and Claude Code adapters, or any agentic CLI through a custom runner.
 ---
 
 # ai-push-hooks
 
-`ai-push-hooks` reviews outgoing changes against configured instructions, optionally applies allowlisted fixes, and blocks pushes through explicit checks. It complements linters and tests; AI review is not a guarantee of compliance.
+`ai-push-hooks` reviews outgoing changes against configured instructions, optionally applies allowlisted fixes, and blocks pushes through explicit checks. OpenCode, Codex, and Claude Code are first-class adapters; other agentic CLIs can use the generic custom runner contract. It complements linters and tests; AI review is not a guarantee of compliance.
 
 1. Install the CLI, prepare authentication, and integrate or remove hooks using [setup](references/setup.md).
 2. Select runners/models, access modes, defaults, and environment overrides using [configuration](references/configuration.md).

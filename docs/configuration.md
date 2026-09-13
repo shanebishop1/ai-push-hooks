@@ -64,6 +64,8 @@ Upgrading from 0.2.1? Rename `type = "llm"` steps to `type = "ask"`.
 
 `[llm].runner` selects the default; a step's `runner` overrides it. Referenced profiles must exist under `[runners.<name>]`, except for the implicit OpenCode default.
 
+OpenCode, Codex, and Claude are first-class adapters. The generic `command` type is for other agentic CLIs and follows the custom runner contract below.
+
 | Profile field | Values / behavior |
 | --- | --- |
 | `type` | Required: `opencode`, `codex`, `claude`, or `command`. |
@@ -168,7 +170,7 @@ complied with every instruction.
 
 ## Custom Runners
 
-Use a command profile for another CLI, including Pi, or your own wrapper. This example expects a local `scripts/review-agent` program that reads the prompt from stdin and writes its final response to stdout:
+Use a `command` profile to invoke any other agentic CLI, including Pi, directly or through a thin wrapper. A wrapper can normalize JSONL events into a final response. The runner must be noninteractive: read the prompt from stdin or argv, write only the final response to stdout, and use exit codes to report success or failure.
 
 ```toml
 [runners.custom]
@@ -180,7 +182,7 @@ project_access = "project"
 
 Select it with `runner = "custom"` on an `ask` or `apply` step. The runner receives the full instruction and artifact packet. For apply, its working directory is the staging copy.
 
-Commands are argv arrays, not shell strings. Whole-argument placeholders are `{model}`, `{cwd}`, `{stage}`, and `{prompt}`. The `argv` transport requires exactly one `{prompt}` argument; stdin avoids exposing prompts in process listings. Custom programs inherit the user environment and own their permissions and session lifecycle.
+Commands are argv arrays, not shell strings. Whole-argument placeholders are `{model}`, `{cwd}`, `{stage}`, and `{prompt}`. The `argv` transport requires exactly one `{prompt}` argument; stdin avoids exposing prompts in process listings. Custom programs inherit the user's environment, including authentication variables, and manage their own permissions and session setup/cleanup. For apply, the working directory is the staging copy.
 
 ## Commands And Callbacks
 

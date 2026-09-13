@@ -31,9 +31,9 @@ Select a profile with `[llm].runner` or `runner = "codex"` on an `ask`/`apply` s
 
 Without an explicit OpenCode profile, `[llm].model`/`variant` configure it. `AI_PUSH_HOOKS_MODEL` overrides the selected profile's model. OpenCode isolates configuration and permissions, disabling project/global config, external plugins, and MCP servers. Codex uses read-only analysis and workspace-write apply; Claude uses separate analysis/edit permissions. Apply always uses a staging copy. Supply repository rules as artifacts explicitly.
 
-### Custom CLI
+### Custom Runners
 
-For Pi or another program, define a trusted wrapper that reads the prompt on stdin and writes only its final response to stdout:
+For any other agentic CLI, including Pi, invoke it directly or define a trusted thin wrapper when its native stdout JSONL needs normalization. The noninteractive runner must read the prompt from stdin or argv, write only its final response to stdout, and use exit codes for success or failure:
 
 ```toml
 [runners.custom]
@@ -43,7 +43,7 @@ prompt_transport = "stdin"
 project_access = "project"
 ```
 
-Select `runner = "custom"`. This is a direct argv array, not a shell string. Whole-argument placeholders: `{prompt}`, `{model}`, `{cwd}`, `{stage}`. `prompt_transport = "argv"` requires exactly one `{prompt}` argument; stdin transport must omit it and avoids exposing prompts in process listings. Custom runners inherit the environment and own permissions/session cleanup; apply runs them in staging.
+Select `runner = "custom"`. This is a direct argv array, not a shell string. Whole-argument placeholders: `{prompt}`, `{model}`, `{cwd}`, `{stage}`. `prompt_transport = "argv"` requires exactly one `{prompt}` argument; stdin transport must omit it and avoids exposing prompts in process listings. Custom runners inherit the user's environment, including authentication variables, and manage their own permissions and session setup/cleanup; apply runs them in staging.
 
 ## Defaults
 

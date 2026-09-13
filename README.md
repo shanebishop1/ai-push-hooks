@@ -6,7 +6,7 @@
 
 `AGENTS.md` tells an agent how to work. **ai-push-hooks checks whether it followed through.** Think of it as the inverse of `AGENTS.md`: a second pass over outgoing changes before `git push`, catching guidelines the agent forgot or neglected.
 
-Use **OpenCode, Codex, or Claude Code** to check rules that need judgment, not just a regex. Report violations, apply scoped fixes, and block pushes with explicit checks. It's a hedge against missed instructions, not a guarantee that AI catches everything.
+Use **OpenCode, Codex, Claude Code, or your own agentic CLI** to check rules that need judgment, not just a regex. Report violations, apply scoped fixes, and block pushes with explicit checks. It's a hedge against missed instructions, not a guarantee that AI catches everything.
 
 ## Rules Worth Checking
 
@@ -117,7 +117,7 @@ Each module combines the steps it needs:
 
 ## Choose Your AI
 
-OpenCode defaults to **`openai/gpt-5.6-luna`**. Explicit runner profiles use their own model settings. To use Codex or Claude Code, add its profile and change `[llm].runner`:
+OpenCode, Codex, and Claude Code have first-class adapters. OpenCode defaults to **`openai/gpt-5.6-luna`**. Explicit runner profiles use their own model settings. To use Codex or Claude Code, add its profile and change `[llm].runner`:
 
 ```toml
 [runners.codex]
@@ -127,7 +127,7 @@ type = "codex"
 type = "claude"
 ```
 
-Each `ask` or `apply` step can override the runner, so one tool can review and another can fix. Use model identifiers available to your provider. Other tools, including Pi, can use a [custom command runner](docs/configuration.md#custom-runners).
+Each `ask` or `apply` step can override the runner, so one tool can review and another can fix. **Any other agentic CLI, including Pi, can integrate through a [custom command runner](docs/configuration.md#custom-runners)**: supply a noninteractive command or a thin wrapper. Use model identifiers available to your provider.
 
 ## Control And Safety
 
