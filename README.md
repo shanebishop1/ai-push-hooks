@@ -19,9 +19,11 @@ Use **OpenCode, Codex, or Claude Code** to check rules that need judgment, not j
 
 Write your own rules in prompts or supply a rules file as context. These are examples of checks you configure, not built-in guarantees.
 
-## Why Now?
+## Why This Tool?
 
-With lower-cost models such as GPT 5.6 Luna, GLM 5.3 Flash, Muse Spark 1.3, and Gemini Flash, running several focused agentic checks on each push can be practical, rather than reserving AI review for special occasions. Keep context narrow and measure your workflow's cost and latency. GPT 5.6 Luna is the default.
+Keep your coding workflow; add a check before Git sends the commits. ai-push-hooks combines repository-specific AI checks, scripts, and explicit pass/fail gates around the outgoing diff, using your existing coding CLIs. No daemon or hosted review service is required.
+
+Use it alongside [Lefthook](https://github.com/evilmartians/lefthook) for hook management and [roborev](https://github.com/kenn-io/roborev) for background reviews. [Archon](https://github.com/coleam00/Archon) and [TAKT](https://github.com/nrslib/takt) orchestrate development tasks; this tool deliberately stays narrower. Its job is to check your rules before a push, not take over how you build the project.
 
 ## Quick Start
 
@@ -97,7 +99,7 @@ inputs = ["review/issues.json"]
 
 `docs_issue_array` is the existing schema name for `{file, description}` findings; it works for code rules too. A missing rules file or a failed check blocks the push by default. Findings live in the run artifacts under `.git/ai-push-hooks/`.
 
-**Want fixes too?** Add an `apply` step with the findings, your rules, and an explicit `allow_paths` list, then recheck and run tests. Applied edits are not auto-committed: review the diff, commit approved changes, and retry the push.
+**Want fixes too?** Add an `apply` step with the findings, your rules, and an explicit `allow_paths` list, then recheck and run tests. [Runner completion is not proof that a fix landed](docs/configuration.md#deterministic-postconditions-after-apply): verify the result. Applied edits are not auto-committed: review the diff, commit approved changes, and retry the push.
 
 ## Build Your Workflow
 
@@ -132,6 +134,7 @@ Each `ask` or `apply` step can override the runner, so one tool can review and a
 - Errors block pushes by default. AI judgments can still miss violations or report false positives.
 - `apply` validates file and Git state and limits propagated edits to `allow_paths`. It does not auto-commit.
 - Runners, scripts, and callbacks are trusted local programs, not an OS sandbox.
+- Local hooks can be bypassed; retain CI for required enforcement.
 - Repository content may be sent to your model provider. Review its privacy and billing terms.
 
 Logs and run summaries live under `.git/ai-push-hooks/`. OpenCode transcripts are captured there by default. To intentionally skip one push: `AI_PUSH_HOOKS_SKIP=1 git push`.
