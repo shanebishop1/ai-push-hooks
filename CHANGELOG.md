@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Documentation
+
+- Added a tested deterministic postcondition recipe that distinguishes successful
+  runner execution from a verified fix, while preserving legitimate no-op applies.
+- Recorded bounded live runner evidence and the local Codex sandbox limitation.
+
 ## [0.3.2] - 2026-09-12
 
 This is a beta patch release. Python and npm both use `0.3.2`, the canonical

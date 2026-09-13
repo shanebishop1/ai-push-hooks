@@ -81,6 +81,22 @@ OpenCode runs with isolated configuration and permissions; project/global config
 
 Apply requires a single pushed branch whose local commit is the checked-out `HEAD`. Staging excludes Git metadata, `AGENTS.md`, ignored files, symlinks, and special files. These controls are not an OS sandbox or an automatic rollback system. See [Security](../SECURITY.md).
 
+### Live validation snapshot
+
+Bounded live checks on 2026-09-12 used ai-push-hooks 0.3.2 on Linux:
+
+| Runner (CLI; model) | Review | Apply |
+| --- | --- | --- |
+| OpenCode (1.18.29; `openai/gpt-5.6-luna`) | Passed | Passed |
+| Claude Code (2.1.220; `sonnet`) | Passed | Passed |
+| Codex (0.148.0; configured default) | Passed | Blocked by local sandbox |
+
+These results cover the synthetic fixture used for this validation; they do not guarantee behavior for arbitrary models or platforms. Protected-file and Git-metadata checks passed where an edit succeeded.
+
+#### Local troubleshooting: Codex bubblewrap
+
+The Codex apply block reported `bwrap: loopback: Failed RTM_NEWADDR`; the independent, no-AI check `codex sandbox linux -- /usr/bin/true` returned 1 with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Resolve the host sandbox restriction rather than disabling protections. This failure occurred before an edit could be propagated. A runner can complete a turn while reporting that it could not perform the task, so use a postcondition to check the desired checkout outcome.
+
 ### Apply and manual commits
 
 `apply` is generic: it can edit any eligible checkout file matching `allow_paths`; it is not limited to Markdown. The runner edits a temporary staging copy, and only validated changes propagate back to the checkout. Those edits do not enter the commit already being pushed, and `apply` never creates a Git commit.
@@ -96,6 +112,59 @@ inputs = ["apply/result.json"]
 ```
 
 The assertion checks `apply/result.json`'s `changed_files` and intentionally blocks when edits were propagated. Review `git diff`, run the relevant checks, commit the approved changes, and retry the push. On the retry, the assertion passes when the apply step reports no changes.
+
+### Deterministic postconditions after apply
+
+An apply process succeeding, or reporting `changed_files = []`, is not proof that
+the requested result is present. The latter can simply mean that the apply was a
+legitimate no-op because the checkout was already correct. Add a deterministic
+postcondition after `apply` and before the manual-commit gate when the desired
+file content has a precise representation:
+
+```toml
+[general]
+require_clean_worktree = true
+
+[workflow]
+modules = ["docs"]
+
+[modules.docs]
+enabled = true
+
+[[modules.docs.steps]]
+id = "apply"
+type = "apply"
+prompt = "In the existing README.md, replace 'Release note: DRAFT.' with 'Release note: READY.' and make no other changes."
+allow_paths = ["README.md"]
+
+[[modules.docs.steps]]
+id = "postcondition"
+type = "assert"
+command = [
+  "{python}",
+  "-c",
+  "import pathlib, sys; sys.exit(0 if pathlib.Path('README.md').read_text(encoding='utf-8') == 'Release note: READY.\\n' else 1)",
+]
+inputs = ["apply/result.json"]
+
+[[modules.docs.steps]]
+id = "manual-commit"
+type = "assert"
+assertion = "docs_apply_requires_manual_commit"
+inputs = ["apply/result.json"]
+```
+
+This is an intentional synthetic example, not a recommendation to overwrite a
+real README: its fixture starts with exactly `Release note: DRAFT.\n`, and its
+desired full content is exactly `Release note: READY.\n`.
+The command is a direct argv vector rather than a Python `assert`; Python
+optimization must not be able to remove the check. The postcondition reads the
+checkout after apply, not the commit being pushed. Keep the clean-worktree
+workflow setting for the hook's starting state and the manual-commit gate for
+the intentionally dirty post-apply checkout: review the resulting diff, run
+relevant checks, commit it, and retry the push. This gate and postcondition
+still do not prove human review, semantic correctness, or that an agent
+complied with every instruction.
 
 ## Custom Runners
 

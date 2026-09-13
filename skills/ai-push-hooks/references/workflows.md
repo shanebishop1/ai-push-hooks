@@ -91,7 +91,21 @@ inputs = ["apply/result.json"]
 
 An input ending in `issues.json` containing `[]` skips apply. Apply may also run without prior ask. Use narrow globs; staging excludes/protects Git metadata, `AGENTS.md`, ignored files, symlinks, and special files. Only permitted changes propagate. Apply requires one non-deletion pushed branch whose local commit equals checked-out `HEAD`.
 
-The manual-commit assertion blocks after edits, not on all unresolved findings. Add a fresh review/assert gate for remaining policy violations; do not claim this assertion proves compliance. Review propagated edits, run project tests, and commit only with authorization before retrying. These controls are not an OS sandbox or an automatic rollback system.
+This generic sequence intentionally does not impose a README content check. If a scoped fix has a known expected file outcome, insert this small synthetic postcondition between `apply` and `manual-commit` (adapt the path and text; the fixture content is intentionally exact and is not a real-repository overwrite):
+
+```toml
+[[modules.rules.steps]]
+id = "postcondition"
+type = "assert"
+command = [
+  "{python}",
+  "-c",
+  "import pathlib, sys; sys.exit(0 if pathlib.Path('README.md').read_text(encoding='utf-8') == 'Release note: READY.\\n' else 1)",
+]
+inputs = ["apply/result.json"]
+```
+
+The synthetic fixture starts as `Release note: DRAFT.\n`; an apply success or `changed_files = []` is not outcome proof, although an already-correct no-op is legitimate. This command checks the checkout after apply, not the commit being pushed. Keep `require_clean_worktree = true` for the hook's starting state and the manual-commit gate for propagated edits. The manual gate alone does not block unresolved findings. Add a fresh review/assert step for semantic outcomes; these checks do not prove human review or complete agent compliance.
 
 ## Deterministic Checks And Callbacks
 
