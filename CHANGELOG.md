@@ -4,13 +4,25 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-14
+
+This is a beta patch release. Python and npm both use `0.3.3`, the canonical
+Git tag is `v0.3.3`, npm uses the `beta` dist-tag, and GitHub marks the release
+as a prerelease. PyPI does not provide a separate beta channel, so Python users
+must select the exact `0.3.3` version.
+
+This is a documentation and validation patch only; it adds no runtime features.
+
 ### Documentation
 
 - Added a tested deterministic postcondition recipe that distinguishes successful
   runner execution from a verified fix, while preserving legitimate no-op applies.
-- Recorded bounded live runner evidence and the local Codex sandbox limitation.
+- Recorded live runner validation results for OpenCode, Claude Code, and Codex.
 - Clarified the focused pre-push use case and how the tool complements hook
   managers, background reviewers, and broader agent workflow frameworks.
+- Documented custom-agent CLI support through the custom command runner.
+- Updated the Codex conformance check to 0.152.0 and verified live project reads
+  and allowlisted edits with `gpt-5.6-luna`.
 
 ## [0.3.2] - 2026-09-12
 
@@ -203,7 +215,8 @@ the exact `0.2.0` version rather than a PyPI beta channel.
 - Preserved Git porcelain paths and protected pre-existing dirty allowlisted files during apply steps.
 - Clarified module-local artifact references and standardized the repository hook integration.
 
-[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.2.1...v0.3.0
