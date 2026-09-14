@@ -352,3 +352,48 @@ def test_real_command_timeout_and_signal_diagnostics_are_bounded_and_redacted(
     assert "docs.query" in message
     assert "stderr:" in message
     assert secret not in message
+
+
+def test_real_command_timeout_error_redacts_partial_env_value_at_timeout_eof(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synthetic_credential = "synthetic-openai-value-0123456789"
+    partial_credential = synthetic_credential[:12]
+    monkeypatch.setenv("OPENAI_API_KEY", synthetic_credential)
+    script = (
+        "import os, sys, time; "
+        "sys.stderr.write('x' * 1000 + os.environ['OPENAI_API_KEY'][:12]); "
+        "sys.stderr.flush(); "
+        "time.sleep(10)"
+    )
+    profile = RunnerProfile(
+        name="real-command",
+        type="command",
+        project_access="project",
+        command=(sys.executable, "-c", script),
+    )
+    repo, context = _profiled_context(tmp_path, profile)
+    context.config = replace(
+        context.config,
+        llm=replace(context.config.llm, timeout_seconds=2.0),
+    )
+    step = next(
+        step for step in context.config.modules["docs"].steps if step.id == "query"
+    )
+    step = replace(step, inputs=())
+    _logger_boundary(context, monkeypatch)
+
+    with pytest.raises(HookError) as raised:
+        run_runner_once(
+            context,
+            step,
+            "instruction",
+            [],
+            "docs.query",
+            working_directory=repo,
+        )
+
+    message = str(raised.value)
+    assert "stderr:" in message
+    assert synthetic_credential not in message
+    assert partial_credential not in message

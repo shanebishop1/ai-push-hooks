@@ -30,6 +30,7 @@ from ai_push_hooks.executors.runners import (
     RunnerArtifact,
     SessionMetadata,
     build_prompt_packet,
+    bounded_diagnostic,
     bounded_redacted_diagnostics,
     finalize_runner,
     require_final_text,
@@ -252,6 +253,82 @@ def test_diagnostics_are_bounded_redacted_and_do_not_need_environment_or_prompt(
 
     value = request(tmp_path, instruction="do not leak this prompt")
     assert "do not leak this prompt" not in repr(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "secrets", "max_chars"),
+    [
+        (
+            "diagnostic-padding-" + "unstructured-boundary-value",
+            ("unstructured-boundary-value",),
+            32,
+        ),
+        (
+            "escaped-padding-"
+            + json.dumps('quoted-opaque-"with-newline"\\n')
+            + " and second-boundary-value",
+            (
+                'quoted-opaque-"with-newline"\\n',
+                json.dumps('quoted-opaque-"with-newline"\\n'),
+                "second-boundary-value",
+            ),
+            38,
+        ),
+        ("short-limit-value", ("short-limit-value",), 4),
+    ],
+)
+def test_bounded_diagnostic_redacts_known_values_crossing_preview_boundary(
+    value: str, secrets: tuple[str, ...], max_chars: int
+) -> None:
+    diagnostic = bounded_diagnostic(value, max_chars=max_chars, secrets=secrets)
+
+    assert len(diagnostic) <= max_chars
+    assert diagnostic.endswith("[truncated]"[:max_chars])
+    for secret in secrets:
+        assert secret not in diagnostic
+        if len(secret) > 1:
+            assert secret[:3] not in diagnostic
+
+
+def test_bounded_diagnostic_collapses_overlapping_boundary_redactions() -> None:
+    visible_prefix = "abcdefghijklmnopqrstuvwxy"
+    value = "p" * 20 + visible_prefix + "!"
+
+    diagnostic = bounded_diagnostic(
+        value,
+        max_chars=len(value) - 1,
+        secrets=(visible_prefix + "-opaque", "xy-secondary-value"),
+    )
+
+    assert diagnostic == ("p" * 20 + "[REDACTED][truncated]")
+
+
+@pytest.mark.parametrize(
+    ("value", "secret", "expected"),
+    [
+        ("note abcd1234a", "abcd1234a", "note [REDACTED]"),
+        ("note abcabc", "abcabc", "note [REDACTED]"),
+        ("standalone-opaque-value", "standalone-opaque-value", "[REDACTED]"),
+    ],
+)
+def test_bounded_diagnostic_redacts_complete_values_before_partial_matching(
+    value: str, secret: str, expected: str
+) -> None:
+    assert bounded_diagnostic(value, max_chars=100, secrets=(secret,)) == expected
+
+
+def test_bounded_diagnostic_normalizes_terminal_controls_before_boundary_match() -> (
+    None
+):
+    secret = "opaque-ansi-value-12345678901234567890"
+    decorated = "opaque-\x1b[31mansi\x1b[0m-value-12345678901234567890"
+    value = "diagnostic-" + decorated + "-tail"
+    max_chars = value.index("345678901234567890")
+
+    diagnostic = bounded_diagnostic(value, max_chars=max_chars, secrets=(secret,))
+
+    assert "opaque-ansi-value-123456789012" not in diagnostic
+    assert diagnostic.endswith("[truncated]")
 
 
 def test_result_accepts_multiline_final_text_and_ansi_child_output() -> None:

@@ -403,6 +403,77 @@ def strip_terminal_controls(value: str) -> str:
     return _UNSAFE_TERMINAL_CONTROL_PATTERN.sub("", without_ansi)
 
 
+def _diagnostic_redaction_values(secrets: Sequence[str]) -> tuple[str, ...]:
+    values: list[str] = []
+    seen: set[str] = set()
+    fragment_count = 0
+    for secret in secrets:
+        if not isinstance(secret, str) or not secret or secret in seen:
+            continue
+        seen.add(secret)
+        values.append(secret)
+        # A bounded fragment set catches a child echoing one prompt token,
+        # while skipping a whole large diff avoids the old O(words * stream)
+        # behavior.  The request-sensitive helper additionally suppresses
+        # excerpts for genuinely large request bodies.
+        if len(secret) <= MAX_DIAGNOSTIC_REQUEST_CHARS:
+            for fragment in _DIAGNOSTIC_FRAGMENT_PATTERN.findall(secret):
+                if fragment not in seen:
+                    seen.add(fragment)
+                    values.append(fragment)
+                    fragment_count += 1
+                    if fragment_count >= 512:
+                        break
+            if fragment_count >= 512:
+                continue
+    return tuple(values)
+
+
+def _longest_prefix_suffix(value: str, prefix: str) -> int:
+    """Return the longest suffix of ``value`` that is a prefix of ``prefix``."""
+
+    limit = min(len(value), len(prefix))
+    if limit == 0:
+        return 0
+    pattern = prefix[:limit]
+    failure = [0] * limit
+    matched = 0
+    for index in range(1, limit):
+        while matched and pattern[matched] != pattern[index]:
+            matched = failure[matched - 1]
+        if pattern[matched] == pattern[index]:
+            matched += 1
+        failure[index] = matched
+
+    matched = 0
+    for character in value[-limit:]:
+        while matched and (matched == limit or pattern[matched] != character):
+            matched = failure[matched - 1]
+        if pattern[matched] == character:
+            matched += 1
+    return matched
+
+
+def _boundary_redaction_start(value: str, secrets: Sequence[str]) -> int | None:
+    """Find the earliest visible prefix of a known value at a cutoff."""
+
+    earliest: int | None = None
+    for secret in secrets:
+        if len(secret) <= 1:
+            continue
+        # The captured child stream may itself end while a known value is
+        # being emitted, so do not require the value's unseen suffix to exist
+        # in ``value``.  This comparison is bounded by the preview and secret
+        # prefix, rather than scanning an unbounded stream tail.
+        prefix = secret[: min(len(value), len(secret) - 1)]
+        overlap = _longest_prefix_suffix(value, prefix)
+        if overlap:
+            start = len(value) - overlap
+            if earliest is None or start < earliest:
+                earliest = start
+    return earliest
+
+
 def redact_diagnostic(value: str, *, secrets: Sequence[str] = ()) -> str:
     """Redact supplied secrets and common credential-shaped values."""
 
@@ -414,28 +485,7 @@ def redact_diagnostic(value: str, *, secrets: Sequence[str] = ()) -> str:
             ),
             redacted,
         )
-    redaction_values: list[str] = []
-    seen: set[str] = set()
-    fragment_count = 0
-    for secret in secrets:
-        if not isinstance(secret, str) or not secret or secret in seen:
-            continue
-        seen.add(secret)
-        redaction_values.append(secret)
-        # A bounded fragment set catches a child echoing one prompt token,
-        # while skipping a whole large diff avoids the old O(words * stream)
-        # behavior.  The request-sensitive helper additionally suppresses
-        # excerpts for genuinely large request bodies.
-        if len(secret) <= MAX_DIAGNOSTIC_REQUEST_CHARS:
-            for fragment in _DIAGNOSTIC_FRAGMENT_PATTERN.findall(secret):
-                if fragment not in seen:
-                    seen.add(fragment)
-                    redaction_values.append(fragment)
-                    fragment_count += 1
-                    if fragment_count >= 512:
-                        break
-            if fragment_count >= 512:
-                continue
+    redaction_values = _diagnostic_redaction_values(secrets)
     for secret in sorted(redaction_values, key=len, reverse=True):
         redacted = redacted.replace(secret, "[REDACTED]")
     return redacted
@@ -454,10 +504,18 @@ def bounded_diagnostic(
     raw = str(value)
     # Redact only the bounded preview.  Anything after this point cannot be
     # present in the returned diagnostic, and therefore does not need a scan.
-    # Credential-shaped values which reach the preview boundary are still
-    # handled by the regex redactor before the preview is returned.
-    preview = raw[:max_chars]
+    # A known value can start in the preview and finish after it, though; mask
+    # that visible prefix after ordinary redaction so a complete match cannot
+    # be destroyed first.  Boundary matching is bounded even for large
+    # streams/secrets.
+    preview = strip_terminal_controls(raw[:max_chars])
+    redaction_values = _diagnostic_redaction_values(secrets)
     safe = redact_diagnostic(preview, secrets=secrets)
+    boundary_start = _boundary_redaction_start(safe, redaction_values)
+    if boundary_start is not None:
+        # Several known values can overlap at the cutoff.  Replace their
+        # union once so insertion cannot invalidate another span's index.
+        safe = safe[:boundary_start] + "[REDACTED]"
     if len(raw) <= max_chars and len(safe) <= max_chars:
         return safe
     if max_chars <= len(DIAGNOSTIC_TRUNCATION_MARKER):
