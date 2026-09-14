@@ -543,6 +543,9 @@ def collect_changed_files(repo_root: pathlib.Path, ranges: list[str]) -> list[st
             [
                 "git",
                 "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
                 "--name-only",
                 "--diff-filter=ACMRDT",
                 "-z",
@@ -639,7 +642,15 @@ def collect_diff(repo_root: pathlib.Path, ranges: list[str], max_bytes: int) -> 
 
         body, body_truncated = _collect_bounded_git_diff(
             repo_root,
-            ["git", "diff", "--unified=3", range_expr],
+            [
+                "git",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--unified=3",
+                range_expr,
+            ],
             limit - len(output),
         )
         if not body_truncated:

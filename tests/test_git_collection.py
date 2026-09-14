@@ -58,6 +58,35 @@ def test_changed_files_preserve_surrogateescape(
     assert collect_changed_files(pathlib.Path("."), ["range"]) == [escaped_name]
 
 
+def test_collection_ignores_external_diff_textconv_and_color_configuration(
+    tmp_path: pathlib.Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    (repo / "review.txt").write_text("base source\n", encoding="utf-8")
+    (repo / ".gitattributes").write_text("review.txt diff=rewriter\n", encoding="utf-8")
+    first = _commit(repo, "add review source")
+    (repo / "review.txt").write_text("canonical source\n", encoding="utf-8")
+    second = _commit(repo, "change review source")
+
+    _git(repo, "config", "diff.external", "/usr/bin/true")
+    _git(
+        repo,
+        "config",
+        "diff.rewriter.textconv",
+        "/usr/bin/sed 's/canonical/rewritten/g'",
+    )
+    _git(repo, "config", "color.ui", "always")
+
+    ranges = [f"{first}..{second}"]
+    changed = collect_changed_files(repo, ranges)
+    diff = collect_diff(repo, ranges, 10_000)
+
+    assert changed == ["review.txt"]
+    assert "+canonical source" in diff
+    assert "rewritten" not in diff
+    assert "\x1b[" not in diff
+
+
 def test_collect_diff_enforces_encoded_byte_limit_for_multibyte_output(
     tmp_path: pathlib.Path,
 ) -> None:
