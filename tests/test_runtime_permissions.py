@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pathlib
 import stat
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from ai_push_hooks import paths as path_utils
 from ai_push_hooks.artifacts import ArtifactStore
@@ -16,7 +19,7 @@ from ai_push_hooks.executors.runners import (
 )
 from ai_push_hooks.executors.runners.opencode import OpenCodeRunner
 from ai_push_hooks.hook import _build_logger, _write_summary
-from ai_push_hooks.types import ModuleRuntimeState
+from ai_push_hooks.types import HookError, ModuleRuntimeState
 
 from .conftest import build_context, init_repo
 
@@ -95,6 +98,97 @@ def test_runtime_directories_and_files_are_private_by_default(
             assert _mode(directory) == 0o700
     for file_path in (artifact, log_path, summary, transcript):
         assert _mode(file_path) == 0o600
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "file"])
+@pytest.mark.parametrize("use_private_root", [False, True])
+def test_private_directory_rejects_preexisting_unsafe_target_without_chmod(
+    tmp_path: pathlib.Path, replacement: str, use_private_root: bool
+) -> None:
+    private_root = tmp_path / "private-root"
+    if use_private_root:
+        private_root.mkdir()
+    target_root = private_root if use_private_root else tmp_path
+    target = target_root / "private"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside.chmod(0o755)
+
+    if replacement == "symlink":
+        target.symlink_to(outside, target_is_directory=True)
+        expected_mode_path = outside
+    else:
+        target.write_text("not a directory\n", encoding="utf-8")
+        target.chmod(0o644)
+        expected_mode_path = target
+    expected_mode = _mode(expected_mode_path)
+
+    with pytest.raises(HookError):
+        path_utils.ensure_private_directory(
+            target, private_root=private_root if use_private_root else None
+        )
+
+    assert _mode(expected_mode_path) == expected_mode
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "file"])
+@pytest.mark.parametrize("use_private_root", [False, True])
+def test_private_directory_rejects_unsafe_concurrent_replacement_without_chmod(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+    use_private_root: bool,
+) -> None:
+    private_root = tmp_path / "private-root"
+    if use_private_root:
+        private_root.mkdir()
+    target_root = private_root if use_private_root else tmp_path
+    target = target_root / "private"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside.chmod(0o755)
+    replacement_started = threading.Barrier(2)
+    replacement_done = threading.Event()
+    replacement_errors: list[BaseException] = []
+
+    def replace_target() -> None:
+        try:
+            replacement_started.wait(timeout=5)
+            if replacement == "symlink":
+                target.symlink_to(outside, target_is_directory=True)
+            else:
+                target.write_text("not a directory\n", encoding="utf-8")
+                target.chmod(0o644)
+            replacement_done.set()
+        except BaseException as error:  # pragma: no cover - diagnostic path
+            replacement_errors.append(error)
+            replacement_done.set()
+
+    attacker = threading.Thread(target=replace_target)
+    attacker.start()
+    original_mkdir = pathlib.Path.mkdir
+
+    def mkdir_with_replacement(self, *args, **kwargs):
+        if self == target:
+            replacement_started.wait(timeout=5)
+            assert replacement_done.wait(timeout=5)
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", mkdir_with_replacement)
+    with pytest.raises(HookError):
+        path_utils.ensure_private_directory(
+            target, private_root=private_root if use_private_root else None
+        )
+    attacker.join(timeout=5)
+
+    assert not attacker.is_alive()
+    assert replacement_errors == []
+    if replacement == "symlink":
+        assert target.is_symlink()
+        assert _mode(outside) == 0o755
+    else:
+        assert target.is_file()
+        assert _mode(target) == 0o644
 
 
 def test_windows_reparse_attribute_is_treated_as_unsafe(monkeypatch, tmp_path) -> None:

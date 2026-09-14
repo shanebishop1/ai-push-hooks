@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Redacted known sensitive values across diagnostic truncation and partial-output
+  boundaries, including timeout errors.
+- Collected review diffs independently of external diff drivers, text conversion,
+  and color settings.
+- Made private runtime directory creation tolerate concurrent OpenCode stages
+  while retaining directory and symlink checks.
 - Included regular-file, symlink, and other Git type changes in pushed-file
   facts exposed to workflows and Python callbacks.
 - Preserved each Python callback source's annotation semantics and registered

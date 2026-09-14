@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 import subprocess
+import threading
 from dataclasses import replace
 
 import pytest
@@ -20,6 +21,7 @@ from ai_push_hooks.executors.runners import (
     SessionMetadata,
 )
 from ai_push_hooks.executors.runners.opencode import OpenCodeRunner, create_runner
+from ai_push_hooks.executors.runners.opencode_support import opencode_isolation_env
 from ai_push_hooks.config import load_config
 from ai_push_hooks.types import HookError, HookLogger
 
@@ -608,6 +610,51 @@ def test_readonly_run_uses_private_isolation_and_provider_auth_only(
         "question",
     ):
         assert permissions[tool] == "deny"
+
+
+def test_concurrent_opencode_isolation_initialization_shares_fresh_parent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    config, _ = load_config(repo)
+    context = build_context(repo, config)
+    isolation_parent = context.run_dir / "opencode-isolation"
+    assert not isolation_parent.exists()
+    mkdir_barrier = threading.Barrier(2)
+    original_mkdir = pathlib.Path.mkdir
+
+    def synchronize_shared_parent(self, *args, **kwargs):
+        if self == isolation_parent:
+            mkdir_barrier.wait(timeout=5)
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", synchronize_shared_parent)
+    results: list[dict[str, str | None]] = []
+    errors: list[BaseException] = []
+
+    def initialize(stage_name: str) -> None:
+        try:
+            results.append(opencode_isolation_env(context, {}, stage_name))
+        except BaseException as error:  # pragma: no cover - diagnostic path
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=initialize, args=(stage_name,))
+        for stage_name in ("docs.query", "docs.collect")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(results) == 2
+    assert sorted(pathlib.Path(result["HOME"]).parent.name for result in results) == [
+        "docs.collect",
+        "docs.query",
+    ]
+    assert isolation_parent.is_dir()
 
 
 def test_apply_run_uses_allowlisted_edit_permissions_for_staging(

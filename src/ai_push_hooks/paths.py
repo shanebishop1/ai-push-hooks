@@ -104,6 +104,18 @@ def resolve_contained_path(base: pathlib.Path, raw: str, label: str) -> pathlib.
     return resolved_candidate
 
 
+def _ensure_private_directory_component(directory: pathlib.Path) -> None:
+    try:
+        directory.mkdir(mode=PRIVATE_DIRECTORY_MODE)
+    except FileExistsError:
+        # Tolerate a concurrent creator winning the mkdir race, then validate
+        # the result before changing its permissions.
+        pass
+    if path_is_link_or_reparse(directory) or not directory.is_dir():
+        raise HookError(f"Private runtime path is not a safe directory: {directory}")
+    os.chmod(directory, PRIVATE_DIRECTORY_MODE)
+
+
 def ensure_private_directory(
     path: pathlib.Path,
     *,
@@ -119,8 +131,7 @@ def ensure_private_directory(
         if path_is_link_or_reparse(current) or not current.is_dir():
             raise HookError(f"Private runtime directory has an unsafe parent: {path}")
         for directory in reversed(missing):
-            directory.mkdir(mode=PRIVATE_DIRECTORY_MODE)
-            os.chmod(directory, PRIVATE_DIRECTORY_MODE)
+            _ensure_private_directory_component(directory)
         if path_is_link_or_reparse(target) or not target.is_dir():
             raise HookError(f"Private runtime directory is unsafe: {path}")
         os.chmod(target, PRIVATE_DIRECTORY_MODE)
@@ -141,11 +152,12 @@ def ensure_private_directory(
             raise HookError(
                 f"Private runtime directory traverses a symlink or reparse point: {directory}"
             )
-        if not directory.exists():
-            directory.mkdir(mode=PRIVATE_DIRECTORY_MODE)
-        if not directory.is_dir():
-            raise HookError(f"Private runtime path is not a directory: {directory}")
-        os.chmod(directory, PRIVATE_DIRECTORY_MODE)
+        if directory.exists():
+            if not directory.is_dir():
+                raise HookError(f"Private runtime path is not a directory: {directory}")
+            os.chmod(directory, PRIVATE_DIRECTORY_MODE)
+        else:
+            _ensure_private_directory_component(directory)
     return target
 
 
