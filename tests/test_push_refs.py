@@ -14,7 +14,14 @@ from ai_push_hooks.git_utils import (
     path_matches,
 )
 from ai_push_hooks.modules.beads import collect_beads_status_context
-from ai_push_hooks.types import HookError, WorkflowRunResult
+from ai_push_hooks.plugin_loader import build_plugin_context
+from ai_push_hooks.types import (
+    HookError,
+    ModuleConfig,
+    ModuleRuntimeState,
+    StepConfig,
+    WorkflowRunResult,
+)
 
 from .conftest import init_repo
 
@@ -171,6 +178,36 @@ def test_hook_does_not_reuse_whole_push_files_or_diff_for_mixed_ranges(
     assert changed_file_ranges == [[branch_range, tag_range], [branch_range]]
     assert diff_ranges == [[branch_range, tag_range], [branch_range]]
     assert context.cache["branch_changed_files"] == ["src/feature.py"]
+
+
+def test_type_change_is_exported_in_exact_push_callback_context(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+    base = _commit_file(repo, "typed-entry", "regular\n", "add regular file")
+    (repo / "typed-entry").unlink()
+    (repo / "typed-entry").symlink_to("README.md")
+    _git(repo, "add", "typed-entry")
+    _git(repo, "commit", "-m", "replace regular file with symlink")
+    tip = _git(repo, "rev-parse", "HEAD")
+
+    context = _capture_hook_context(
+        repo,
+        monkeypatch,
+        [f"refs/heads/main {tip} refs/heads/main {base}"],
+    )
+    module = ModuleConfig(id="quality", enabled=True, steps=())
+    callback_context = build_plugin_context(
+        context,
+        ModuleRuntimeState(module),
+        StepConfig(id="facts", type="collect"),
+        (),
+    )
+
+    update = callback_context.push.push_updates[0]
+    assert (update.local_sha, update.remote_sha) == (tip, base)
+    assert callback_context.push.ranges == (f"{base}..{tip}",)
+    assert callback_context.push.changed_files == ("typed-entry",)
 
 
 def test_multiple_pushed_branches_fail_closed_before_workflow(

@@ -544,7 +544,7 @@ def collect_changed_files(repo_root: pathlib.Path, ranges: list[str]) -> list[st
                 "git",
                 "diff",
                 "--name-only",
-                "--diff-filter=ACMRD",
+                "--diff-filter=ACMRDT",
                 "-z",
                 range_expr,
             ],
