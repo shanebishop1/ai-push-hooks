@@ -181,7 +181,7 @@ def test_conformance_checks_only_contract_text_and_never_auth_commands(
     def fake_run(argv: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         calls.append(argv)
         if argv[-1] == "--version":
-            return subprocess.CompletedProcess(argv, 0, "codex-cli 0.148.0\n", "")
+            return subprocess.CompletedProcess(argv, 0, "codex-cli 0.152.0\n", "")
         return subprocess.CompletedProcess(
             argv,
             0,

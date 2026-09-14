@@ -19,7 +19,7 @@ from typing import Callable, Sequence
 
 EXPECTED_VERSIONS = {
     "opencode": "1.18.29",
-    "codex": "0.148.0",
+    "codex": "0.152.0",
     "claude": "2.1.220",
 }
 

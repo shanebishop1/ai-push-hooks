@@ -85,19 +85,24 @@ Apply requires a single pushed branch whose local commit is the checked-out `HEA
 
 ### Live validation snapshot
 
-Bounded live checks on 2026-09-12 used ai-push-hooks 0.3.2 on Linux:
+Live read/review and apply checks on Linux:
 
-| Runner (CLI; model) | Review | Apply |
-| --- | --- | --- |
-| OpenCode (1.18.29; `openai/gpt-5.6-luna`) | Passed | Passed |
-| Claude Code (2.1.220; `sonnet`) | Passed | Passed |
-| Codex (0.148.0; configured default) | Passed | Blocked by local sandbox |
+| Date | Runner (CLI; model) | Review | Apply |
+| --- | --- | --- | --- |
+| 2026-09-12 | OpenCode (1.18.29; `openai/gpt-5.6-luna`) | Passed | Passed |
+| 2026-09-12 | Claude Code (2.1.220; `sonnet`) | Passed | Passed |
+| 2026-09-14 | Codex (0.152.0; `gpt-5.6-luna`) | Passed | Passed |
 
-These results cover the synthetic fixture used for this validation; they do not guarantee behavior for arbitrary models or platforms. Protected-file and Git-metadata checks passed where an edit succeeded.
+The Codex check read a random value from a disposable repository, then verified
+that only the allowlisted README changed. These checks establish the tested
+operations, not compatibility with every model or platform.
 
-#### Local troubleshooting: Codex bubblewrap
+#### Local troubleshooting: Codex sandbox
 
-The Codex apply block reported `bwrap: loopback: Failed RTM_NEWADDR`; the independent, no-AI check `codex sandbox linux -- /usr/bin/true` returned 1 with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Resolve the host sandbox restriction rather than disabling protections. This failure occurred before an edit could be propagated. A runner can complete a turn while reporting that it could not perform the task, so use a postcondition to check the desired checkout outcome.
+For Codex 0.152, the standalone no-AI sandbox syntax is
+`codex sandbox -- /usr/bin/true`. Resolve host restrictions rather than disabling
+protections, and use a deterministic postcondition to verify the desired checkout
+outcome after an apply.
 
 ### Apply and manual commits
 

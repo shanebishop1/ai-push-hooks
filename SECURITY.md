@@ -117,7 +117,12 @@ The [0.3.0 release record](CHANGELOG.md#030---2026-09-09) documented a pinned
 Lefthook suite reporting **407 tests with no skips**, an OpenCode **1.18.29**
 contract smoke test with an in-process loopback mock provider and no external
 model call, and version/help-only checks for Codex **0.148.0** and Claude
-**2.1.220**. This is historical evidence, not a current suite result or proof
-for every provider, model, authentication mode, platform, or live `apply` path.
+**2.1.220**. The bounded validation snapshot also records Codex **0.152.0** on
+2026-09-14: its synthetic fixture verified a nonce read and an allowlisted marker
+apply followed by a deterministic postcondition. See the [runner validation
+snapshot](docs/configuration.md#live-validation-snapshot). Together, these records
+are historical or bounded evidence, not a current suite result or proof for every
+provider, model, authentication mode, platform, live `apply` path, or a general
+security guarantee.
 Treat generated-hook path checks and the Lefthook runner as integration
 safeguards, not isolation boundaries.
