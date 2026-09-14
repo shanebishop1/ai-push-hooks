@@ -13,10 +13,12 @@ from __future__ import annotations  # noqa: I001
 import errno
 import hashlib
 import inspect
+import itertools
 import os
 import pathlib
 import re
 import stat
+import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from types import ModuleType
@@ -35,6 +37,8 @@ _CALLABLE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _SOURCE_ENCODING = "utf-8"
 PLUGIN_SOURCE_MAX_BYTES = 1 * 1024 * 1024
 _SOURCE_READ_CHUNK_BYTES = 64 * 1024
+_MODULE_NUMBER = itertools.count(1)
+_MODULE_NUMBER_LOCK = threading.Lock()
 _OS_OPEN = os.open
 _DESCRIPTOR_RELATIVE_SUPPORTED = bool(
     getattr(os, "O_DIRECTORY", 0)
@@ -221,7 +225,6 @@ class PluginLoader:
         self._cache: dict[tuple[pathlib.Path, pathlib.Path], ModuleType] = {}
         self._lock = threading.RLock()
         self._source_locks: dict[tuple[pathlib.Path, pathlib.Path], threading.Lock] = {}
-        self._module_number = 0
 
     def _source_lock(self, key: tuple[pathlib.Path, pathlib.Path]) -> threading.Lock:
         with self._lock:
@@ -248,7 +251,12 @@ class PluginLoader:
         # to the lexical cache key for a safe repository file.
         try:
             source_text = source.decode(_SOURCE_ENCODING)
-            code = compile(source_text, str(callback_path), "exec")
+            code = compile(
+                source_text,
+                str(callback_path),
+                "exec",
+                dont_inherit=True,
+            )
         except UnicodeDecodeError:
             raise HookError(
                 f"Python plugin {relative_path}:{callable_name} source is not valid UTF-8"
@@ -258,16 +266,18 @@ class PluginLoader:
                 f"Python plugin {relative_path}:{callable_name} could not be compiled"
             ) from None
 
-        with self._lock:
-            self._module_number += 1
-            module_number = self._module_number
+        with _MODULE_NUMBER_LOCK:
+            module_number = next(_MODULE_NUMBER)
         digest = hashlib.sha256(f"{root}\0{callback_path}".encode()).hexdigest()[:16]
         module_name = f"ai_push_hooks_plugin_{digest}_{module_number}"
         module = ModuleType(module_name)
         module.__file__ = str(callback_path)
         module.__package__ = ""
+        imported = False
+        sys.modules[module_name] = module
         try:
             exec(code, module.__dict__)  # noqa: S102
+            imported = True
         except KeyboardInterrupt:
             raise
         except SystemExit:
@@ -290,6 +300,9 @@ class PluginLoader:
             raise HookError(
                 f"Python plugin {relative_path}:{callable_name} failed during import"
             ) from None
+        finally:
+            if not imported and sys.modules.get(module_name) is module:
+                del sys.modules[module_name]
         return module
 
     def load(self, repo_root: pathlib.Path, reference: str) -> Callable[..., Any]:

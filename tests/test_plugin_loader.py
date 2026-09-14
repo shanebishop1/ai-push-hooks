@@ -6,6 +6,7 @@ import sys
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
+from typing import get_type_hints
 
 import pytest
 
@@ -104,6 +105,87 @@ def test_same_filename_in_two_repositories_has_separate_cache(
 
     assert loader.invoke(first, "checks.py:hook", object()) == "first"
     assert loader.invoke(second, "checks.py:hook", object()) == "second"
+
+
+def test_distinct_loaders_keep_separate_registered_module_snapshots(
+    tmp_path: pathlib.Path,
+) -> None:
+    _write(
+        tmp_path,
+        "checks.py",
+        "def hook(context):\n    return (__name__, 'first')\n",
+    )
+    first_loader = PluginLoader()
+    first_callback = first_loader.load(tmp_path, "checks.py:hook")
+    first_name, first_value = first_callback(object())
+
+    _write(
+        tmp_path,
+        "checks.py",
+        "def hook(context):\n    return (__name__, 'second')\n",
+    )
+    second_loader = PluginLoader()
+    second_callback = second_loader.load(tmp_path, "checks.py:hook")
+    second_name, second_value = second_callback(object())
+
+    assert first_value == "first"
+    assert second_value == "second"
+    assert first_name != second_name
+    assert sys.modules[first_name].hook is first_callback  # type: ignore[attr-defined]
+    assert sys.modules[second_name].hook is second_callback  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("future_import", "expected_annotation"),
+    [("", int), ("from __future__ import annotations\n", "int")],
+)
+def test_typed_dataclass_uses_source_annotation_semantics_and_module_identity(
+    tmp_path: pathlib.Path, future_import: str, expected_annotation: object
+) -> None:
+    _write(
+        tmp_path,
+        "checks.py",
+        future_import + "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class Payload:\n"
+        "    value: int\n"
+        "def hook(context):\n"
+        "    return Payload\n",
+    )
+    loader = PluginLoader()
+    payload = loader.invoke(tmp_path, "checks.py:hook", object())
+    module_name = payload.__module__
+    del loader
+
+    assert payload.__annotations__["value"] == expected_annotation
+    assert get_type_hints(payload) == {"value": int}
+    assert sys.modules[module_name].Payload is payload  # type: ignore[attr-defined]
+
+
+def test_source_without_future_annotations_does_not_inherit_loader_future(
+    tmp_path: pathlib.Path,
+) -> None:
+    _write(
+        tmp_path,
+        "checks.py",
+        "def hook(context: UndefinedPluginType):\n    return context\n",
+    )
+
+    with pytest.raises(HookError, match="failed during import"):
+        PluginLoader().load(tmp_path, "checks.py:hook")
+
+
+def test_failed_import_removes_only_its_registered_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    _write(tmp_path, "checks.py", "raise RuntimeError('failed')\n")
+    before = {name for name in sys.modules if name.startswith("ai_push_hooks_plugin_")}
+
+    with pytest.raises(HookError, match="failed during import"):
+        PluginLoader().load(tmp_path, "checks.py:hook")
+
+    after = {name for name in sys.modules if name.startswith("ai_push_hooks_plugin_")}
+    assert after == before
 
 
 def test_concurrent_load_executes_source_once(tmp_path: pathlib.Path) -> None:
