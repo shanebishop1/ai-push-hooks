@@ -23,6 +23,8 @@ else:
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 10_000
 MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+RELEASE_WORKFLOW_NAME = "release"
+RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml"
 
 
 def _github_list(
@@ -174,7 +176,7 @@ def _extract_archive(data: bytes, root: Path) -> None:
 
 def _validate_actions_artifact(
     artifact: dict[str, Any], artifact_id: int, tag: str, commit: str
-) -> None:
+) -> int:
     if artifact.get("id") != artifact_id:
         raise core.ReleaseValidationError(
             "Actions artifact identity does not match the requested ID"
@@ -192,18 +194,85 @@ def _validate_actions_artifact(
         raise core.ReleaseValidationError(
             "Actions artifact has no workflow run identity"
         )
-    if not isinstance(workflow_run.get("id"), int) or workflow_run["id"] <= 0:
+    run_id = workflow_run.get("id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
         raise core.ReleaseValidationError(
             "Actions artifact has no valid workflow run ID"
         )
-    if workflow_run.get("event") != "push":
+    repository_id = workflow_run.get("repository_id")
+    head_repository_id = workflow_run.get("head_repository_id")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in (repository_id, head_repository_id)
+    ):
         raise core.ReleaseValidationError(
-            "Actions artifact was not produced by a push workflow"
+            "Actions artifact has no valid repository identity"
+        )
+    if repository_id != head_repository_id:
+        raise core.ReleaseValidationError(
+            "Actions artifact was not produced from the recovery repository"
+        )
+    if workflow_run.get("head_branch") != tag:
+        raise core.ReleaseValidationError(
+            "Actions artifact ref does not match the recovery tag"
         )
     if workflow_run.get("head_sha") != commit:
         raise core.ReleaseValidationError(
             "Actions artifact head SHA does not match the recovery commit"
         )
+    return run_id
+
+
+def _validate_actions_workflow_run(
+    run: dict[str, Any],
+    run_id: int,
+    repo: str,
+    repository_id: int,
+    tag: str,
+    commit: str,
+) -> None:
+    run_url = f"{core.GITHUB_API_URL}/repos/{repo}/actions/runs/{run_id}"
+    if run.get("id") != run_id or run.get("url") != run_url:
+        raise core.ReleaseValidationError(
+            "Actions workflow run identity does not match the artifact"
+        )
+    if run.get("event") != "push":
+        raise core.ReleaseValidationError(
+            "Actions artifact was not produced by a push workflow"
+        )
+    if run.get("head_branch") != tag:
+        raise core.ReleaseValidationError(
+            "Actions workflow run ref does not match the recovery tag"
+        )
+    if run.get("head_sha") != commit:
+        raise core.ReleaseValidationError(
+            "Actions workflow run head SHA does not match the recovery commit"
+        )
+    workflow_id = run.get("workflow_id")
+    expected_workflow_url = (
+        f"{core.GITHUB_API_URL}/repos/{repo}/actions/workflows/{workflow_id}"
+    )
+    if (
+        run.get("name") != RELEASE_WORKFLOW_NAME
+        or run.get("path") != RELEASE_WORKFLOW_PATH
+        or isinstance(workflow_id, bool)
+        or not isinstance(workflow_id, int)
+        or workflow_id <= 0
+        or run.get("workflow_url") != expected_workflow_url
+    ):
+        raise core.ReleaseValidationError(
+            "Actions artifact was not produced by the release workflow"
+        )
+    for field in ("repository", "head_repository"):
+        repository = run.get(field)
+        if (
+            not isinstance(repository, dict)
+            or repository.get("id") != repository_id
+            or str(repository.get("full_name", "")).casefold() != repo.casefold()
+        ):
+            raise core.ReleaseValidationError(
+                "Actions workflow run repository does not match the recovery repository"
+            )
 
 
 def _download_actions_release_set(
@@ -219,7 +288,21 @@ def _download_actions_release_set(
     )
     if not isinstance(metadata, dict):
         raise core.ReleaseValidationError("Actions release artifact was not found")
-    _validate_actions_artifact(metadata, artifact_id, tag, commit)
+    run_id = _validate_actions_artifact(metadata, artifact_id, tag, commit)
+    workflow_run = metadata["workflow_run"]
+    run = core._github_get(
+        f"{core.GITHUB_API_URL}/repos/{repo}/actions/runs/{run_id}", token
+    )
+    if not isinstance(run, dict):
+        raise core.ReleaseValidationError("Actions artifact workflow run was not found")
+    _validate_actions_workflow_run(
+        run,
+        run_id,
+        repo,
+        workflow_run["repository_id"],
+        tag,
+        commit,
+    )
     data = _asset_bytes(
         {
             "url": f"{core.GITHUB_API_URL}/repos/{repo}/actions/artifacts/{artifact_id}/zip",

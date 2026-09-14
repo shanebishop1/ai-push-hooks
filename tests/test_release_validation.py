@@ -226,14 +226,85 @@ def test_stage_missing_rejects_manifest_path_traversal(tmp_path):
         release.stage_missing(manifest, root, destination, ["ai-push-hooks-1.2.3.tgz"])
 
 
-def test_actions_artifact_requires_immutable_run_head_binding():
-    valid = {
+def _actions_artifact():
+    return {
         "id": 42,
         "name": "release-set-v1.2.3",
         "expired": False,
-        "workflow_run": {"id": 7, "event": "push", "head_sha": "a" * 40},
+        "size_in_bytes": 123,
+        "workflow_run": {
+            "id": 7,
+            "repository_id": 99,
+            "head_repository_id": 99,
+            "head_branch": "v1.2.3",
+            "head_sha": "a" * 40,
+        },
     }
-    recovery._validate_actions_artifact(valid, 42, "v1.2.3", "a" * 40)
+
+
+def _actions_run():
+    return {
+        "id": 7,
+        "name": "release",
+        "event": "push",
+        "head_branch": "v1.2.3",
+        "head_sha": "a" * 40,
+        "path": ".github/workflows/release.yml",
+        "workflow_id": 1234,
+        "url": "https://api.github.com/repos/owner/repo/actions/runs/7",
+        "workflow_url": (
+            "https://api.github.com/repos/owner/repo/actions/workflows/1234"
+        ),
+        "repository": {"id": 99, "full_name": "owner/repo"},
+        "head_repository": {"id": 99, "full_name": "owner/repo"},
+    }
+
+
+def test_actual_shaped_actions_artifact_fetches_and_validates_associated_run(
+    tmp_path, monkeypatch
+):
+    artifact = _actions_artifact()
+    run = _actions_run()
+    actions = []
+
+    def get(url, _token):
+        actions.append(("get", url))
+        return artifact if url.endswith("/actions/artifacts/42") else run
+
+    def download(asset, _token, *, repo):
+        actions.append(("download", asset["url"], repo))
+        return b"archive"
+
+    monkeypatch.setattr(recovery.core, "_github_get", get)
+    monkeypatch.setattr(recovery, "_asset_bytes", download)
+    monkeypatch.setattr(
+        recovery,
+        "_extract_archive",
+        lambda data, root: actions.append(("extract", data, root)),
+    )
+
+    recovery._download_actions_release_set(
+        "owner/repo", 42, "v1.2.3", "a" * 40, tmp_path, "token"
+    )
+
+    assert actions == [
+        (
+            "get",
+            "https://api.github.com/repos/owner/repo/actions/artifacts/42",
+        ),
+        ("get", "https://api.github.com/repos/owner/repo/actions/runs/7"),
+        (
+            "download",
+            "https://api.github.com/repos/owner/repo/actions/artifacts/42/zip",
+            "owner/repo",
+        ),
+        ("extract", b"archive", tmp_path),
+    ]
+
+
+def test_actions_artifact_requires_immutable_identity_and_head_binding():
+    valid = _actions_artifact()
+    assert recovery._validate_actions_artifact(valid, 42, "v1.2.3", "a" * 40) == 7
 
     for field, value in (
         ("id", 43),
@@ -243,10 +314,59 @@ def test_actions_artifact_requires_immutable_run_head_binding():
         candidate = {**valid, field: value}
         with pytest.raises(release.ReleaseValidationError):
             recovery._validate_actions_artifact(candidate, 42, "v1.2.3", "a" * 40)
-    for field, value in (("event", "workflow_dispatch"), ("head_sha", "b" * 40)):
+    for field, value in (
+        ("id", 0),
+        ("repository_id", 100),
+        ("head_branch", "main"),
+        ("head_sha", "b" * 40),
+    ):
         candidate = {**valid, "workflow_run": {**valid["workflow_run"], field: value}}
         with pytest.raises(release.ReleaseValidationError):
             recovery._validate_actions_artifact(candidate, 42, "v1.2.3", "a" * 40)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("id", 8),
+        ("event", "workflow_dispatch"),
+        ("event", "pull_request"),
+        ("head_sha", "b" * 40),
+        ("head_branch", "main"),
+        ("path", ".github/workflows/ci.yml"),
+        ("workflow_url", "https://api.github.com/repos/owner/repo/actions/workflows/9"),
+        ("head_repository", {"id": 98, "full_name": "attacker/fork"}),
+    ],
+)
+def test_actions_artifact_rejects_tampered_run_before_archive_download(
+    tmp_path, monkeypatch, field, value
+):
+    artifact = _actions_artifact()
+    run = {**_actions_run(), field: value}
+    requests = []
+    downloads = []
+
+    def get(url, _token):
+        requests.append(url)
+        return artifact if url.endswith("/actions/artifacts/42") else run
+
+    monkeypatch.setattr(recovery.core, "_github_get", get)
+    monkeypatch.setattr(
+        recovery,
+        "_asset_bytes",
+        lambda *args, **kwargs: downloads.append((args, kwargs)),
+    )
+
+    with pytest.raises(release.ReleaseValidationError):
+        recovery._download_actions_release_set(
+            "owner/repo", 42, "v1.2.3", "a" * 40, tmp_path, "token"
+        )
+
+    assert requests == [
+        "https://api.github.com/repos/owner/repo/actions/artifacts/42",
+        "https://api.github.com/repos/owner/repo/actions/runs/7",
+    ]
+    assert downloads == []
 
 
 def test_recovery_archive_rejects_path_traversal(tmp_path):

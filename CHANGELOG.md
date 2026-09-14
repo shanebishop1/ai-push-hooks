@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- Included regular-file, symlink, and other Git type changes in pushed-file
+  facts exposed to workflows and Python callbacks.
+- Preserved each Python callback source's annotation semantics and registered
+  callback modules for dataclasses and runtime type-hint introspection.
+- Validated recovered Actions artifacts against their associated push run,
+  release workflow, repository, tag, and commit before downloading archives.
+
 ## [0.3.3] - 2026-09-14
 
 This is a beta patch release. Python and npm both use `0.3.3`, the canonical
