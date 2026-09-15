@@ -213,6 +213,20 @@ def _runtime_metadata_namespaces(context: RuntimeContext) -> tuple[pathlib.Path,
     return namespaces
 
 
+def _resolve_effective_hooks_path(context: RuntimeContext) -> pathlib.Path:
+    raw_hooks_path = run_command(
+        ["git", "rev-parse", "--git-path", "hooks"],
+        cwd=context.repo_root,
+        check=True,
+    ).stdout.strip()
+    if not raw_hooks_path:
+        raise HookError("Git did not return an effective hooks path")
+    hooks_path = pathlib.Path(raw_hooks_path)
+    if not hooks_path.is_absolute():
+        hooks_path = context.repo_root / hooks_path
+    return pathlib.Path(os.path.abspath(hooks_path))
+
+
 def _snapshot_git_control_metadata(context: RuntimeContext) -> MetadataSnapshot:
     git_dir = context.git_dir.resolve(strict=True)
     common_dir = resolve_git_common_dir(context.repo_root).resolve(strict=True)
@@ -323,15 +337,7 @@ def _snapshot_git_control_metadata(context: RuntimeContext) -> MetadataSnapshot:
     for name in ("HEAD", "config", "config.worktree", "packed-refs"):
         record(f"shared:{name}", common_dir / name)
     scan_tree("shared:refs", common_dir / "refs")
-    raw_hooks_path = run_command(
-        ["git", "rev-parse", "--git-path", "hooks"],
-        cwd=context.repo_root,
-        check=True,
-    ).stdout.strip()
-    hooks_path = pathlib.Path(raw_hooks_path)
-    if not hooks_path.is_absolute():
-        hooks_path = context.repo_root / hooks_path
-    hooks_path = pathlib.Path(os.path.abspath(hooks_path))
+    hooks_path = _resolve_effective_hooks_path(context)
     if any(is_path_within(hooks_path, namespace) for namespace in excluded_namespaces):
         raise HookError(
             "Configured core.hooksPath must not overlap ai-push-hooks runtime metadata: "
@@ -582,6 +588,12 @@ def _safe_destination(context: RuntimeContext, relative_path: str) -> pathlib.Pa
         raise HookError(
             f"Apply destination resolves inside Git metadata: {relative_path}"
         )
+    hooks_path = _resolve_effective_hooks_path(context).resolve(strict=False)
+    if is_path_within(resolved_destination, hooks_path):
+        raise HookError(
+            f"Apply destination resolves inside configured Git hooks path: "
+            f"{relative_path}"
+        )
     return destination
 
 
@@ -602,6 +614,12 @@ def _preflight_apply_operations(
     context: RuntimeContext,
     operations: list[ApplyOperation],
 ) -> None:
+    # Validate every destination before the propagation loop can create a
+    # parent directory or write even the first operation.  In particular, a
+    # configured core.hooksPath may not exist yet, so this guard cannot depend
+    # on the hooks tree being present in the checkout.
+    for operation in operations:
+        _safe_destination(context, operation.relative_path)
     conflicts = [
         operation.relative_path
         for operation in operations
@@ -647,7 +665,6 @@ def _propagate_staging_changes(
     operations: list[ApplyOperation] = []
     expected: dict[str, StagedFile | None] = {}
     for relative_path in sorted(changed_paths):
-        _safe_destination(context, relative_path)
         baseline = baselines.get(relative_path, DestinationState("missing"))
         staged = after.get(relative_path)
         if staged is None:

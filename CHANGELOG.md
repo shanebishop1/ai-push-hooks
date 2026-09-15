@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Rejected apply destinations inside configured Git hooks directories before
+  propagating any changes to the checkout.
 - Isolated npm's Python startup from consuming-repository modules, inherited
   `PYTHONPATH`, and user-site imports so they cannot replace the installed hook.
 - Excluded Git-ignored local documentation from default model context collection.

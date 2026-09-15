@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 import subprocess
+import sys
 from dataclasses import replace
 
 import pytest
@@ -209,3 +210,111 @@ def test_legacy_empty_issues_shortcut_is_retained_and_marked(
         "changed_files": [],
         "skipped": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("hooks_path_kind", "operation", "target"),
+    [
+        ("relative", "modify", ".githooks/pre-commit"),
+        ("relative", "delete", ".githooks/pre-commit"),
+        ("relative", "new", ".githooks/new-hook"),
+        ("absolute", "modify", ".githooks/pre-commit"),
+        ("relative-late", "modify", "zz-hooks/pre-commit"),
+        ("nonexistent", "new", ".newhooks/new-hook"),
+    ],
+)
+def test_command_runner_rejects_staging_writes_inside_effective_hooks_path(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hooks_path_kind: str,
+    operation: str,
+    target: str,
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/docs")
+    hooks_directory = repo / (
+        "zz-hooks" if hooks_path_kind == "relative-late" else ".githooks"
+    )
+    hooks_directory.mkdir()
+    hook = hooks_directory / "pre-commit"
+    hook_bytes = b"#!/bin/sh\nexit 0\n"
+    hook.write_bytes(hook_bytes)
+    hook.chmod(0o755)
+    subprocess.run(
+        ["git", "add", f"{hooks_directory.name}/pre-commit"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "add clean test hook"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    configured_hooks_path = (
+        str(hooks_directory)
+        if hooks_path_kind == "absolute"
+        else "zz-hooks"
+        if hooks_path_kind == "relative-late"
+        else ".githooks"
+    )
+    if hooks_path_kind == "nonexistent":
+        configured_hooks_path = ".newhooks"
+    subprocess.run(
+        ["git", "config", "core.hooksPath", configured_hooks_path],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    config, _ = load_config(repo)
+    profile = RunnerProfile(
+        name="apply-command-runner",
+        type="command",
+        model="test-model",
+        command=(
+            sys.executable,
+            "-c",
+            "import pathlib, sys; "
+            "target = pathlib.Path(sys.argv[1]); "
+            "operation = sys.argv[2]; "
+            "target.unlink() if operation == 'delete' else "
+            "(target.parent.mkdir(parents=True, exist_ok=True) if operation == 'new' else None); "
+            "target.write_text('changed hook\\n', encoding='utf-8') if operation == 'modify' else "
+            "(target.write_text('new hook\\n', encoding='utf-8') if operation == 'new' else None); "
+            "pathlib.Path('README.md').write_text('runner README\\n', encoding='utf-8')",
+            target,
+            operation,
+        ),
+    )
+    config = replace(config, runners={profile.name: profile})
+    context = build_context(repo, config)
+    step = replace(
+        config.modules["docs"].steps[3],
+        runner=profile.name,
+        allow_paths=("**",),
+    )
+    input_path = _issues_artifact(context)
+    original_hook_mode = hook.stat().st_mode
+    checked_destinations: list[str] = []
+    real_safe_destination = apply_executor._safe_destination
+
+    def tracking_safe_destination(context, relative_path):
+        checked_destinations.append(relative_path)
+        return real_safe_destination(context, relative_path)
+
+    monkeypatch.setattr(
+        apply_executor, "_safe_destination", tracking_safe_destination
+    )
+
+    with pytest.raises(HookError, match="configured Git hooks path"):
+        _run(context, step, input_path)
+
+    assert hook.read_bytes() == hook_bytes
+    assert hook.stat().st_mode == original_hook_mode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "# Example\n"
+    if operation == "new":
+        assert not (repo / target).exists()
+    if hooks_path_kind == "relative-late":
+        assert checked_destinations == ["README.md", target]
+        assert checked_destinations == sorted(checked_destinations)
