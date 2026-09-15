@@ -1,6 +1,6 @@
 # ai-push-hooks
 
-[![CI](https://github.com/shanebishop1/ai-push-hooks/actions/workflows/ci.yml/badge.svg)](https://github.com/shanebishop1/ai-push-hooks/actions/workflows/ci.yml) [![npm beta](https://img.shields.io/npm/v/ai-push-hooks/beta?label=npm%20beta)](https://www.npmjs.com/package/ai-push-hooks/v/beta)
+[![CI](https://github.com/shanebishop1/ai-push-hooks/actions/workflows/ci.yml/badge.svg)](https://github.com/shanebishop1/ai-push-hooks/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/ai-push-hooks)](https://www.npmjs.com/package/ai-push-hooks)
 
 **Agentic linting for the rules your coding agent forgot.**
 
@@ -30,7 +30,7 @@ Use it alongside [Lefthook](https://github.com/evilmartians/lefthook) for hook m
 Install the [ai-push-hooks skill](https://github.com/shanebishop1/ai-push-hooks/blob/main/skills/ai-push-hooks/SKILL.md), tell your agent what intelligent checks you want before pushes, and let it set up the modules for you.
 
 ```bash
-npm install --save-dev ai-push-hooks@beta
+npm install --save-dev ai-push-hooks
 npx --no-install ai-push-hooks init
 npx --no-install ai-push-hooks install
 ```

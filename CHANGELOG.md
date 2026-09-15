@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-14
+
+This is the first stable release. Python and npm both use `0.3.4`, the canonical
+Git tag is `v0.3.4`, npm uses the `latest` dist-tag, and GitHub publishes a
+standard release.
+
 ### Fixed
 
 - Failed the clean-worktree gate when Git cannot verify checkout status.
@@ -239,7 +245,8 @@ the exact `0.2.0` version rather than a PyPI beta channel.
 - Preserved Git porcelain paths and protected pre-existing dirty allowlisted files during apply steps.
 - Clarified module-local artifact references and standardized the repository hook integration.
 
-[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/shanebishop1/ai-push-hooks/compare/v0.3.0...v0.3.1

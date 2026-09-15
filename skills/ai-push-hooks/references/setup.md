@@ -5,15 +5,15 @@
 Requires Git and Python 3.10+ on the hook process's `PATH` (documented support range: 3.10-3.13); npm additionally needs Node 18+. The npm wrapper does not bundle Python. Choose one installation surface:
 
 ```bash
-# Repository-local npm (beta channel).
-npm install --save-dev ai-push-hooks@beta
+# Repository-local npm.
+npm install --save-dev ai-push-hooks
 npx --no-install ai-push-hooks init --template minimal-docs
 npx --no-install ai-push-hooks install
 ```
 
 ```bash
 # Repository-local pnpm.
-pnpm add -D ai-push-hooks@beta
+pnpm add -D ai-push-hooks
 pnpm exec ai-push-hooks init --template minimal-docs
 pnpm exec ai-push-hooks install
 ```

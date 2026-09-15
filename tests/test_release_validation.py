@@ -141,16 +141,16 @@ def test_version_mapping_rejects_unapproved_spelling():
         release.map_versions("1.2.3b1", "1.2.3b1", "v1.2.3b1")
 
 
-def test_checked_in_channel_maps_stable_version_to_beta_without_version_special_case():
+def test_checked_in_channel_maps_stable_release():
     policy = release.load_release_channel(Path("release-channel.toml"))
-    info = release.map_versions("0.3.3", "0.3.3", "v0.3.3", policy)
-    assert policy.version == "0.3.3"
-    assert policy.channel == "beta"
-    assert policy.python_classifier == "Development Status :: 4 - Beta"
+    info = release.map_versions("0.3.4", "0.3.4", "v0.3.4", policy)
+    assert policy.version == "0.3.4"
+    assert policy.channel == "stable"
+    assert policy.python_classifier == "Development Status :: 5 - Production/Stable"
     assert policy.pypi_channel == "none"
-    assert info.channel == "beta"
-    assert info.npm_dist_tag == "beta"
-    assert info.github_prerelease is True
+    assert info.channel == "stable"
+    assert info.npm_dist_tag == "latest"
+    assert info.github_prerelease is False
 
 
 def _strict_release_set(tmp_path):

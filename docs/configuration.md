@@ -11,7 +11,7 @@ If a repository callback needs an external dependency, install it with the exact
 For pnpm:
 
 ```bash
-pnpm add -D ai-push-hooks@beta
+pnpm add -D ai-push-hooks
 pnpm exec ai-push-hooks init --template minimal-docs
 pnpm exec ai-push-hooks install
 ```
@@ -24,7 +24,7 @@ ai-push-hooks init --template minimal-docs
 ai-push-hooks install
 ```
 
-`uv tool install ai-push-hooks` or `pipx install ai-push-hooks` can replace the pip command. npm uses the `beta` tag while the package is in beta.
+`uv tool install ai-push-hooks` or `pipx install ai-push-hooks` can replace the pip command.
 
 AI steps need the selected CLI installed and authenticated with an available model. Deterministic-only workflows do not need one. `init` and `install` refuse to overwrite existing files; `--force` explicitly replaces them.
 
