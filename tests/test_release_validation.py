@@ -153,6 +153,15 @@ def test_checked_in_channel_maps_stable_release():
     assert info.github_prerelease is False
 
 
+def test_actions_artifact_recovery_does_not_require_an_existing_draft_release():
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    activation = workflow.split(
+        "- name: Activate the verified release without changing its assets", 1
+    )[1].split("- name: Create or verify", 1)[0]
+
+    assert "inputs.artifact_id == ''" in activation
+
+
 def _strict_release_set(tmp_path):
     info = release.VersionInfo("1.2.3", "1.2.3", "v1.2.3", "stable", "latest", False)
     files = {

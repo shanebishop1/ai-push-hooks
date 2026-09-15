@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format is based on 
 
 - Used GitHub's current Actions media type when recovering immutable release
   artifacts after delayed registry publication.
+- Created a missing GitHub release directly when recovering from an Actions
+  artifact instead of requiring a draft release first.
 
 ## [0.3.4] - 2026-09-14
 

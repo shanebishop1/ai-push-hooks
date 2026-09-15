@@ -504,7 +504,7 @@ jobs:
             --manifest "$RECOVERY_ROOT/checksum-manifest.json"
 
       - name: Activate the verified release without changing its assets
-        if: steps.verify-npm.outcome == 'success'
+        if: steps.verify-npm.outcome == 'success' && inputs.artifact_id == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
