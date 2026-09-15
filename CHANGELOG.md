@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- Used GitHub's current Actions media type when recovering immutable release
+  artifacts after delayed registry publication.
+
 ## [0.3.4] - 2026-09-14
 
 This is the first stable release. Python and npm both use `0.3.4`, the canonical

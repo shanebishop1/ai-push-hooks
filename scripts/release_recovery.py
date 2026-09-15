@@ -68,6 +68,7 @@ def _asset_bytes(
     *,
     repo: str | None = None,
     opener: Callable[..., Any] | None = None,
+    accept: str = "application/octet-stream",
 ) -> bytes:
     asset_url = asset.get("url")
     if not isinstance(asset_url, str) or not asset_url:
@@ -88,7 +89,7 @@ def _asset_bytes(
         allow_actions_artifact=True,
     )
     request_args: dict[str, Any] = {
-        "headers": core._auth_headers(token, "application/octet-stream"),
+        "headers": core._auth_headers(token, accept),
         "max_bytes": MAX_ARCHIVE_BYTES,
     }
     if opener is not None:
@@ -311,6 +312,7 @@ def _download_actions_release_set(
         },
         token,
         repo=repo,
+        accept="application/vnd.github+json",
     )
     _extract_archive(data, root)
 

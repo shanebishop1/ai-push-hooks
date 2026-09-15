@@ -271,8 +271,8 @@ def test_actual_shaped_actions_artifact_fetches_and_validates_associated_run(
         actions.append(("get", url))
         return artifact if url.endswith("/actions/artifacts/42") else run
 
-    def download(asset, _token, *, repo):
-        actions.append(("download", asset["url"], repo))
+    def download(asset, _token, *, repo, accept):
+        actions.append(("download", asset["url"], repo, accept))
         return b"archive"
 
     monkeypatch.setattr(recovery.core, "_github_get", get)
@@ -297,6 +297,7 @@ def test_actual_shaped_actions_artifact_fetches_and_validates_associated_run(
             "download",
             "https://api.github.com/repos/owner/repo/actions/artifacts/42/zip",
             "owner/repo",
+            "application/vnd.github+json",
         ),
         ("extract", b"archive", tmp_path),
     ]
@@ -941,6 +942,38 @@ def test_recovery_asset_rejects_arbitrary_url_before_request(monkeypatch):
             "secret-token",
         )
     assert called == []
+
+
+@pytest.mark.parametrize(
+    ("asset_url", "accept"),
+    [
+        (
+            "https://api.github.com/repos/owner/repo/actions/artifacts/1/zip",
+            "application/vnd.github+json",
+        ),
+        (
+            "https://api.github.com/repos/owner/repo/releases/assets/1",
+            "application/octet-stream",
+        ),
+    ],
+)
+def test_asset_download_uses_endpoint_specific_accept_header(asset_url, accept):
+    requests = []
+    opener, _ = opener_for(MockResponse(200, b"archive"))
+
+    def capture(request, timeout):
+        requests.append(request)
+        return opener(request, timeout)
+
+    recovery._asset_bytes(
+        {"url": asset_url, "size": len(b"archive")},
+        "secret-token",
+        repo="owner/repo",
+        opener=capture,
+        **({"accept": accept} if "actions/artifacts" in asset_url else {}),
+    )
+
+    assert requests[0].get_header("Accept") == accept
 
 
 def test_release_asset_match_rejects_arbitrary_url_before_request(monkeypatch):
