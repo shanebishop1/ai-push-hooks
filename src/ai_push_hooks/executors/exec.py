@@ -209,12 +209,10 @@ def beads_alignment_executor(
             "report_written": False,
             "unresolved": False,
         }
-    payload = json.loads(inputs[0].read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise HookError("beads_alignment payload must be an object")
+    payload = validate_schema(
+        "beads_alignment_result", json.loads(inputs[0].read_text(encoding="utf-8"))
+    )
     commands = payload.get("commands", [])
-    if not isinstance(commands, list):
-        raise HookError("beads_alignment commands must be an array")
     if len(commands) > BEADS_ALIGNMENT_MAX_COMMANDS:
         raise HookError(
             f"beads_alignment accepts at most {BEADS_ALIGNMENT_MAX_COMMANDS} commands"
@@ -245,8 +243,8 @@ def beads_alignment_executor(
         )
         commands_run.append(command)
 
-    report_markdown = str(payload.get("report_markdown", "")).strip()
-    unresolved = bool(payload.get("unresolved", False))
+    report_markdown = payload.get("report_markdown", "").strip()
+    unresolved = payload["unresolved"]
     report_written = False
     if report_markdown:
         if not report_markdown.endswith("\n"):

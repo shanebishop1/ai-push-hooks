@@ -5,6 +5,7 @@ import pathlib
 from typing import Any
 
 from ..types import RuntimeContext, StepConfig
+from .ask import validate_schema
 
 
 def docs_apply_requires_manual_commit(
@@ -28,8 +29,10 @@ def beads_alignment_clean(
     _step: StepConfig,
     inputs: list[pathlib.Path],
 ) -> dict[str, Any]:
-    payload = json.loads(inputs[0].read_text(encoding="utf-8"))
-    unresolved = bool(payload.get("unresolved", False))
+    payload = validate_schema(
+        "beads_alignment_result", json.loads(inputs[0].read_text(encoding="utf-8"))
+    )
+    unresolved = payload["unresolved"]
     if unresolved:
         return {
             "ok": False,

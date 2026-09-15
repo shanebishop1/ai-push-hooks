@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import pathlib
 import subprocess
+from dataclasses import replace
 
 import pytest
 
 from ai_push_hooks.artifacts import ArtifactStore
 from ai_push_hooks.engine import WorkflowEngine
 from ai_push_hooks.executors import exec as exec_module
+from ai_push_hooks.executors.assertions import beads_alignment_clean
 from ai_push_hooks import git_utils
 from ai_push_hooks.git_utils import collect_commit_messages_for_ranges
 from ai_push_hooks.executors.exec import (
@@ -17,6 +19,7 @@ from ai_push_hooks.executors.exec import (
     BEADS_ALIGNMENT_TOTAL_TIMEOUT_SECONDS,
     beads_alignment_executor,
 )
+from ai_push_hooks.executors.runners import RunnerCapabilities, RunnerResult
 from ai_push_hooks.types import HookError, ModuleConfig, ModuleRuntimeState, StepConfig
 
 from .conftest import build_context, init_repo, make_config
@@ -97,6 +100,120 @@ def test_beads_unresolved_writes_actionable_report(tmp_path: pathlib.Path) -> No
     assert (repo / "BEADS_STATUS_ACTION_REQUIRED.md").exists()
 
 
+def test_beads_clean_verdict_removes_existing_report(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/beads")
+    report = repo / "BEADS_STATUS_ACTION_REQUIRED.md"
+    report.write_text("stale action\n", encoding="utf-8")
+    config = beads_config()
+    context = build_context(repo, config)
+
+    def fake_ask(context, step, prompt, input_paths, stage_name):
+        return {"commands": [], "unresolved": False, "report_markdown": ""}
+
+    bd_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "ai_push_hooks.git_utils.run_command",
+        lambda args, **kwargs: bd_calls.append(args),
+    )
+
+    result = WorkflowEngine(
+        context=context,
+        artifacts=ArtifactStore(context.run_dir),
+        ask_executor=fake_ask,
+    ).run()
+
+    assert result.modules == {"beads": "completed"}
+    assert not report.exists()
+    assert bd_calls == []
+
+
+def test_beads_malformed_verdict_preserves_existing_report_before_side_effects(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/beads")
+    report = repo / "BEADS_STATUS_ACTION_REQUIRED.md"
+    report.write_text("keep this report\n", encoding="utf-8")
+    config = beads_config()
+    config = replace(config, llm=replace(config.llm, json_max_retries=0))
+    context = build_context(repo, config)
+
+    class FakeRunner:
+        capabilities = RunnerCapabilities()
+
+        def run(self, request):
+            return RunnerResult(
+                json.dumps(
+                    {
+                        "commands": [],
+                        "unresolved": None,
+                        "report_markdown": "",
+                    }
+                ),
+                0,
+                "",
+                "",
+            )
+
+    bd_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "ai_push_hooks.executors.runner_workflow.get_runner",
+        lambda _type: FakeRunner(),
+    )
+    monkeypatch.setattr(
+        "ai_push_hooks.git_utils.run_command",
+        lambda args, **kwargs: bd_calls.append(args),
+    )
+
+    with pytest.raises(HookError, match="unresolved"):
+        WorkflowEngine(context=context, artifacts=ArtifactStore(context.run_dir)).run()
+
+    assert report.read_text(encoding="utf-8") == "keep this report\n"
+    assert bd_calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"commands": []},
+        {"commands": [], "unresolved": None},
+        {"commands": [], "unresolved": "false"},
+        {"commands": [], "unresolved": []},
+        {"commands": [], "unresolved": {}},
+        {"commands": [], "unresolved": 1},
+        {"commands": [], "unresolved": False, "report_markdown": None},
+    ],
+)
+def test_beads_mutation_and_assertion_boundaries_reject_malformed_payloads(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+) -> None:
+    repo = init_repo(tmp_path, branch="feature/beads")
+    report = repo / "BEADS_STATUS_ACTION_REQUIRED.md"
+    report.write_text("keep this report\n", encoding="utf-8")
+    config = beads_config()
+    context = build_context(repo, config)
+    state = ModuleRuntimeState(module=config.modules["beads"])
+    plan_path = context.run_dir / "plan.json"
+    plan_path.write_text(json.dumps(payload), encoding="utf-8")
+    step = StepConfig(id="apply", type="exec", executor="beads_alignment")
+    bd_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "ai_push_hooks.git_utils.run_command",
+        lambda args, **kwargs: bd_calls.append(args),
+    )
+
+    with pytest.raises(HookError):
+        beads_alignment_executor(context, state, step, [plan_path])
+    with pytest.raises(HookError):
+        beads_alignment_clean(context, step, [plan_path])
+
+    assert report.read_text(encoding="utf-8") == "keep this report\n"
+    assert bd_calls == []
+
+
 def test_beads_non_feature_branch_skips(tmp_path: pathlib.Path) -> None:
     repo = init_repo(tmp_path, branch="main")
     config = beads_config()
@@ -173,7 +290,9 @@ def test_beads_alignment_executes_only_validated_alignment_commands(
         "bd update ai-push-hooks-123 --status in_progress",
         "bd close ai-push-hooks-456 --reason 'work shipped'",
     ]
-    plan_path.write_text(json.dumps({"commands": commands}), encoding="utf-8")
+    plan_path.write_text(
+        json.dumps({"commands": commands, "unresolved": False}), encoding="utf-8"
+    )
     calls: list[tuple[list[str], int | None, dict[str, str], bool]] = []
     resolutions: list[pathlib.Path] = []
     monkeypatch.setenv("BD_DB", "/tmp/beads.db")
@@ -269,7 +388,8 @@ def test_beads_alignment_rejects_untrusted_commands_before_any_execution(
                 "commands": [
                     "bd update safe-1 --status in_progress",
                     command,
-                ]
+                ],
+                "unresolved": False,
             }
         ),
         encoding="utf-8",
@@ -305,7 +425,8 @@ def test_beads_alignment_rejects_excessive_command_count_before_execution(
                 "commands": [
                     f"bd update issue-{index} --status in_progress"
                     for index in range(BEADS_ALIGNMENT_MAX_COMMANDS + 1)
-                ]
+                ],
+                "unresolved": False,
             }
         ),
         encoding="utf-8",
@@ -341,7 +462,8 @@ def test_beads_alignment_enforces_total_execution_budget(
                 "commands": [
                     "bd update issue-1 --status in_progress",
                     "bd update issue-2 --status in_progress",
-                ]
+                ],
+                "unresolved": False,
             }
         ),
         encoding="utf-8",
@@ -380,7 +502,13 @@ def test_beads_alignment_reports_report_write_failure(
     state = ModuleRuntimeState(module=config.modules["beads"])
     plan_path = context.run_dir / "plan.json"
     plan_path.write_text(
-        json.dumps({"commands": [], "report_markdown": "# Manual action"}),
+        json.dumps(
+            {
+                "commands": [],
+                "unresolved": True,
+                "report_markdown": "# Manual action",
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(

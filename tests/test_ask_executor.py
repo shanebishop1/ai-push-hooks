@@ -38,6 +38,39 @@ def test_pr_create_payload_allows_optional_fields_to_be_omitted() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "unresolved",
+    [None, "false", [], {}, 1],
+)
+def test_beads_alignment_result_requires_explicit_boolean_unresolved(
+    unresolved: object,
+) -> None:
+    with pytest.raises(HookError, match=r"beads_alignment_result\.unresolved"):
+        validate_schema(
+            "beads_alignment_result",
+            {"commands": [], "unresolved": unresolved},
+        )
+
+
+def test_beads_alignment_result_requires_unresolved() -> None:
+    with pytest.raises(HookError, match=r"beads_alignment_result\.unresolved"):
+        validate_schema("beads_alignment_result", {"commands": []})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("commands", None), ("commands", "bd close issue-1"), ("report_markdown", None)],
+)
+def test_beads_alignment_result_rejects_malformed_optional_fields(
+    field: str, value: object
+) -> None:
+    with pytest.raises(HookError, match=rf"beads_alignment_result\.{field}"):
+        validate_schema(
+            "beads_alignment_result",
+            {"unresolved": False, field: value},
+        )
+
+
 def _use_runner_boundary_logger(context, monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 

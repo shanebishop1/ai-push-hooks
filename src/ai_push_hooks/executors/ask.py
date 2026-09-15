@@ -63,14 +63,20 @@ def validate_schema(schema: str | None, payload: Any) -> Any:
     if schema == "beads_alignment_result":
         if not isinstance(payload, dict):
             raise HookError("Expected schema beads_alignment_result")
-        commands = payload.get("commands", [])
-        if commands is not None and (
-            not isinstance(commands, list)
-            or not all(isinstance(item, str) for item in commands)
+        unresolved = payload.get("unresolved")
+        if type(unresolved) is not bool:
+            raise HookError("beads_alignment_result.unresolved must be a boolean")
+        if "commands" in payload and (
+            not isinstance(payload["commands"], list)
+            or not all(isinstance(item, str) for item in payload["commands"])
         ):
             raise HookError(
                 "beads_alignment_result.commands must be an array of strings"
             )
+        if "report_markdown" in payload and not isinstance(
+            payload["report_markdown"], str
+        ):
+            raise HookError("beads_alignment_result.report_markdown must be a string")
         return payload
     if schema == "pr_create_payload":
         if not isinstance(payload, dict):
