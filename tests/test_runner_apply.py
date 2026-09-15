@@ -303,9 +303,7 @@ def test_command_runner_rejects_staging_writes_inside_effective_hooks_path(
         checked_destinations.append(relative_path)
         return real_safe_destination(context, relative_path)
 
-    monkeypatch.setattr(
-        apply_executor, "_safe_destination", tracking_safe_destination
-    )
+    monkeypatch.setattr(apply_executor, "_safe_destination", tracking_safe_destination)
 
     with pytest.raises(HookError, match="configured Git hooks path"):
         _run(context, step, input_path)

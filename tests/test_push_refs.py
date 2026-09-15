@@ -247,6 +247,55 @@ def test_duplicate_pushed_branch_updates_fail_closed_before_workflow(
         _capture_hook_context(repo, monkeypatch, [line, line])
 
 
+def test_clean_worktree_rejects_broken_index_before_deterministic_workflow(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+    config_path = repo / "ai-push-hooks.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "require_clean_worktree = false", "require_clean_worktree = true"
+        ),
+        encoding="utf-8",
+    )
+
+    broken_index = tmp_path / "broken-index"
+    broken_index.write_bytes(b"not a git index\n")
+    monkeypatch.setenv("GIT_INDEX_FILE", str(broken_index))
+    for name in (
+        "AI_PUSH_HOOKS_ALLOW_DIRTY",
+        "AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR",
+        "AI_PUSH_HOOKS_REQUIRE_CLEAN",
+        "AI_PUSH_HOOKS_SKIP",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert status.returncode != 0
+    assert status.stdout == ""
+
+    workflow_started = False
+
+    class UnexpectedWorkflow:
+        def __init__(self, context, artifacts):
+            nonlocal workflow_started
+            workflow_started = True
+
+        def run(self):
+            raise AssertionError("workflow must not start with a broken index")
+
+    monkeypatch.setattr(hook_module, "WorkflowEngine", UnexpectedWorkflow)
+    with pytest.raises(HookError, match="Git status failed"):
+        hook_module.run_hook(stdin_lines=[], cwd=repo)
+    assert workflow_started is False
+
+
 def test_setup_failure_honors_environment_fail_open(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

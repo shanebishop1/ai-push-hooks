@@ -21,11 +21,11 @@ from .git_utils import (
     current_branch,
     ensure_dir,
     env_bool,
-    git,
     parse_push_updates,
     resolve_git_dir,
     resolve_repo_root,
     resolve_storage_path,
+    run_command,
     should_skip_for_sync_branch,
     unique_range_expressions,
 )
@@ -65,7 +65,10 @@ def _write_summary(context: RuntimeContext, result: dict[str, object]) -> None:
 
 
 def _assert_clean_worktree(repo_root: pathlib.Path) -> None:
-    status = git(repo_root, ["status", "--short"], check=False).strip()
+    completed = run_command(["git", "status", "--short"], cwd=repo_root, check=False)
+    if completed.returncode != 0:
+        raise HookError("Hook requires a clean worktree but Git status failed")
+    status = (completed.stdout or "").strip()
     if status:
         raise HookError("Hook requires a clean worktree but local changes are present")
 

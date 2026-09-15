@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Failed the clean-worktree gate when Git cannot verify checkout status.
 - Rejected apply destinations inside configured Git hooks directories before
   propagating any changes to the checkout.
 - Isolated npm's Python startup from consuming-repository modules, inherited
