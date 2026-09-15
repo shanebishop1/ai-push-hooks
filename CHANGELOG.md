@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Excluded Git-ignored local documentation from default model context collection.
+- Required explicit boolean Beads verdicts before commands, report changes, or
+  quality-gate decisions.
+- Kept failed command output in private artifacts rather than terminal errors.
 - Redacted known sensitive values across diagnostic truncation and partial-output
   boundaries, including timeout errors.
 - Collected review diffs independently of external diff drivers, text conversion,

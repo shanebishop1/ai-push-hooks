@@ -70,9 +70,11 @@ default command timeout is 60 seconds. stdout/stderr are private, unredacted
 is capped at 16 MiB; invalid UTF-8, timeout, signal, missing executable, or
 truncation fails closed. A command may explicitly invoke `bash -c`, and
 `exec`/`assert` commands may modify the real checkout, so these are user-policy
-choices rather than host isolation guarantees. `assert` saves its report before
-blocking on a false/nonzero result. Only the workflow-level fail-open setting
-overrides that block; there is no per-command override.
+choices rather than host isolation guarantees. Failed command diagnostics name
+the step, status/error class, and private artifact namespace only; they never
+include captured stream text. `assert` saves its report before blocking on a
+false/nonzero result. Only the workflow-level fail-open setting overrides that
+block; there is no per-command override.
 
 Read-only `collect` callback work may overlap up to `max_parallel`; trusted
 callback/command authors must provide their own concurrency safety. `exec` and

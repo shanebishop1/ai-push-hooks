@@ -10,6 +10,7 @@ from .hook import run_hook
 from .install import install_hook
 from .paths import path_is_link_or_reparse, write_text_no_follow
 from .prompts_builtin import MINIMAL_DOCS_TEMPLATE
+from .executors.runners import RunnerError
 from .types import HookError
 
 
@@ -117,6 +118,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "install":
             return install_hook(args.force)
         raise HookError(f"Unknown command: {args.command}")
-    except HookError as exc:
+    except (HookError, RunnerError) as exc:
         sys.stderr.write(f"[ai-push-hooks] {exc}\n")
         return 1

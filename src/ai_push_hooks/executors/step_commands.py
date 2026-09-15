@@ -9,7 +9,6 @@ engine integration lane.
 from __future__ import annotations
 
 import math
-import os
 import pathlib
 import re
 import sys
@@ -26,7 +25,12 @@ from ..types import (
     RuntimeContext,
     StepConfig,
 )
-from .runners.contracts import bounded_diagnostic, redact_diagnostic
+from .runners.contracts import (
+    RunnerError,
+    RunnerExecutableNotFoundError,
+    RunnerSignalError,
+    RunnerTimeoutError,
+)
 from .runners.process import (
     DEFAULT_MAX_OUTPUT_BYTES,
     ProcessResult,
@@ -297,14 +301,26 @@ def run_step_command(
         inputs=input_paths,
         python_executable=python_executable or sys.executable,
     )
-    process_result = run_process(
-        argv,
-        cwd=pathlib.Path(repo_root).resolve(strict=True),
-        input_path=input_path,
-        timeout_seconds=timeout_seconds,
-        env=None,
-        max_output_bytes=max_output_bytes,
-    )
+    try:
+        process_result = run_process(
+            argv,
+            cwd=pathlib.Path(repo_root).resolve(strict=True),
+            input_path=input_path,
+            timeout_seconds=timeout_seconds,
+            env=None,
+            max_output_bytes=max_output_bytes,
+        )
+    except RunnerError as error:
+        # Do not retain process causes: they can contain rendered argv or
+        # captured stream bytes when displayed as an exception chain.
+        error.__cause__ = None
+        error.__suppress_context__ = True
+        if isinstance(error, RunnerExecutableNotFoundError):
+            # The command vector is configuration-controlled and may contain
+            # credentials.  Do not let the process layer's executable detail
+            # cross the step-command boundary.
+            error.args = ("step command executable was not found",)
+        raise
     result = _from_process_result(process_result)
     if result.stdout_truncated or result.stderr_truncated:
         streams = " and ".join(
@@ -320,31 +336,31 @@ def run_step_command(
         )
         error._step_command_result = result
         raise error
-    _validate_utf8(result)
+    try:
+        _validate_utf8(result)
+    except StepCommandEncodingError as error:
+        error.__cause__ = None
+        error.__suppress_context__ = True
+        raise
     return result
 
 
-def _environment_secrets() -> tuple[str, ...]:
-    markers = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL")
-    return tuple(
-        value
-        for name, value in os.environ.items()
-        if any(marker in name.upper() for marker in markers) and value
-    )
-
-
-def _assert_message(result: StepCommandResult) -> str:
-    # A process error can occur before the normal strict UTF-8 validation pass.
-    # Surrogateescape keeps that diagnostic bounded and non-throwing; the
-    # private stream artifacts still retain the exact original bytes.
-    stdout = result.stdout.decode("utf-8", errors="surrogateescape")
-    stderr = result.stderr.decode("utf-8", errors="surrogateescape")
-    combined = "\n".join(part for part in (stderr.strip(), stdout.strip()) if part)
-    safe = redact_diagnostic(combined, secrets=_environment_secrets())
-    return (
-        bounded_diagnostic(safe, max_chars=1_200)
-        or f"command exited with status {result.returncode}"
-    )
+def _command_failure_status(
+    error: BaseException, result: StepCommandResult | None
+) -> str:
+    if isinstance(error, RunnerTimeoutError):
+        return "timeout"
+    if isinstance(error, RunnerSignalError):
+        return "signal"
+    if isinstance(error, StepCommandEncodingError):
+        return "invalid_utf8"
+    if isinstance(error, StepCommandTruncatedError):
+        return "capture_limit"
+    if isinstance(error, RunnerExecutableNotFoundError):
+        return "not_started"
+    if result is not None:
+        return str(result.returncode)
+    return "error"
 
 
 def step_command_result_payload(
@@ -368,7 +384,7 @@ def step_command_result_payload(
     if step_type == "assert":
         payload["ok"] = result.returncode == 0
         if result.returncode != 0:
-            payload["message"] = _assert_message(result)
+            payload["message"] = f"command exited with status {result.returncode}"
     return payload
 
 
@@ -447,6 +463,7 @@ def execute_step_command(
         input_map = dict(zip(step.inputs, inputs))
     store = artifacts or ArtifactStore(context.run_dir)
     store.prepare()
+    persisted: PersistedStepCommandResult | None = None
     try:
         process_result = run_step_command(
             step.command,
@@ -459,42 +476,63 @@ def execute_step_command(
                 else DEFAULT_STEP_COMMAND_TIMEOUT_SECONDS
             ),
         )
+        payload = step_command_result_payload(process_result, step_type=step.type)
+        persisted = _persist_process_result(
+            store, state, step, process_result, payload=payload
+        )
+        if step.type == "exec" and process_result.returncode != 0:
+            error = StepCommandExecutionError(
+                "step exec command returned a non-zero status"
+            )
+            error._step_command_result = process_result
+            error._step_command_persisted = persisted
+            raise error
+        if step.type == "assert" and process_result.returncode != 0:
+            error = StepCommandAssertionError(str(payload["message"]))
+            error._step_command_result = process_result
+            error._step_command_persisted = persisted
+            raise error
     except BaseException as error:
         captured = _result_from_error(error)
         if captured is None:
             captured = getattr(error, "_step_command_result", None)
-        if isinstance(captured, StepCommandResult):
-            report = None
-            if isinstance(error, StepCommandEncodingError):
-                report = step_command_result_payload(captured, step_type=step.type)
-                report["malformed"] = True
-                report["message"] = "command output was not valid UTF-8"
-            persisted = _persist_process_result(
-                store,
-                state,
-                step,
-                captured,
-                payload=report,
-            )
+        captured_result = captured if isinstance(captured, StepCommandResult) else None
+        if captured_result is not None:
+            if persisted is None:
+                report = None
+                if isinstance(error, StepCommandEncodingError):
+                    report = step_command_result_payload(
+                        captured_result, step_type=step.type
+                    )
+                    report["malformed"] = True
+                    report["message"] = "command output was not valid UTF-8"
+                persisted = _persist_process_result(
+                    store,
+                    state,
+                    step,
+                    captured_result,
+                    payload=report,
+                )
             error._step_command_persisted = persisted
+        if isinstance(error, (RunnerError, StepCommandError)):
+            namespace = f"{state.module.id}/{state.step_index:02d}-{step.id}"
+            run_id = getattr(context, "run_id", store.run_dir.name)
+            location_suffix = "" if persisted is not None else " (not created)"
+            returncode = (
+                f"; returncode={captured_result.returncode}"
+                if captured_result is not None
+                else ""
+            )
+            error.args = (
+                f"command step={state.module.id}.{step.id} failed; "
+                f"status={_command_failure_status(error, captured_result)}; "
+                f"error_class={error.__class__.__name__}; "
+                f"artifact_location={run_id}/{namespace}{location_suffix}"
+                f"{returncode}",
+            )
         raise
-
-    payload = step_command_result_payload(process_result, step_type=step.type)
-    persisted = _persist_process_result(
-        store, state, step, process_result, payload=payload
-    )
-    if step.type == "exec" and process_result.returncode != 0:
-        error = StepCommandExecutionError(
-            "step exec command returned a non-zero status"
-        )
-        error._step_command_result = process_result
-        error._step_command_persisted = persisted
-        raise error
-    if step.type == "assert" and process_result.returncode != 0:
-        error = StepCommandAssertionError(str(payload["message"]))
-        error._step_command_result = process_result
-        error._step_command_persisted = persisted
-        raise error
+    if persisted is None:  # pragma: no cover - successful persistence is required above
+        raise StepCommandError("step command result was not persisted")
     return persisted
 
 

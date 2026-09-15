@@ -137,6 +137,7 @@ def test_preserves_valid_unicode_and_rejects_invalid_utf8_bytes(
     assert isinstance(captured, StepCommandResult)
     assert captured.stdout == b"good\xff"
     assert "good" not in str(raised.value)
+    assert raised.value.__cause__ is None
 
 
 def test_truncation_is_bounded_and_retains_both_exact_captured_streams(
@@ -169,6 +170,7 @@ def test_process_failures_are_named_and_capture_started_streams_without_leaking_
         )
     assert timeout.value._process_result.stderr_bytes == b"timeout-secret"
     assert "timeout-secret" not in str(timeout.value)
+    assert timeout.value.__cause__ is None
 
     with pytest.raises(RunnerSignalError):
         run_step_command(
@@ -188,11 +190,43 @@ def test_zero_empty_exec_and_nonzero_exec_normalization(tmp_path: pathlib.Path) 
     from types import SimpleNamespace
 
     context = SimpleNamespace(repo_root=tmp_path, run_dir=tmp_path / "run")
-    with pytest.raises(StepCommandExecutionError):
+    with pytest.raises(StepCommandExecutionError) as raised:
         execute_step_command(
             context, state, step, {}, artifacts=ArtifactStore(context.run_dir)
         )
+    assert "status=9" in str(raised.value)
+    assert "error_class=StepCommandExecutionError" in str(raised.value)
+    assert "artifact_location=" in str(raised.value)
     assert (context.run_dir / "docs" / "00-exec" / "result.json").exists()
+
+
+def test_empty_failed_assertion_has_stable_private_artifact_diagnostic(
+    tmp_path: pathlib.Path,
+) -> None:
+    step = StepConfig(
+        id="no-output",
+        type="assert",
+        command=_python("raise SystemExit(11)"),
+    )
+    state = ModuleRuntimeState(ModuleConfig("docs", True, (step,)))
+    from types import SimpleNamespace
+
+    run_dir = tmp_path / "run"
+    context = SimpleNamespace(repo_root=tmp_path, run_dir=run_dir)
+    with pytest.raises(StepCommandAssertionError) as raised:
+        execute_step_command(context, state, step, {}, artifacts=ArtifactStore(run_dir))
+
+    message = str(raised.value)
+    assert message == (
+        "command step=docs.no-output failed; status=11; "
+        "error_class=StepCommandAssertionError; "
+        "artifact_location=run/docs/00-no-output; returncode=11"
+    )
+    persisted = raised.value._step_command_persisted
+    assert persisted.artifacts["stdout.txt"].read_bytes() == b""
+    assert persisted.artifacts["stderr.txt"].read_bytes() == b""
+    report = json.loads(persisted.artifacts["result.json"].read_text())
+    assert report["message"] == "command exited with status 11"
 
 
 def test_mapping_inputs_reject_extra_references_but_duplicate_lists_remain_valid(
@@ -271,11 +305,14 @@ def test_assert_report_is_saved_before_failure_and_message_is_bounded_redacted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("STEP_COMMAND_TOKEN", "assert-secret")
+    marker = "private-command-marker"
     step = StepConfig(
         id="policy",
         type="assert",
         command=_python(
-            "import os, sys; print('token=' + os.environ['STEP_COMMAND_TOKEN'], file=sys.stderr); raise SystemExit(3)"
+            "import os, sys; print('token=' + os.environ['STEP_COMMAND_TOKEN'] + ' "
+            + marker
+            + "', file=sys.stderr); raise SystemExit(3)"
         ),
     )
     state = ModuleRuntimeState(ModuleConfig("docs", True, (step,)))
@@ -292,7 +329,15 @@ def test_assert_report_is_saved_before_failure_and_message_is_bounded_redacted(
     assert report["ok"] is False
     assert report["returncode"] == 3
     assert "assert-secret" not in report["message"]
-    assert persisted.artifacts["stderr.txt"].read_bytes() == b"token=assert-secret\n"
+    assert marker not in report["message"]
+    assert persisted.artifacts["stderr.txt"].read_bytes() == (
+        f"token=assert-secret {marker}\n".encode()
+    )
+    message = str(raised.value)
+    assert marker not in message
+    assert "error_class=StepCommandAssertionError" in message
+    assert "status=3" in message
+    assert "artifact_location=" in message
     assert "assert-secret" not in capsys.readouterr().err
 
 
@@ -320,3 +365,6 @@ def test_started_process_errors_persist_bounded_streams(
         json.loads(persisted.artifacts["result.json"].read_text())["stdout_artifact"]
         == "stdout.txt"
     )
+    assert "partial" not in str(raised.value)
+    assert "error_class=RunnerTimeoutError" in str(raised.value)
+    assert "status=timeout" in str(raised.value)
