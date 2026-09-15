@@ -9,7 +9,13 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ..types import CollectorResult, RuntimeContext
-from ..git_utils import collect_commit_messages_for_ranges, git, path_matches
+from ..git_utils import (
+    collect_commit_messages_for_ranges,
+    git,
+    path_matches,
+    run_command,
+)
+from ..paths import path_is_link_or_reparse
 
 DOC_INCLUDE_PATTERNS = ("README.md", "docs/**/*.md")
 DOC_IGNORE_PATTERNS = ("docs/archive/**",)
@@ -34,7 +40,7 @@ def _is_safe_doc_file(repo_root: pathlib.Path, candidate: pathlib.Path) -> bool:
         current = repo_root
         for part in relative.parts:
             current /= part
-            if stat.S_ISLNK(current.lstat().st_mode):
+            if path_is_link_or_reparse(current):
                 return False
         candidate_stat = candidate.lstat()
         if not stat.S_ISREG(candidate_stat.st_mode):
@@ -47,18 +53,40 @@ def _is_safe_doc_file(repo_root: pathlib.Path, candidate: pathlib.Path) -> bool:
 
 
 def _expand_doc_files(repo_root: pathlib.Path) -> list[pathlib.Path]:
+    """List safe, relevant docs from Git's tracked/unignored file inventory.
+
+    ``--cached`` retains tracked files even when an ignore rule matches them;
+    ``--others --exclude-standard`` adds only untracked files that Git would
+    consider visible.  Enumerating this way avoids walking ignored directories
+    before any document content is opened.
+    """
     repo_root = repo_root.resolve(strict=True)
+    listed = run_command(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=repo_root,
+        check=True,
+    )
+
     files: list[pathlib.Path] = []
-    for candidate in repo_root.rglob("*.md"):
-        relative = candidate.relative_to(repo_root).as_posix()
+    seen: set[str] = set()
+    for relative in listed.stdout.split("\x00"):
+        if not relative or relative in seen:
+            continue
+        seen.add(relative)
         if not _path_matches(relative, DOC_INCLUDE_PATTERNS):
             continue
         if _path_matches(relative, DOC_IGNORE_PATTERNS):
             continue
+        # Git emits POSIX separators even on platforms where a backslash has
+        # path semantics.  Reject such ambiguous names there rather than
+        # allowing a listed filename to change the lexical containment check.
+        if os.name == "nt" and "\\" in relative:
+            continue
+        candidate = repo_root.joinpath(*relative.split("/"))
         if not _is_safe_doc_file(repo_root, candidate):
             continue
         files.append(candidate)
-    return sorted(files)
+    return sorted(files, key=lambda path: path.relative_to(repo_root).as_posix())
 
 
 def _deterministic_seed_queries(diff_text: str, changed_files: list[str]) -> list[str]:

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import pathlib
+import subprocess
 
 import pytest
 
 import ai_push_hooks.modules.docs as docs_module
 from ai_push_hooks.modules.docs import collect_docs_context
+from ai_push_hooks.types import HookError
 
 from .conftest import build_context, init_repo, make_config
 
@@ -50,6 +52,73 @@ def test_doc_inventory_rejects_directories_and_fifos(tmp_path: pathlib.Path) -> 
 
     assert "docs/directory.md" not in artifacts["docs-inventory.txt"]
     assert "docs/pipe.md" not in artifacts["docs-inventory.txt"]
+
+
+def test_doc_inventory_honors_git_excludes_but_keeps_tracked_docs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+    (repo / ".gitignore").write_text("docs/private/\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "ignore private docs"], cwd=repo, check=True)
+
+    tracked = repo / "docs" / "private" / "tracked.md"
+    tracked.parent.mkdir()
+    tracked.write_text("tracked-doc-marker\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-f", "docs/private/tracked.md"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "commit", "-m", "track private doc"], cwd=repo, check=True)
+
+    local = repo / "docs" / "private" / "local.md"
+    local.write_text("ignored-private-marker\n", encoding="utf-8")
+    info_excluded = repo / "docs" / "info-private.md"
+    info_excluded.write_text("info-excluded-marker\n", encoding="utf-8")
+    with (repo / ".git" / "info" / "exclude").open("a", encoding="utf-8") as handle:
+        handle.write("docs/info-private.md\n")
+
+    reads: list[pathlib.Path] = []
+    original_read = docs_module._read_bounded_text
+
+    def counted_read(path: pathlib.Path, max_bytes: int | None = None) -> str:
+        reads.append(path)
+        return original_read(path, max_bytes)
+
+    monkeypatch.setattr(docs_module, "_read_bounded_text", counted_read)
+    artifacts = _collect(
+        repo,
+        changed_file="src/tracked.py",
+        diff_text="+tracked-doc-marker\n",
+    )
+
+    assert artifacts["docs-inventory.txt"].splitlines() == [
+        "README.md",
+        "docs/INDEX.md",
+        "docs/private/tracked.md",
+    ]
+    assert local not in reads
+    assert info_excluded not in reads
+    assert "tracked-doc-marker" in artifacts["docs-context.txt"]
+    assert all(
+        marker not in artifact
+        for marker in ("ignored-private-marker", "info-excluded-marker")
+        for artifact in artifacts.values()
+    )
+
+
+def test_doc_inventory_git_failure_is_not_silently_empty(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = init_repo(tmp_path)
+
+    def fail_git_inventory(*args, **kwargs):
+        assert kwargs["check"] is True
+        raise HookError("injected Git inventory failure")
+
+    monkeypatch.setattr(docs_module, "run_command", fail_git_inventory)
+
+    with pytest.raises(HookError, match="injected Git inventory failure"):
+        docs_module._expand_doc_files(repo)
 
 
 def test_readme_only_search_includes_filename(tmp_path: pathlib.Path) -> None:
