@@ -23,6 +23,7 @@ REQUIRED_ROOT_FILES = {
     "release-channel.toml",
     "package.json",
     "bin/ai-push-hooks.js",
+    "bin/bootstrap.py",
     "docs/configuration.md",
     "vendor/README.md",
     "vendor/requirements.txt",

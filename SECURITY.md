@@ -40,6 +40,14 @@ transcript files as proof that provider-side data was deleted.
 
 ## Repository callbacks and commands
 
+The npm launcher uses Python isolated mode to prevent the consuming checkout,
+inherited `PYTHONPATH`, and the user site directory from shadowing the shipped
+launcher or standard-library modules. It retains the selected interpreter's
+normal system/virtual-environment site-packages for callback dependencies; use
+that environment rather than `--user` installs or `PYTHONPATH`. This is launch
+path isolation, not an operating-system sandbox, and trusted interpreter
+startup customization or callback code is not made safe by it.
+
 The published `0.3.0` beta includes the `ask` spelling, repository Python
 callbacks, and direct `exec`/`assert` commands. The previous `0.2.1` beta used
 `llm` for model-backed workflow steps; there is no compatibility alias, so

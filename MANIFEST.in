@@ -10,6 +10,7 @@ include ai-push-hooks.toml
 include release-channel.toml
 include package.json
 include bin/ai-push-hooks.js
+include bin/bootstrap.py
 include docs/configuration.md
 
 recursive-include src *.py

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -90,7 +90,32 @@ try {
     cwd: packageDir,
   });
   const command = join(packageDir, 'node_modules', '.bin', 'ai-push-hooks');
+
+  const shadowMarker = join(workDir, 'shadow-marker');
+  const assertNotShadowed = (stage) => {
+    if (existsSync(shadowMarker)) throw new Error(`${stage} shadow fixture executed`);
+  };
+  env.PYTHONPATH = packageDir;
+  const shadowSource = [
+    'import os',
+    'import pathlib',
+    "pathlib.Path(os.environ['AI_PUSH_HOOKS_SHADOW_MARKER']).write_text('executed', encoding='utf-8')",
+    "raise RuntimeError('consumer shadow fixture executed')",
+    '',
+  ].join('\n');
+  env.AI_PUSH_HOOKS_SHADOW_MARKER = shadowMarker;
+  writeFileSync(join(packageDir, 'ai_push_hooks.py'), shadowSource);
+  for (const name of ['json.py', 'sitecustomize.py', 'usercustomize.py']) {
+    writeFileSync(join(packageDir, name), shadowSource);
+  }
   run(command, ['--help'], { cwd: packageDir });
+  assertNotShadowed('module');
+
+  unlinkSync(join(packageDir, 'ai_push_hooks.py'));
+  mkdirSync(join(packageDir, 'ai_push_hooks'));
+  writeFileSync(join(packageDir, 'ai_push_hooks', '__init__.py'), shadowSource);
+  run(command, ['--help'], { cwd: packageDir });
+  assertNotShadowed('package');
 
   run('git', ['init', '--bare', remoteDir], { cwd: workDir });
   run('mkdir', ['-p', clientDir], { cwd: workDir });
@@ -112,6 +137,7 @@ try {
   run('git', ['push', 'origin', 'main'], { cwd: clientDir });
 
   run('npx', ['--no-install', 'ai-push-hooks', 'install'], { cwd: clientDir });
+  assertNotShadowed('install');
   env.PATH = [dirname(process.execPath), pythonDir, gitDir, '/usr/bin', '/bin']
     .filter(Boolean).join(':');
   let hookPath = capture('git', ['rev-parse', '--git-path', 'hooks'], clientDir);
@@ -134,10 +160,23 @@ try {
     `refs/heads/main ${localOid} refs/heads/main ${remoteOid}\n`,
   );
   if (direct.status !== 0) throw new Error(`Installed hook failed directly: ${direct.stderr}`);
+  assertNotShadowed('hook');
   run('git', ['push', 'origin', 'main'], { cwd: clientDir });
+  assertNotShadowed('push');
   const pushed = capture('git', ['--git-dir', remoteDir, 'rev-parse', 'refs/heads/main'], clientDir);
   if (pushed !== localOid) throw new Error('Successful local push did not update the bare remote');
 
+  rmSync(join(packageDir, 'ai_push_hooks'), { recursive: true, force: true });
+  for (const name of ['json.py', 'sitecustomize.py', 'usercustomize.py']) {
+    rmSync(join(packageDir, name), { force: true });
+  }
+  writeFileSync(
+    join(packageDir, 'ai_push_hooks.py'),
+    shadowSource.replace(
+      "raise RuntimeError('consumer shadow fixture executed')\n",
+      'raise SystemExit(0)\n',
+    ),
+  );
   execFileSync('node', ['-e',
     `require('node:fs').writeFileSync(process.argv[1], process.argv[2]);
      require('node:fs').writeFileSync(process.argv[3], 'must not arrive\\n');`,
@@ -150,6 +189,7 @@ try {
   if (rejected.status === 0) throw new Error('Rejecting installed hook allowed a local push');
   const afterReject = capture('git', ['--git-dir', remoteDir, 'rev-parse', 'refs/heads/main'], clientDir);
   if (afterReject !== beforeReject) throw new Error('Rejected push changed the bare remote');
+  assertNotShadowed('rejecting push');
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

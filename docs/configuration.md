@@ -4,7 +4,9 @@ Define workflows in `ai-push-hooks.toml` at the repository root. Start with the 
 
 ## Installation
 
-The [npm quick start](../README.md#quick-start) installs a repository-local wrapper. It needs Node 18+ and Python 3.10-3.13 on the hook's `PATH`; the npm package does not bundle Python.
+The [npm quick start](../README.md#quick-start) installs a repository-local wrapper. Its tested/supported Python range is 3.10-3.13; the Python code requires 3.10+ and the launcher may probe newer interpreters, but newer versions are not part of that compatibility claim. The npm package does not bundle Python. The wrapper starts the selected interpreter in Python isolated mode: it ignores `PYTHONPATH` and the user site directory, then adds only the package's shipped `src` and vendored Tomli wheel. The interpreter's normal system or virtual-environment site-packages remain available.
+
+If a repository callback needs an external dependency, install it with the exact Python executable the wrapper will select (for example, `/path/to/python -m pip install <dependency>`), into that interpreter's normal system or virtual-environment site-packages. The wrapper tests candidates in its ordered list (`python3.14`, `python3.13`, `python3.12`, `python3.11`, `python3.10`, `python3`, then `python`), so activating a virtual environment alone does not guarantee that it wins over a higher-priority executable elsewhere on `PATH`; make the intended candidate discoverable first. Do not rely on `pip install --user` or `PYTHONPATH`; they are intentionally not part of the npm launch path.
 
 For pnpm:
 

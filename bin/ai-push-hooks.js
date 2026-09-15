@@ -5,17 +5,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const packageRoot = path.resolve(__dirname, '..');
-const srcDir = path.join(packageRoot, 'src');
-const tomliWheel = path.join(packageRoot, 'vendor', 'tomli-2.4.0-py3-none-any.whl');
-const args = ['-m', 'ai_push_hooks', ...process.argv.slice(2)];
+const bootstrap = path.join(packageRoot, 'bin', 'bootstrap.py');
+const capabilityEnvironment = 'AI_PUSH_HOOKS_INTERNAL_CAPABILITY';
+const args = ['-I', bootstrap, ...process.argv.slice(2)];
 const pythonCommands = ['python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10', 'python3', 'python'];
 
-function buildEnv() {
+function buildEnv(capability = false) {
   const env = { ...process.env };
   env.AI_PUSH_HOOKS_NODE_EXECUTABLE = process.execPath;
   env.AI_PUSH_HOOKS_NODE_SCRIPT = fs.realpathSync(__filename);
-  // Pure-Python wheels are importable archives; no pip or install scripts needed.
-  env.PYTHONPATH = [srcDir, tomliWheel, env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+  // -I intentionally ignores PYTHONPATH.  The bootstrap adds only shipped paths.
+  delete env.PYTHONPATH;
+  if (capability) {
+    env[capabilityEnvironment] = '1';
+  } else {
+    delete env[capabilityEnvironment];
+  }
   return env;
 }
 
@@ -29,11 +34,8 @@ function run(command) {
 function canRunPackage(command) {
   const check = spawnSync(
     command,
-    [
-      '-c',
-      'import sys; assert sys.version_info >= (3, 10); __import__("tomllib" if sys.version_info >= (3, 11) else "tomli")',
-    ],
-    { stdio: 'ignore', env: buildEnv() },
+    ['-I', bootstrap],
+    { stdio: 'ignore', env: buildEnv(true) },
   );
   return check.status === 0;
 }

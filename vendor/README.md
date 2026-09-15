@@ -2,7 +2,7 @@
 
 The npm package includes the unmodified pure-Python wheel for [Tomli](https://pypi.org/project/tomli/2.4.0/). Python 3.10 uses it to parse TOML; Python 3.11+ uses the standard-library `tomllib` module.
 
-The wrapper adds the wheel to `PYTHONPATH`, so no pip install, install script, or runtime download is needed. The wheel includes Tomli's MIT license under `tomli-2.4.0.dist-info/licenses/LICENSE`.
+The npm bootstrap adds the wheel directly to Python's import path, so no pip install, install script, or runtime download is needed. It does not inherit `PYTHONPATH`. The wheel includes Tomli's MIT license under `tomli-2.4.0.dist-info/licenses/LICENSE`.
 
 To reproduce the bundled download from the repository root:
 

@@ -500,7 +500,32 @@ def test_npm_works_without_site_packages(
         repo,
         env,
     )
+    shadow_marker = tmp_path / "shadow-marker"
+    env["PYTHONPATH"] = str(repo)
+    env["AI_PUSH_HOOKS_SHADOW_MARKER"] = str(shadow_marker)
+    shadow_source = (
+        "import os\n"
+        "import pathlib\n"
+        "pathlib.Path(os.environ['AI_PUSH_HOOKS_SHADOW_MARKER']).write_text(\n"
+        "    'executed', encoding='utf-8'\n"
+        ")\n"
+        "raise RuntimeError('consumer shadow fixture executed')\n"
+    )
+    (repo / "ai_push_hooks.py").write_text(shadow_source, encoding="utf-8")
+    for name in ("json.py", "sitecustomize.py", "usercustomize.py"):
+        (repo / name).write_text(shadow_source, encoding="utf-8")
+    _run([str(command), "--help"], repo, env)
+    assert not shadow_marker.exists()
+
+    (repo / "ai_push_hooks.py").unlink()
+    shadow_package = repo / "ai_push_hooks"
+    shadow_package.mkdir()
+    (shadow_package / "__init__.py").write_text(shadow_source, encoding="utf-8")
+    _run([str(command), "--help"], repo, env)
+    assert not shadow_marker.exists()
+
     _run([str(command), "init", "--template", "minimal-docs"], repo, env)
+    assert not shadow_marker.exists()
     _git(repo, env, "init", "-b", "main", ".")
     _install_repo_fixtures(repo)
     (repo / "README.md").write_text("# Dependency smoke test\n", encoding="utf-8")
@@ -509,6 +534,16 @@ def test_npm_works_without_site_packages(
     _git(repo, env, "add", ".")
     _git(repo, env, "commit", "-m", "initial")
     _run([str(command), "install"], repo, env)
+    assert not shadow_marker.exists()
+    hook_path = repo / ".git" / "hooks" / "pre-push"
+    _run(
+        [str(hook_path), "origin", "unused"],
+        repo,
+        {**env, "AI_PUSH_HOOKS_SKIP": "1"},
+        input_text="malformed stdin\n",
+    )
+    assert not shadow_marker.exists()
+    env.pop("PYTHONPATH")
     _run([str(repo / ".git/hooks/pre-push")], repo, env, input_text="")
     report = json.loads(
         (_latest_run(repo) / "docs" / "00-collect" / "context.json").read_text(
@@ -782,6 +817,22 @@ def test_installed_hook_runs_real_local_push_scenario(
         == local_oid
     )
 
+    # Reproduce the confirmed npm failure: a root module exits successfully
+    # after running a marker, so only the real rejecting push catches it.
+    shadow_marker = None
+    if distribution == "npm":
+        shadow_marker = root / "npm-reject-shadow-marker"
+        env["PYTHONPATH"] = str(repo)
+        env["AI_PUSH_HOOKS_SHADOW_MARKER"] = str(shadow_marker)
+        (repo / "ai_push_hooks.py").write_text(
+            "import os\n"
+            "import pathlib\n"
+            "pathlib.Path(os.environ['AI_PUSH_HOOKS_SHADOW_MARKER']).write_text(\n"
+            "    'executed', encoding='utf-8'\n"
+            ")\n"
+            "raise SystemExit(0)\n",
+            encoding="utf-8",
+        )
     (repo / "ai-push-hooks.toml").write_text(
         _scenario_config(reject=True), encoding="utf-8"
     )
@@ -799,6 +850,8 @@ def test_installed_hook_runs_real_local_push_scenario(
         _git(repo, env, "--git-dir", str(remote), "rev-parse", "refs/heads/main")
         == remote_before_rejection
     )
+    if shadow_marker is not None:
+        assert not shadow_marker.exists()
 
 
 def test_real_lefthook_install_uses_installed_runner(

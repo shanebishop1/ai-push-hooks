@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Isolated npm's Python startup from consuming-repository modules, inherited
+  `PYTHONPATH`, and user-site imports so they cannot replace the installed hook.
 - Excluded Git-ignored local documentation from default model context collection.
 - Required explicit boolean Beads verdicts before commands, report changes, or
   quality-gate decisions.
