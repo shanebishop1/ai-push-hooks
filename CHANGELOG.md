@@ -4,7 +4,30 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Added `auto_commit` to `apply` steps, committing the edits a fix propagated.
+  Off by default. The commit is made after every later step passes, so tests and
+  assert gates can still reject the edits; a failure leaves them uncommitted in
+  the working tree.
+- Added `auto_push` to `apply` steps, sending that commit in the same `git push`.
+  Off by default and requires `auto_commit`.
+- Added `commit_message` to `apply` steps. Omit it and the runner that made the
+  fix names the commit through a `COMMIT: <subject>` line, validated as untrusted
+  input and replaced with a generic subject when malformed.
+- Reported a superseded push through a stable final line, `ai-push-hooks Push
+  Success` or `ai-push-hooks Push Again`, because Git collapses every nonzero
+  pre-push hook exit to `1` and leaves non-interactive callers no usable exit
+  status. The accompanying ledger names which push failed and which succeeded.
+
 ### Fixed
+
+- Refused to auto-commit a file that already had uncommitted changes. Committing
+  it would have captured work the developer never staged, and published it when
+  `auto_push` was enabled.
+- Stopped a push whose commits this run superseded regardless of
+  `allow_push_on_error`. Failing open there would have sent the pre-fix commit
+  and reported success.
 
 - Used GitHub's current Actions media type when recovering immutable release
   artifacts after delayed registry publication.

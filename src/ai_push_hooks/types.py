@@ -28,6 +28,19 @@ class HookError(RuntimeError):
     pass
 
 
+class PushSupersededError(HookError):
+    """The in-flight push was invalidated by a commit this run created.
+
+    Git selects the commits a push will send before the pre-push hook runs, so a
+    commit created during the hook is not part of the push already in flight.
+    Allowing that push to proceed would send the pre-fix commit and leave the fix
+    behind, reporting success. This is therefore raised to stop the push, and it
+    deliberately ignores ``allow_push_on_error``: fail-open is a policy choice
+    about checks that could not complete, not a licence to push code that this
+    run has already superseded locally.
+    """
+
+
 def is_zero_oid(value: str) -> bool:
     return len(value) in ZERO_OID_LENGTHS and not value.strip("0")
 
@@ -136,6 +149,9 @@ class StepConfig:
     timeout_seconds: int | None = None
     when_env: str | None = None
     runner: str | None = None
+    auto_commit: bool = False
+    auto_push: bool = False
+    commit_message: str | None = None
 
     @property
     def is_read_only(self) -> bool:

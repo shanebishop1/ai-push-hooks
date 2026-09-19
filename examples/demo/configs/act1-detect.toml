@@ -1,0 +1,54 @@
+# Act 1 -- detect and block.
+# collect -> ask -> assert. Three steps, no fixing yet.
+
+[general]
+enabled = true
+base_branch = "main"
+allow_push_on_error = false
+
+[llm]
+runner = "opencode"
+
+[runners.opencode]
+type = "opencode"
+model = "openai/gpt-5.6-luna"
+project_access = "project"
+
+[logging]
+level = "info"
+
+[workflow]
+modules = ["rules"]
+
+[modules.rules]
+enabled = true
+
+# Hand the runner the outgoing diff and the house rules explicitly.
+[[modules.rules.steps]]
+id = "collect"
+type = "collect"
+python = "checks/hooks.py:collect_rules"
+
+[[modules.rules.steps]]
+id = "review"
+type = "ask"
+prompt = """
+Check the outgoing diff in push.diff against the house rules in rules.txt.
+Inspect the repository for context where it helps.
+
+Report only concrete violations introduced by this diff. Skip anything that was
+already on the base branch, and skip style opinions that no rule covers.
+
+Return a JSON array of objects with `file` and `description`. Return [] if the
+diff violates none of the rules. Do not edit any files.
+"""
+inputs = ["collect/push.diff", "collect/rules.txt", "collect/changed-files.txt"]
+output = "issues.json"
+schema = "docs_issue_array"
+
+# `ask` reports. It does not block. This is what blocks.
+[[modules.rules.steps]]
+id = "gate"
+type = "assert"
+python = "checks/hooks.py:assert_rules"
+inputs = ["review/issues.json"]

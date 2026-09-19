@@ -1,0 +1,78 @@
+# Act 3 -- prove the fix landed.
+# Diff from act 2: a `verify` exec step between `fix` and `manual-commit`.
+# The runner exiting 0 is not evidence. This script is.
+
+[general]
+enabled = true
+base_branch = "main"
+allow_push_on_error = false
+
+[llm]
+runner = "opencode"
+
+[runners.opencode]
+type = "opencode"
+model = "openai/gpt-5.6-luna"
+project_access = "project"
+
+[logging]
+level = "info"
+
+[workflow]
+modules = ["rules"]
+
+[modules.rules]
+enabled = true
+
+[[modules.rules.steps]]
+id = "collect"
+type = "collect"
+python = "checks/hooks.py:collect_rules"
+
+[[modules.rules.steps]]
+id = "review"
+type = "ask"
+prompt = """
+Check the outgoing diff in push.diff against the house rules in rules.txt.
+Inspect the repository for context where it helps.
+
+Report only concrete violations introduced by this diff. Skip anything that was
+already on the base branch, and skip style opinions that no rule covers.
+
+Return a JSON array of objects with `file` and `description`. Return [] if the
+diff violates none of the rules. Do not edit any files.
+"""
+inputs = ["collect/push.diff", "collect/rules.txt", "collect/changed-files.txt"]
+output = "issues.json"
+schema = "docs_issue_array"
+
+[[modules.rules.steps]]
+id = "fix"
+type = "apply"
+prompt = """
+Fix exactly the violations listed in issues.json, using rules.txt as the
+standard. Make the smallest change that satisfies the rule.
+
+Route component network calls through the typed client in src/api/client.ts.
+Replace a destructive migration with an additive one that the previous release
+can still run against. Cut unverifiable claims from documentation rather than
+rewording them.
+
+Change nothing else.
+"""
+inputs = ["collect/push.diff", "collect/rules.txt", "review/issues.json"]
+allow_paths = ["src/**", "migrations/**", "README.md"]
+
+# Runs in the real checkout, after propagation. Nonzero exit blocks the push.
+# The same script you already run by hand -- AI review composes with it.
+[[modules.rules.steps]]
+id = "verify"
+type = "exec"
+command = ["{python}", "tests/check_rules.py"]
+timeout_seconds = 120
+
+[[modules.rules.steps]]
+id = "manual-commit"
+type = "assert"
+assertion = "docs_apply_requires_manual_commit"
+inputs = ["fix/result.json"]

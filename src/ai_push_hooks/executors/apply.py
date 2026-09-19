@@ -20,7 +20,9 @@ from ..paths import (
     relative_path_parts,
     sanitize_file_mode,
 )
+from ..config import COMMIT_SUBJECT_MAX_CHARS
 from ..types import HookError, ModuleRuntimeState, RuntimeContext, StepConfig
+from .autocommit import register_pending_auto_commit
 from ..git_utils import (
     list_repo_changes,
     path_matches,
@@ -842,6 +844,7 @@ def _apply_prompt(
     allow_paths: tuple[str, ...],
     *,
     project_access: str = "artifacts",
+    request_commit_subject: bool = False,
 ) -> str:
     rendered_paths = "\n".join(f"- {pattern}" for pattern in allow_paths)
     if project_access == "project":
@@ -854,6 +857,17 @@ def _apply_prompt(
             "This workspace contains only eligible readable files selected by the "
             "allowlist."
         )
+    commit_subject_text = ""
+    if request_commit_subject:
+        commit_subject_text = (
+            "\nCOMMIT SUBJECT:\n"
+            "Your changes will be committed for you. End your response with a single "
+            "final line of the form `COMMIT: <subject>` describing what you changed: "
+            "one line, imperative mood, at most "
+            f"{COMMIT_SUBJECT_MAX_CHARS} characters, not starting with `-`. "
+            "A missing or malformed line is replaced with a generic subject; it does "
+            "not fail the step.\n"
+        )
     return (
         prompt.rstrip()
         + "\n\nMANDATORY STAGING BOUNDARY:\n"
@@ -864,6 +878,7 @@ def _apply_prompt(
         + rendered_paths
         + "\nTool availability is controlled by runner and user policy; this instruction "
         + "does not impose a universal tool ban. Do not create symlinks.\n"
+        + commit_subject_text
     )
 
 
@@ -941,6 +956,8 @@ def run_apply_step(
                     prompt,
                     step.allow_paths,
                     project_access=profile.project_access,
+                    request_commit_subject=step.auto_commit
+                    and step.commit_message is None,
                 ),
                 validated_inputs,
                 stage_name,
@@ -1002,9 +1019,27 @@ def run_apply_step(
             "Apply post-propagation verification failed; "
             f"already-applied paths: {applied}; error: {exc}"
         ) from exc
-    return {
+    outcome: dict[str, object] = {
         "changed": bool(staged_changes),
         "changed_files": sorted(staged_changes),
         "allowed_paths": list(step.allow_paths),
         "skipped": False,
     }
+    if not step.auto_commit or not staged_changes:
+        return outcome
+
+    # Recorded now, committed only once the whole workflow has passed. Steps that
+    # run after this one -- a test suite, a deterministic postcondition, an assert
+    # gate -- must be able to reject these edits, and they cannot do that if the
+    # commit has already happened here.
+    register_pending_auto_commit(
+        context,
+        step,
+        sorted(staged_changes),
+        result.stdout if result is not None else None,
+        # Files already modified before this run. Committing one would sweep in
+        # work the developer never staged, so the commit refuses them.
+        preexisting_dirty=sorted(baseline & staged_changes),
+    )
+    outcome["auto_commit"] = {"pending": True, "auto_push": step.auto_push}
+    return outcome

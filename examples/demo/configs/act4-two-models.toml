@@ -1,0 +1,88 @@
+# Act 4 -- one model reviews, a different model fixes.
+# Diff from act 3: a [runners.claude] profile, and `runner = "claude"` on `fix`.
+# Two lines and one word. That is the whole integration.
+
+[general]
+enabled = true
+base_branch = "main"
+allow_push_on_error = false
+
+[llm]
+runner = "opencode"
+
+[runners.opencode]
+type = "opencode"
+model = "openai/gpt-5.6-luna"
+project_access = "project"
+
+[runners.claude]
+type = "claude"
+
+# Swap in Codex instead by adding `[runners.codex] type = "codex"` and setting
+# runner = "codex" below. Any other agentic CLI goes through a command runner:
+#
+#   [runners.custom]
+#   type = "command"
+#   command = ["/abs/path/to/review-agent"]
+#   prompt_transport = "stdin"
+
+[logging]
+level = "info"
+
+[workflow]
+modules = ["rules"]
+
+[modules.rules]
+enabled = true
+
+[[modules.rules.steps]]
+id = "collect"
+type = "collect"
+python = "checks/hooks.py:collect_rules"
+
+[[modules.rules.steps]]
+id = "review"
+type = "ask"
+prompt = """
+Check the outgoing diff in push.diff against the house rules in rules.txt.
+Inspect the repository for context where it helps.
+
+Report only concrete violations introduced by this diff. Skip anything that was
+already on the base branch, and skip style opinions that no rule covers.
+
+Return a JSON array of objects with `file` and `description`. Return [] if the
+diff violates none of the rules. Do not edit any files.
+"""
+inputs = ["collect/push.diff", "collect/rules.txt", "collect/changed-files.txt"]
+output = "issues.json"
+schema = "docs_issue_array"
+
+[[modules.rules.steps]]
+id = "fix"
+type = "apply"
+runner = "claude"
+prompt = """
+Fix exactly the violations listed in issues.json, using rules.txt as the
+standard. Make the smallest change that satisfies the rule.
+
+Route component network calls through the typed client in src/api/client.ts.
+Replace a destructive migration with an additive one that the previous release
+can still run against. Cut unverifiable claims from documentation rather than
+rewording them.
+
+Change nothing else.
+"""
+inputs = ["collect/push.diff", "collect/rules.txt", "review/issues.json"]
+allow_paths = ["src/**", "migrations/**", "README.md"]
+
+[[modules.rules.steps]]
+id = "verify"
+type = "exec"
+command = ["{python}", "tests/check_rules.py"]
+timeout_seconds = 120
+
+[[modules.rules.steps]]
+id = "manual-commit"
+type = "assert"
+assertion = "docs_apply_requires_manual_commit"
+inputs = ["fix/result.json"]
