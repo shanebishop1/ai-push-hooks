@@ -1289,3 +1289,89 @@ options = { nested = { value = nan } }
 
     with pytest.raises(HookError, match=r"options\.nested\.value.*finite"):
         load_config(tmp_path)
+
+
+def _auto_commit_config(tmp_path: pathlib.Path, apply_extra: str) -> pathlib.Path:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        f"""
+[workflow]
+modules = ["docs"]
+
+[[modules.docs.steps]]
+id = "apply"
+type = "apply"
+prompt = "fix it"
+allow_paths = ["README.md"]
+{apply_extra}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_apply_auto_commit_defaults_to_false(
+    tmp_path: pathlib.Path,
+) -> None:
+    config, _ = load_config(_auto_commit_config(tmp_path, ""))
+    step = config.modules["docs"].steps[0]
+    assert step.auto_commit is False
+    assert step.auto_push is False
+    assert step.commit_message is None
+
+
+def test_apply_auto_push_requires_auto_commit(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(HookError, match="auto_push requires .*auto_commit"):
+        load_config(_auto_commit_config(tmp_path, "auto_push = true"))
+
+
+def test_apply_commit_message_requires_auto_commit(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(HookError, match="commit_message requires .*auto_commit"):
+        load_config(_auto_commit_config(tmp_path, 'commit_message = "docs: fix"'))
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('""', "must not be empty"),
+        ('"-rf something"', "must not start with"),
+        (f'"{"x" * 200}"', "at most"),
+        ('"first\\nsecond"', "single line"),
+    ],
+)
+def test_apply_commit_message_is_validated(
+    tmp_path: pathlib.Path, value: str, expected: str
+) -> None:
+    with pytest.raises(HookError, match=expected):
+        load_config(
+            _auto_commit_config(
+                tmp_path, f"auto_commit = true\ncommit_message = {value}"
+            )
+        )
+
+
+def test_apply_auto_commit_must_be_a_boolean(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(HookError, match="auto_commit must be a boolean"):
+        load_config(_auto_commit_config(tmp_path, 'auto_commit = "true"'))
+
+
+def test_auto_commit_keys_are_rejected_on_non_apply_steps(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "ai-push-hooks.toml").write_text(
+        """
+[workflow]
+modules = ["docs"]
+
+[[modules.docs.steps]]
+id = "review"
+type = "ask"
+prompt = "review"
+output = "issues.json"
+auto_commit = true
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(HookError, match="auto_commit is not valid for ask steps"):
+        load_config(tmp_path)

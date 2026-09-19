@@ -89,7 +89,11 @@ STEP_KEYS = {
     "timeout_seconds",
     "when_env",
     "runner",
+    "auto_commit",
+    "auto_push",
+    "commit_message",
 }
+COMMIT_SUBJECT_MAX_CHARS = 72
 RUNNER_TYPES = frozenset({"opencode", "codex", "claude", "command"})
 PROJECT_ACCESS_VALUES = frozenset({"artifacts", "project"})
 PROMPT_TRANSPORT_VALUES = frozenset({"stdin", "argv"})
@@ -402,6 +406,49 @@ def _validate_python_reference(
     return normalized
 
 
+def validate_commit_subject(value: str, label: str) -> str:
+    """Return a single-line commit subject, or raise if it cannot be one.
+
+    Shared by config validation and the runner-authored message path, so a
+    subject proposed by a model is held to exactly the same rules as one written
+    by hand: one line, no control characters, bounded length, and never able to
+    start with `-` where Git would read it as an option.
+    """
+
+    subject = value.strip()
+    if not subject:
+        raise HookError(f"{label} must not be empty")
+    if "\n" in subject or "\r" in subject:
+        raise HookError(f"{label} must be a single line")
+    _validate_no_control_chars(subject, label)
+    if len(subject) > COMMIT_SUBJECT_MAX_CHARS:
+        raise HookError(
+            f"{label} must be at most {COMMIT_SUBJECT_MAX_CHARS} characters"
+        )
+    if subject.startswith("-"):
+        raise HookError(f"{label} must not start with `-`")
+    return subject
+
+
+def _validate_auto_commit_extensions(step: dict[str, Any], label: str) -> None:
+    """Validate the apply-step commit/push opt-ins and their dependencies."""
+
+    for key in ("auto_commit", "auto_push"):
+        if key in step and not isinstance(step[key], bool):
+            raise HookError(f"{label}.{key} must be a boolean")
+
+    auto_commit = bool(step.get("auto_commit", False))
+    if step.get("auto_push", False) and not auto_commit:
+        raise HookError(f"{label}.auto_push requires {label}.auto_commit")
+    if "commit_message" in step:
+        value = step["commit_message"]
+        if not isinstance(value, str):
+            raise HookError(f"{label}.commit_message must be a string")
+        if not auto_commit:
+            raise HookError(f"{label}.commit_message requires {label}.auto_commit")
+        validate_commit_subject(value, f"{label}.commit_message")
+
+
 def _validate_step_extensions(
     step: dict[str, Any],
     label: str,
@@ -444,10 +491,15 @@ def _validate_step_extensions(
         "stdin": {"exec", "assert"},
         "timeout_seconds": {"exec", "assert"},
         "options": {"collect", "exec", "assert"},
+        "auto_commit": {"apply"},
+        "auto_push": {"apply"},
+        "commit_message": {"apply"},
     }
     for key, allowed_types in applicable.items():
         if key in step and step_type not in allowed_types:
             raise HookError(f"{label}.{key} is not valid for {step_type} steps")
+
+    _validate_auto_commit_extensions(step, label)
 
     has_python = step.get("python") not in (None, "")
     has_command = bool(step.get("command"))
@@ -703,6 +755,11 @@ def _normalize_step(
         else None,
         runner=str(raw.get("runner")).strip()
         if raw.get("runner") is not None
+        else None,
+        auto_commit=bool(raw.get("auto_commit", False)),
+        auto_push=bool(raw.get("auto_push", False)),
+        commit_message=str(raw.get("commit_message")).strip()
+        if raw.get("commit_message") is not None
         else None,
     )
     if not step.id:

@@ -99,7 +99,7 @@ inputs = ["review/issues.json"]
 
 `docs_issue_array` is the existing schema name for `{file, description}` findings; it works for code rules too. A missing rules file or a failed check blocks the push by default. Findings live in the run artifacts under `.git/ai-push-hooks/`.
 
-**Want fixes too?** Add an `apply` step with the findings, your rules, and an explicit `allow_paths` list, then recheck and run tests. [Runner completion is not proof that a fix landed](docs/configuration.md#deterministic-postconditions-after-apply): verify the result. Applied edits are not auto-committed: review the diff, commit approved changes, and retry the push.
+**Want fixes too?** Add an `apply` step with the findings, your rules, and an explicit `allow_paths` list, then recheck and run tests. [Runner completion is not proof that a fix landed](docs/configuration.md#deterministic-postconditions-after-apply): verify the result. By default applied edits are left uncommitted: review the diff, commit approved changes, and retry the push. To shorten that loop, [`auto_commit`](docs/configuration.md#committing-applied-edits) commits the fix for you; the push still stops, because Git had already scoped it to the pre-fix commit, so you re-run `git push` to send it.
 
 ## Build Your Workflow
 
@@ -132,7 +132,7 @@ Each `ask` or `apply` step can override the runner, so one tool can review and a
 ## Control And Safety
 
 - Errors block pushes by default. AI judgments can still miss violations or report false positives.
-- `apply` validates file and Git state and limits propagated edits to `allow_paths`. It does not auto-commit.
+- `apply` validates file and Git state and limits propagated edits to `allow_paths`. It does not commit unless you set `auto_commit`, and never pushes.
 - Runners, scripts, and callbacks are trusted local programs, not an OS sandbox.
 - Local hooks can be bypassed; retain CI for required enforcement.
 - Repository content may be sent to your model provider. Review its privacy and billing terms.

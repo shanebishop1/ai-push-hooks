@@ -4,11 +4,15 @@ import json
 import os
 import pathlib
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 from .artifacts import ArtifactStore, generate_run_id
 from .config import load_config
 from .engine import WorkflowEngine
+from .executors.autocommit import (
+    combined_superseded_message,
+    finalize_pending_auto_commits,
+)
 from .paths import (
     ensure_private_directory,
     resolve_contained_path,
@@ -29,7 +33,13 @@ from .git_utils import (
     should_skip_for_sync_branch,
     unique_range_expressions,
 )
-from .types import HookConfig, HookError, HookLogger, RuntimeContext
+from .types import (
+    HookConfig,
+    HookError,
+    HookLogger,
+    PushSupersededError,
+    RuntimeContext,
+)
 
 
 def _build_logger(
@@ -222,20 +232,37 @@ def _run_hook_impl(
     engine = WorkflowEngine(context=context, artifacts=ArtifactStore(run_dir))
     try:
         workflow_result = engine.run()
+        # Only now, with every check passed, are deferred commits made. A failure
+        # anywhere above leaves the applied edits uncommitted in the working tree.
+        commit_outcomes = finalize_pending_auto_commits(context)
         logger.llm_summary()
-        _write_summary(
-            context,
-            {
-                "run_dir": str(workflow_result.run_dir),
-                "modules": workflow_result.modules,
-            },
-        )
+        summary: dict[str, Any] = {
+            "run_dir": str(workflow_result.run_dir),
+            "modules": workflow_result.modules,
+        }
+        if commit_outcomes:
+            summary["auto_commit"] = commit_outcomes
+        _write_summary(context, summary)
+        commit_outcomes = [
+            outcome
+            for outcome in commit_outcomes
+            if outcome.get("committed") or outcome.get("blocked")
+        ]
+        if commit_outcomes:
+            logger.status(
+                "hook.superseded",
+                "Applied fixes; the original push was superseded",
+                run_dir=str(workflow_result.run_dir),
+            )
+            raise PushSupersededError(combined_superseded_message(commit_outcomes))
         logger.status(
             "hook.complete",
             "AI push hooks workflow completed",
             run_dir=str(workflow_result.run_dir),
         )
         return 0
+    except PushSupersededError:
+        raise
     except Exception as exc:  # noqa: BLE001
         message = str(exc).strip() or exc.__class__.__name__
         logger.error("hook.failed", "AI push hooks workflow failed", error=message)
@@ -259,6 +286,12 @@ def run_hook(
         return 0
     try:
         return _run_hook_impl(remote_name, remote_url, stdin_lines, cwd)
+    except PushSupersededError:
+        # Not a failed check, so fail-open does not apply: this run committed a
+        # fix locally, which means the commits Git is holding for this push are
+        # stale. Allowing it through would push the unfixed code and report
+        # success, the one outcome auto_commit exists to prevent.
+        raise
     except Exception as exc:  # noqa: BLE001
         allow_on_error = env_bool("AI_PUSH_HOOKS_ALLOW_PUSH_ON_ERROR")
         if allow_on_error is None:

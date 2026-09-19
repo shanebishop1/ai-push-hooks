@@ -48,6 +48,9 @@ Step inputs refer to earlier artifacts in the same module: `collect/push.diff`, 
 | `output` | `ask` | Required response artifact filename. |
 | `schema` | `ask` | Optional JSON schema name. Omit for plain text. |
 | `allow_paths` | `apply` | Required list of permitted edit globs. |
+| `auto_commit` | `apply` | Commit the propagated edits. Default `false`. |
+| `auto_push` | `apply` | Push that commit. Requires `auto_commit`. Default `false`. |
+| `commit_message` | `apply` | Fixed commit subject. Requires `auto_commit`. |
 | `executor` | `exec` | Built-in action name. |
 | `assertion` | `assert` | Built-in assertion name. |
 | `python` | `collect`, `exec`, `assert` | Repository-local callback reference. |
@@ -108,7 +111,7 @@ outcome after an apply.
 
 ### Apply and manual commits
 
-`apply` is generic: it can edit any eligible checkout file matching `allow_paths`; it is not limited to Markdown. The runner edits a temporary staging copy, and only validated changes propagate back to the checkout. Those edits do not enter the commit already being pushed, and `apply` never creates a Git commit.
+`apply` is generic: it can edit any eligible checkout file matching `allow_paths`; it is not limited to Markdown. The runner edits a temporary staging copy, and only validated changes propagate back to the checkout. Those edits never enter the commit already being pushed. `apply` creates no Git commit unless [`auto_commit`](#committing-and-pushing-applied-edits) is set, and it refuses to commit a file that already had uncommitted changes.
 
 The existing `docs_apply_requires_manual_commit` assertion is a workflow gate, not human-review enforcement. It prevents the original push from passing after `apply` changes files; it cannot prove that anyone reviewed the edits or that they conform to policy. Add it after the `apply` step when that gate is desired:
 
@@ -120,7 +123,139 @@ assertion = "docs_apply_requires_manual_commit"
 inputs = ["apply/result.json"]
 ```
 
+Do not combine this assertion with `auto_commit`. Commits are made only after
+every step passes, so this gate fires first and nothing is ever committed. Use
+one or the other: this assertion to stop for manual review, or `auto_commit` to
+have the commit made for you.
+
 The assertion checks `apply/result.json`'s `changed_files` and intentionally blocks when edits were propagated. Review `git diff`, run the relevant checks, commit the approved changes, and retry the push. On the retry, the assertion passes when the apply step reports no changes.
+
+### Committing and pushing applied edits
+
+`apply` does not commit by default. Two opt-ins change that:
+
+```toml
+[[modules.rules.steps]]
+id = "fix"
+type = "apply"
+prompt = "Fix the violations listed in issues.json."
+allow_paths = ["src/**"]
+auto_commit = true
+auto_push = true                               # requires auto_commit
+# commit_message = "fix: satisfy house rules"  # omit to let the runner name it
+```
+
+**The commit happens after the whole workflow passes, not inside the `apply`
+step.** Steps placed after `apply` -- a test suite, a deterministic
+postcondition, an `assert` gate -- must retain the ability to reject the edits,
+and they cannot do that if the commit has already been made. If any later step
+fails, nothing is committed and the applied edits are left in the working tree
+for you to inspect. Put your verification after `apply`, as usual:
+
+```toml
+[[modules.rules.steps]]
+id = "verify"
+type = "exec"
+command = ["{python}", "-m", "pytest", "-q"]
+```
+
+**The push in flight always stops when a commit is made.** Git selects the
+commits a push will send before the pre-push hook runs, and passes those SHAs to
+the hook on stdin. A commit created during the hook is therefore not part of that
+push. If the hook allowed the push to proceed, Git would send the pre-fix commit
+and report success while the fix stayed on your machine. So the push stops, and
+you run `git push` again -- which then succeeds normally, carrying the fix.
+
+With `auto_push` the hook pushes the fix itself, so one `git push` is all you
+run. The command still reports failure, because the update it was holding did not
+happen -- so the output is a numbered ledger that says which push is which:
+
+```
+The fix is on the remote. Nothing further is needed.
+
+  committed f85b7cf2dad2  refunds: route refund call through the typed client
+    src/components/RefundPanel.tsx
+
+  push 1  fb03764fe6c2  FAILED     scoped to the pre-fix commit, superseded
+  push 2  f85b7cf2dad2  SUCCEEDED  pushed to origin refs/heads/feature/violations
+
+Git prints `error: failed to push some refs` below. That is push 1.
+Push 2 carried the fix and succeeded.
+```
+
+Push 1 is the one you ran; it can never carry the fix. Push 2 is the hook's, and
+it does. `FAILED` and `SUCCEEDED` are coloured on a terminal, and plain whenever
+stderr is not a TTY or `NO_COLOR` is set.
+
+If the nested push fails, the fix stays committed locally and the output falls
+back to asking you to push again -- it never claims a push that did not happen.
+
+This stop ignores `allow_push_on_error`. Fail-open is a policy choice about
+checks that could not complete; it is not a licence to push code the run has
+already superseded locally.
+
+If the fix touches a file you already had uncommitted changes in, nothing is
+committed at all. `git commit -- <file>` commits the whole file, so committing it
+would capture work you never staged -- and with `auto_push`, publish it. The run
+stops instead and names the files, leaving your working tree for you to sort out.
+
+If the repository signs commits (`commit.gpgsign`), the commit is signed like any
+other. A signing agent that needs an interactive passphrase cannot prompt from
+inside a hook; the commit fails on the 120-second command timeout and blocks the
+push rather than hanging. Unlock the agent first, or leave `auto_commit` off in
+repositories that sign interactively.
+
+The commit is made by ai-push-hooks, not by the runner. Staging excludes `.git`,
+so the runner has no repository to commit to, and post-propagation verification
+fails the step if the checkout's index or Git metadata moved while it ran. The
+commit is limited by pathspec to the files `apply` actually propagated, so
+unrelated modified files in your working tree are never swept in. 
+Omit `commit_message` and the runner that made the fix names the commit: it is
+asked to end its response with a `COMMIT: <subject>` line. That subject is
+untrusted text, held to the same rules as a configured one (single line, no
+control characters, at most 72 characters, never leading `-`). A missing or
+malformed subject falls back to a generic one rather than failing the step.
+
+#### Driving this from a script or an agent
+
+Nothing here is interactive. The hook exits, `git push` returns non-zero, and
+control returns immediately; there is no prompt and nothing to confirm.
+
+Git collapses every nonzero pre-push hook exit to `1`, so exit status cannot
+tell "blocked, stop" apart from "fixed, push again". Match the final line of
+stderr instead:
+
+```
+ai-push-hooks Push Again - b99af43fcdc6 is committed locally but not on the
+remote. Run `git push` again to send it.
+```
+
+Exactly one marker is emitted, and only when a commit was made:
+
+| Final line begins | Meaning | Caller should |
+| --- | --- | --- |
+| `ai-push-hooks Push Success` | The fix is on the remote. | Treat as success. Do not push again. |
+| `ai-push-hooks Push Again` | The fix is committed but not sent. | Run `git push` again. |
+| neither | A check failed. | Stop and read the failure. |
+
+Both phrases are a stable contract; the detail after them may be reworded.
+
+```bash
+out=$(git push 2>&1) || true
+case "$out" in
+  *"ai-push-hooks Push Success"*) echo "fix pushed" ;;
+  *"ai-push-hooks Push Again"*)   git push ;;
+  *)                              echo "$out"; exit 1 ;;
+esac
+```
+
+The retry terminates: on the second run the fix is already committed, so `apply`
+propagates nothing, no commit is made, and the push proceeds. A check that keeps
+failing blocks without the marker, so a retry loop never spins on it.
+
+`auto_commit` does not review the change for you. It shortens the loop between a
+finding and a fix; it does not establish that the fix is correct. Pair it with a
+deterministic postcondition, below, when the desired result can be checked.
 
 ### Deterministic postconditions after apply
 
