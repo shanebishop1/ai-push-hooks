@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Propose opt-in `logging.require_opencode_retention` (default false): private
+  byte-preserving OpenCode capture, identity-correlated export, and fail-closed
+  lifecycle receipts. Best-effort defaults and other providers are unchanged.
+  Strict capture is incompatible with fail-open. Native CLI-generation
+  compatibility and maintainer release acceptance remain unverified.
 - Added `auto_commit` to `apply` steps, committing the edits a fix propagated.
   Off by default. The commit is made after every later step passes, so tests and
   assert gates can still reject the edits; a failure leaves them uncommitted in
@@ -22,6 +27,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Bound required OpenCode retention evidence to each invocation so concurrent
+  `ask` steps cannot exchange capture, export, or deletion state on a shared runner.
 - Refused to auto-commit a file that already had uncommitted changes. Committing
   it would have captured work the developer never staged, and published it when
   `auto_push` was enabled.
